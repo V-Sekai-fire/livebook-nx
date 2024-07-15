@@ -1,4 +1,4 @@
-# NX PHI-3 - fork
+# NX PHI-3
 
 ```elixir
 Mix.install(
@@ -13,18 +13,19 @@ Mix.install(
 # XLA_BUILD=true
 # XLA_TARGET=cuda
 # asdf plugin-add bazel
-# asdf install bazel latest
-# asdf global bazel latest
+# asdf install bazel 6.5.0 # bazel 7 fails
+# asdf global bazel 6.5.0
 # rm -rf ~/.cache
 # wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
 # sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
 # sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
 # sudo add-apt-repository "deb http://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
 # sudo apt update
-# sudo apt install cuda-toolkit-12-2 libcudnn8
-  
-
-
+# sudo apt install cuda-toolkit-12-2 nvidia-cudnn python3-numpy python-is-python3
+# export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64"
+# export CUDA_HOME=/usr/local/cuda
+# export PATH="/usr/local/cuda/bin:$PATH"
+# export XLA_FLAGS=--xla_gpu_cuda_data_dir=/usr/local/cuda
 ```
 
 ## Section
