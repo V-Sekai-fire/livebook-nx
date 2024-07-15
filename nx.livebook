@@ -1,0 +1,65 @@
+# NX Examples
+
+```elixir
+Mix.install(
+  [
+    {:kino_bumblebee, "~> 0.2.1"},
+    {:exla, "~> 0.5.0"}
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+```
+
+## Section
+
+```elixir
+
+  # Creates two tensors
+  tensor1 = Nx.tensor([[1, 2], [3, 4]])
+  tensor2 = Nx.tensor([[5, 6], [7, 8]])
+
+  # Performs some basic operations
+  sum = Nx.add(tensor1, tensor2)
+  product = Nx.multiply(tensor1, tensor2)
+  difference = Nx.subtract(tensor1, tensor2)
+
+  {sum, product, difference}
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+
+19:11:44.816 [info] TfrtCpuClient created.
+
+```
+
+<!-- livebook:{"output":true} -->
+
+```
+{#Nx.Tensor<
+   s64[2][2]
+   EXLA.Backend<host:0, 0.2001441793.1150156868.213506>
+   [
+     [6, 8],
+     [10, 12]
+   ]
+ >,
+ #Nx.Tensor<
+   s64[2][2]
+   EXLA.Backend<host:0, 0.2001441793.1150156868.213508>
+   [
+     [5, 12],
+     [21, 32]
+   ]
+ >,
+ #Nx.Tensor<
+   s64[2][2]
+   EXLA.Backend<host:0, 0.2001441793.1150156868.213510>
+   [
+     [-4, -4],
+     [-4, -4]
+   ]
+ >}
+```
