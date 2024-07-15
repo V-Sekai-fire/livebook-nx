@@ -8,6 +8,8 @@ Mix.install(
   ],
   config: [nx: [default_backend: EXLA.Backend]]
 )
+# Set environment variable
+# EXLA_TARGET=cuda12
 ```
 
 ## Section
