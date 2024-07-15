@@ -1,0 +1,41 @@
+# NX PHI-3 - fork
+
+```elixir
+Mix.install(
+  [   
+    {:bumblebee, git: "https://github.com/elixir-nx/bumblebee", tag: "main"},
+    {:nx, "~> 0.7.0"},
+    {:exla, "~> 0.7.1"},
+  ],
+  config: [nx: [default_backend: EXLA.Backend]]
+)
+# Set environment variables
+# XLA_BUILD=true
+# XLA_TARGET=cuda
+# asdf plugin-add bazel
+# asdf install bazel latest
+# asdf global bazel latest
+# rm -rf ~/.cache
+# wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-ubuntu2204.pin
+# sudo mv cuda-ubuntu2204.pin /etc/apt/preferences.d/cuda-repository-pin-600
+# sudo apt-key adv --fetch-keys https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/3bf863cc.pub
+# sudo add-apt-repository "deb http://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/ /"
+# sudo apt update
+# sudo apt install cuda-toolkit-12-2 libcudnn8
+  
+
+
+```
+
+## Section
+
+```elixir
+{:ok, gpt2} = Bumblebee.load_model({:hf, "gpt2"})
+{:ok, tokenizer} = Bumblebee.load_tokenizer({:hf, "gpt2"})
+
+serving = Bumblebee.Text.generation(gpt2, tokenizer, max_new_tokens: 10)
+
+text = "Yesterday, I was reading a book and"
+Nx.Serving.run(serving, text)
+
+```
