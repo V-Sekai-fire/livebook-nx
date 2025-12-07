@@ -8,12 +8,11 @@
 #
 # Options:
 #   --prompt "person"              Text prompt for segmentation (default: "person")
-#   --mask-color "green"           Mask color: green, red, blue, yellow, cyan, magenta (default: "green")
+#   --mask-color "white"          Mask color: green, red, blue, yellow, cyan, magenta, orange, purple, pink, lime, white, black (default: "white")
 #   --mask-opacity 0.5             Mask opacity 0.0-1.0 (default: 0.5)
 #   --mask-only                    Output black and white mask only
 #   --return-zip                   Create ZIP file with video and masks
 #   --generate-3d                  Generate 3D models (placeholder)
-#   --gpu                          Force GPU usage (will use CPU if GPU unavailable)
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -41,7 +40,8 @@ dependencies = [
   "pygltflib>=1.15.0",
   "scipy>=1.10.0",
   "gsply>=0.1.0",
-  "requests"
+  "requests",
+  "kernels",
 ]
 
 [tool.uv.sources]
@@ -54,6 +54,28 @@ url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 """)
 
+# Define available mask colors
+defmodule MaskColors do
+  @colors %{
+    "green" => [0, 255, 0],
+    "red" => [255, 0, 0],
+    "blue" => [0, 0, 255],
+    "yellow" => [255, 255, 0],
+    "cyan" => [0, 255, 255],
+    "magenta" => [255, 0, 255],
+    "orange" => [255, 165, 0],
+    "purple" => [128, 0, 128],
+    "pink" => [255, 192, 203],
+    "lime" => [50, 205, 50],
+    "white" => [255, 255, 255],
+    "black" => [0, 0, 0]
+  }
+
+  def valid_colors, do: Map.keys(@colors)
+  def get_rgb(color), do: Map.get(@colors, color)
+  def valid?(color), do: Map.has_key?(@colors, color)
+end
+
 # Parse command-line arguments
 defmodule ArgsParser do
   def parse(args) do
@@ -64,8 +86,7 @@ defmodule ArgsParser do
         mask_opacity: :float,
         mask_only: :boolean,
         return_zip: :boolean,
-        generate_3d: :boolean,
-        gpu: :boolean
+        generate_3d: :boolean
       ],
       aliases: [
         p: :prompt,
@@ -77,6 +98,7 @@ defmodule ArgsParser do
     video_filename = List.first(args)
 
     if !video_filename do
+      valid_colors_str = Enum.join(MaskColors.valid_colors(), ", ")
       IO.puts("""
       Error: Video file path is required.
 
@@ -85,33 +107,40 @@ defmodule ArgsParser do
 
       Options:
         --prompt, -p "person"              Text prompt for segmentation (default: "person")
-        --mask-color, -c "green"           Mask color: green, red, blue, yellow, cyan, magenta (default: "green")
+        --mask-color, -c "white"           Mask color (default: "white")
+                                          Available colors: #{valid_colors_str}
         --mask-opacity, -o 0.5             Mask opacity 0.0-1.0 (default: 0.5)
-        --mask-only                        Output black and white mask only
+        --mask-only                        Output original video on white background (masked areas only)
         --return-zip                       Create ZIP file with video and masks
         --generate-3d                      Generate 3D models (placeholder)
-        --gpu                              Force GPU usage (will use CPU if GPU unavailable)
       """)
       System.halt(1)
     end
 
+    mask_color_name = Keyword.get(opts, :mask_color, "white")
+    
+    # Validate mask_color using the enum
+    if !MaskColors.valid?(mask_color_name) do
+      valid_colors_str = Enum.join(MaskColors.valid_colors(), ", ")
+      IO.puts("Error: Invalid mask color '#{mask_color_name}'")
+      IO.puts("       Valid colors are: #{valid_colors_str}")
+      System.halt(1)
+    end
+    
+    # Get RGB values from the enum
+    mask_color_rgb = MaskColors.get_rgb(mask_color_name)
+
     config = %{
       video_filename: video_filename,
       prompt: Keyword.get(opts, :prompt, "person"),
-      mask_color: Keyword.get(opts, :mask_color, "green"),
+      mask_color: mask_color_name,
+      mask_color_rgb: mask_color_rgb,
       mask_opacity: Keyword.get(opts, :mask_opacity, 0.5),
       mask_only: Keyword.get(opts, :mask_only, false),
       return_zip: Keyword.get(opts, :return_zip, false),
       generate_3d: Keyword.get(opts, :generate_3d, false),
-      use_gpu: Keyword.get(opts, :gpu, false)
+      use_gpu: true
     }
-
-    # Validate mask_color
-    valid_colors = ["green", "red", "blue", "yellow", "cyan", "magenta"]
-    if config.mask_color not in valid_colors do
-      IO.puts("Error: Invalid mask color. Must be one of: #{Enum.join(valid_colors, ", ")}")
-      System.halt(1)
-    end
 
     # Validate mask_opacity
     if config.mask_opacity < 0.0 or config.mask_opacity > 1.0 do
@@ -141,7 +170,6 @@ Mask Opacity: #{config.mask_opacity}
 Mask Only: #{config.mask_only}
 Return ZIP: #{config.return_zip}
 Generate 3D: #{config.generate_3d}
-Use GPU: #{config.use_gpu}
 """)
 
 # Save config to JSON for Python to read
@@ -173,9 +201,25 @@ except ImportError:
     HAS_REQUESTS = False
 
 from transformers import Sam3VideoModel, Sam3VideoProcessor
+import warnings
+import sys
+from io import StringIO
 
 MODEL_PATH = "checkpoints"
 MODEL_URL = "https://weights.replicate.delivery/default/facebook/sam3/model.tar"
+
+# Suppress kernels installation warnings/errors
+# The kernels library tries to install cv_utils but may fail on some systems
+# This doesn't affect core functionality, just some post-processing features
+warnings.filterwarnings('ignore', category=UserWarning)
+# Redirect stderr temporarily during kernels operations
+class SuppressKernelsErrors:
+    def __enter__(self):
+        self.old_stderr = sys.stderr
+        sys.stderr = StringIO()
+        return self
+    def __exit__(self, *args):
+        sys.stderr = self.old_stderr
 
 def download_weights(url, dest):
     \"\"\"Download model weights\"\"\"
@@ -214,7 +258,6 @@ IO.puts("\n=== Step 1: Download and Load SAM 3 Model ===")
 
 # Setup device, download weights, and load model
 python_globals = Process.get(:python_globals) || %{}
-use_gpu_flag = if config.use_gpu, do: "True", else: "False"
 
 {_, python_globals} = Pythonx.eval("""
 # Check if PyTorch is installed with CUDA support
@@ -237,37 +280,31 @@ else:
     print("CUDA not available. Install PyTorch with CUDA support for GPU acceleration.")
     print("Visit: https://pytorch.org/get-started/locally/")
 
-# Get use_gpu flag from Elixir
-use_gpu_requested = #{use_gpu_flag}
-
 # Setup device and dtype
 # Always prefer GPU if available (default behavior)
 if cuda_available:
     device = "cuda"
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
     print(f"Using GPU: {device}, dtype: {dtype}")
-    if use_gpu_requested:
-        print("GPU usage explicitly requested via --gpu flag")
 else:
     device = "cpu"
     dtype = torch.float16
     print(f"Using CPU: {device}, dtype: {dtype}")
-    if use_gpu_requested:
-        print("\\n" + "="*60)
-        print("WARNING: --gpu flag was set but CUDA is not available!")
-        print("="*60)
-        print("\\nPyTorch was installed without CUDA support.")
-        print("To enable GPU acceleration, you need to reinstall PyTorch with CUDA:")
-        print("\\n1. First, uninstall the current CPU-only version:")
-        print("   pip uninstall torch torchvision -y")
-        print("\\n2. Then install PyTorch with CUDA 11.8 support:")
-        print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118")
-        print("\\n   Or for CUDA 12.1:")
-        print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121")
-        print("\\n3. Verify CUDA is available:")
-        print("   python -c 'import torch; print(torch.cuda.is_available())'")
-        print("\\nNote: Make sure you have NVIDIA GPU drivers and CUDA toolkit installed.")
-        print("="*60 + "\\n")
+    print("\\n" + "="*60)
+    print("WARNING: CUDA is not available! Using CPU instead.")
+    print("="*60)
+    print("\\nPyTorch was installed without CUDA support.")
+    print("To enable GPU acceleration, you need to reinstall PyTorch with CUDA:")
+    print("\\n1. First, uninstall the current CPU-only version:")
+    print("   pip uninstall torch torchvision -y")
+    print("\\n2. Then install PyTorch with CUDA 11.8 support:")
+    print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118")
+    print("\\n   Or for CUDA 12.1:")
+    print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121")
+    print("\\n3. Verify CUDA is available:")
+    print("   python -c 'import torch; print(torch.cuda.is_available())'")
+    print("\\nNote: Make sure you have NVIDIA GPU drivers and CUDA toolkit installed.")
+    print("="*60 + "\\n")
 
 # Download weights if they don't exist
 if not os.path.exists(MODEL_PATH):
@@ -300,7 +337,7 @@ with open(config_file, 'r') as f:
     config = json.load(f)
 
 prompt = config.get('prompt', 'person')
-mask_color = config.get('mask_color', 'green')
+mask_color = config.get('mask_color', 'white')
 mask_opacity = config.get('mask_opacity', 0.5)
 mask_only = config.get('mask_only', False)
 return_zip = config.get('return_zip', False)
@@ -375,21 +412,14 @@ import json
 with open("config.json", 'r') as f:
     config = json.load(f)
 
-mask_color = config.get('mask_color', 'green')
+mask_color = config.get('mask_color', 'white')
+mask_color_rgb = config.get('mask_color_rgb', [255, 255, 255])  # RGB values from Elixir enum (white default)
 mask_opacity = config.get('mask_opacity', 0.5)
 mask_only = config.get('mask_only', False)
 return_zip = config.get('return_zip', False)
 
-# Define colors
-colors = {
-    "green": [0, 255, 0],
-    "red": [255, 0, 0],
-    "blue": [0, 0, 255],
-    "yellow": [255, 255, 0],
-    "cyan": [0, 255, 255],
-    "magenta": [255, 0, 255]
-}
-color_rgb = np.array(colors.get(mask_color.lower(), [0, 255, 0]), dtype=np.uint8)
+# Use RGB values directly from config (set by Elixir MaskColors enum)
+color_rgb = np.array(mask_color_rgb, dtype=np.uint8)
 
 # Create output directory
 output_dir = Path("output")
@@ -405,10 +435,8 @@ writer = imageio.get_writer(str(output_video_path), fps=original_fps, codec='lib
 for idx, frame_pil in enumerate(frames):
     frame_np = np.array(frame_pil)
     
-    if mask_only:
-        output_frame = np.zeros_like(frame_np)
-    else:
-        output_frame = frame_np.copy()
+    # Start with white background (better for 3D generation)
+    output_frame = np.ones_like(frame_np) * 255
 
     if idx in output_frames_data:
         results = output_frames_data[idx]
@@ -433,12 +461,25 @@ for idx, frame_pil in enumerate(frames):
                     
                     combined_mask = np.logical_or(combined_mask, mask > 0.0)
                 
-                overlay_indices = combined_mask
+                mask_indices = combined_mask
                 
                 if mask_only:
-                    output_frame[overlay_indices] = [255, 255, 255]
+                    # Show original video only in masked regions, rest is white
+                    output_frame[mask_indices] = frame_np[mask_indices]
                 else:
-                    output_frame[overlay_indices] = (output_frame[overlay_indices] * (1 - mask_opacity) + color_rgb * mask_opacity).astype(np.uint8)
+                    # Show original video in masked regions with optional color overlay
+                    masked_original = frame_np[mask_indices].copy()
+                    if mask_opacity > 0.0:
+                        # Apply color overlay with opacity
+                        overlay_color = np.tile(color_rgb, (masked_original.shape[0], 1))
+                        masked_colored = (masked_original * (1 - mask_opacity) + overlay_color * mask_opacity).astype(np.uint8)
+                        output_frame[mask_indices] = masked_colored
+                    else:
+                        # No color overlay, just show original in masked regions
+                        output_frame[mask_indices] = masked_original
+    else:
+        # If no mask data for this frame, keep it white
+        pass
     
     writer.append_data(output_frame)
 
