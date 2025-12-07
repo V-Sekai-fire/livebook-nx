@@ -20,11 +20,6 @@ checkpoints/
 # Output files
 output/
 uploads/
-*.mp4
-*.avi
-*.mov
-*.mkv
-*.webm
 
 # Configuration files
 config.json
