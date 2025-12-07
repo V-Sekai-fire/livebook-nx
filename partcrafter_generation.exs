@@ -10,7 +10,7 @@
 #
 # Options:
 #   --output-format "glb"        Output format: glb (default: "glb")
-#   --num-parts <int>            Number of parts to generate (1-16, default: 4)
+#   --num-parts <int>            Number of parts to generate (1-16, default: 6)
 #   --seed <int>                 Random seed for generation (default: 0)
 #   --num-tokens <int>           Number of tokens (256/512/1024/1536/2048, default: 1024)
 #   --num-steps <int>            Number of inference steps (default: 50)
@@ -126,7 +126,7 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    num_parts = Keyword.get(opts, :num_parts, 4)
+    num_parts = Keyword.get(opts, :num_parts, 6)
     if num_parts < 1 or num_parts > 16 do
       IO.puts("Error: num_parts must be between 1 and 16")
       System.halt(1)
@@ -396,7 +396,7 @@ with open("config.json", 'r') as f:
 
 image_path = config.get('image_path')
 output_format = config.get('output_format', 'glb')
-num_parts = config.get('num_parts', 4)
+num_parts = config.get('num_parts', 6)
 seed = config.get('seed', 0)
 num_tokens = config.get('num_tokens', 1024)
 num_steps = config.get('num_steps', 50)
