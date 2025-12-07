@@ -1,0 +1,5 @@
+examples/*.glb filter=lfs diff=lfs merge=lfs -text
+examples/*.fbx filter=lfs diff=lfs merge=lfs -text
+examples/*.vrm filter=lfs diff=lfs merge=lfs -text
+examples/*.FBX filter=lfs diff=lfs merge=lfs -text
+examples/*.obj filter=lfs diff=lfs merge=lfs -text

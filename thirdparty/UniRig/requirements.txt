@@ -1,0 +1,16 @@
+transformers==4.51.3
+python-box
+einops
+omegaconf
+pytorch_lightning
+lightning
+addict
+timm
+fast-simplification
+bpy==4.2
+flash_attn
+trimesh
+open3d
+pyrender
+huggingface_hub
+wandb

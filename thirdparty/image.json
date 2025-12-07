@@ -1,0 +1,33 @@
+{
+    "id": "9zs80jkckhrma0ctz4as2vw900",
+    "model": "prunaai/z-image-turbo",
+    "version": "hidden",
+    "input": {
+      "guidance_scale": 0,
+      "height": 1440,
+      "num_inference_steps": 8,
+      "output_format": "jpg",
+      "output_quality": 80,
+      "prompt": "an avatar anime girl in an a pose. show upper and lower body with shoes. wearing modern cute dress",
+      "width": 1024
+    },
+    "logs": "0%|          | 0/9 [00:00<?, ?it/s]\n 11%|█         | 1/9 [00:00<00:01,  4.26it/s]\n 33%|███▎      | 3/9 [00:00<00:00,  6.37it/s]\n 44%|████▍     | 4/9 [00:00<00:00,  5.41it/s]\n 56%|█████▌    | 5/9 [00:00<00:00,  4.93it/s]\n 67%|██████▋   | 6/9 [00:01<00:00,  4.67it/s]\n 78%|███████▊  | 7/9 [00:01<00:00,  4.52it/s]\n 89%|████████▉ | 8/9 [00:01<00:00,  4.42it/s]\n100%|██████████| 9/9 [00:01<00:00,  4.36it/s]\n100%|██████████| 9/9 [00:01<00:00,  4.69it/s]",
+    "output": "https://replicate.delivery/xezq/hC7veVcC32U9BadLVzUfoe7rCerejaK939CStf6NQuHPi4McF/output_2056396198_0.jpeg",
+    "data_removed": false,
+    "error": null,
+    "source": "web",
+    "status": "succeeded",
+    "created_at": "2025-12-07T13:52:02.204Z",
+    "started_at": "2025-12-07T13:52:06.505764Z",
+    "completed_at": "2025-12-07T13:52:08.819873Z",
+    "urls": {
+      "cancel": "https://api.replicate.com/v1/predictions/9zs80jkckhrma0ctz4as2vw900/cancel",
+      "get": "https://api.replicate.com/v1/predictions/9zs80jkckhrma0ctz4as2vw900",
+      "stream": "https://stream.replicate.com/v1/files/bcwr-7ki2uflckpzxjormxdt65jjpnrlyuuwnitafy2cptdswsbfz6saq",
+      "web": "https://replicate.com/p/9zs80jkckhrma0ctz4as2vw900"
+    },
+    "metrics": {
+      "predict_time": 2.31410921,
+      "total_time": 6.615873897
+    }
+  }

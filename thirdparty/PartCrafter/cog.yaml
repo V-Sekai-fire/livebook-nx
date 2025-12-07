@@ -1,0 +1,55 @@
+# Configuration for Cog ⚙️
+# Reference: https://github.com/replicate/cog/blob/main/docs/yaml.md
+
+image: "r8.im/fire/part-crafter"
+
+build:
+  # set to true if your model requires a GPU
+  gpu: true
+  
+  # a list of ubuntu apt packages to install
+  system_packages:
+    - "libgl1-mesa-glx"
+    - "libglib2.0-0"
+    - "libsm6"
+    - "libxext6"
+    - "libxrender-dev"
+    - "libgomp1"
+    - "libglu1-mesa"
+    - "libosmesa6-dev"
+    - "freeglut3-dev"
+
+  # python version in the form '3.11' or '3.11.4'
+  python_version: "3.11"
+
+  # a list of packages in the format <package-name>==<version>
+  python_packages:
+    - "torch==2.4.0"
+    - "torchvision==0.19.0"
+    - "torchaudio==2.4.0"
+    - "scikit-learn"
+    - "diffusers"
+    - "transformers"
+    - "einops"
+    - "huggingface_hub"
+    - "opencv-python"
+    - "trimesh"
+    - "omegaconf"
+    - "scikit-image"
+    - "numpy==1.26.4"
+    - "peft"
+    - "jaxtyping"
+    - "typeguard"
+    - "matplotlib"
+    - "imageio-ffmpeg"
+    - "pyrender"
+    - "colormaps"
+    - "accelerate"
+    - "Pillow"
+
+  # commands run after the environment is setup
+  run:
+    - "pip install torch-cluster -f https://data.pyg.org/whl/torch-2.4.0+cu121.html"
+
+# predict.py defines how predictions are run on your model
+predict: "predict.py:Predictor"

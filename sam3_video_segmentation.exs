@@ -8,9 +8,10 @@
 #
 # Options:
 #   --prompt "person"              Text prompt for segmentation (default: "person")
-#   --mask-color "white"          Mask color: green, red, blue, yellow, cyan, magenta, orange, purple, pink, lime, white, black (default: "white")
+#   --mask-color "green"          Mask color: green, red, blue, yellow, cyan, magenta, orange, purple, pink, lime, white, black (default: "green")
 #   --mask-opacity 0.5             Mask opacity 0.0-1.0 (default: 0.5)
-#   --mask-only                    Output black and white mask only
+#   --mask-only                    Output original video on white background (masked areas only)
+#   --mask-video                   Output a separate mask video (black and white masks)
 #   --return-zip                   Create ZIP file with video and masks
 
 Mix.install([
@@ -82,6 +83,7 @@ defmodule ArgsParser do
         mask_color: :string,
         mask_opacity: :float,
         mask_only: :boolean,
+        mask_video: :boolean,
         return_zip: :boolean
       ],
       aliases: [
@@ -103,16 +105,17 @@ defmodule ArgsParser do
 
       Options:
         --prompt, -p "person"              Text prompt for segmentation (default: "person")
-        --mask-color, -c "white"           Mask color (default: "white")
+        --mask-color, -c "green"           Mask color (default: "green")
                                           Available colors: #{valid_colors_str}
         --mask-opacity, -o 0.5             Mask opacity 0.0-1.0 (default: 0.5)
         --mask-only                        Output original video on white background (masked areas only)
+        --mask-video                       Output a separate mask video (black and white masks)
         --return-zip                       Create ZIP file with video and masks
       """)
       System.halt(1)
     end
 
-    mask_color_name = Keyword.get(opts, :mask_color, "white")
+    mask_color_name = Keyword.get(opts, :mask_color, "green")
     
     # Validate mask_color using the enum
     if !MaskColors.valid?(mask_color_name) do
@@ -132,6 +135,7 @@ defmodule ArgsParser do
       mask_color_rgb: mask_color_rgb,
       mask_opacity: Keyword.get(opts, :mask_opacity, 0.5),
       mask_only: Keyword.get(opts, :mask_only, false),
+      mask_video: Keyword.get(opts, :mask_video, false),
       return_zip: Keyword.get(opts, :return_zip, false),
       use_gpu: true
     }
@@ -162,6 +166,7 @@ Prompt: #{config.prompt}
 Mask Color: #{config.mask_color}
 Mask Opacity: #{config.mask_opacity}
 Mask Only: #{config.mask_only}
+Mask Video: #{config.mask_video}
 Return ZIP: #{config.return_zip}
 """)
 
@@ -350,7 +355,7 @@ with open(config_file, 'r') as f:
     config = json.load(f)
 
 prompt = config.get('prompt', 'person')
-mask_color = config.get('mask_color', 'white')
+mask_color = config.get('mask_color', 'green')
 mask_opacity = config.get('mask_opacity', 0.5)
 mask_only = config.get('mask_only', False)
 return_zip = config.get('return_zip', False)
@@ -425,10 +430,11 @@ import json
 with open("config.json", 'r') as f:
     config = json.load(f)
 
-mask_color = config.get('mask_color', 'white')
-mask_color_rgb = config.get('mask_color_rgb', [255, 255, 255])  # RGB values from Elixir enum (white default)
+mask_color = config.get('mask_color', 'green')
+mask_color_rgb = config.get('mask_color_rgb', [0, 255, 0])  # RGB values from Elixir enum (green default)
 mask_opacity = config.get('mask_opacity', 0.5)
 mask_only = config.get('mask_only', False)
+mask_video = config.get('mask_video', False)
 return_zip = config.get('return_zip', False)
 
 # Use RGB values directly from config (set by Elixir MaskColors enum)
@@ -498,6 +504,48 @@ for idx, frame_pil in enumerate(frames):
 
 writer.close()
 print(f"✓ Video saved: {output_video_path}")
+
+# Generate mask video if requested
+if mask_video:
+    mask_video_path = output_dir / "output_mask.mp4"
+    print(f"\\nGenerating mask video: {mask_video_path}...")
+    
+    mask_writer = imageio.get_writer(str(mask_video_path), fps=original_fps, codec='libx264', quality=None, pixelformat='yuv420p')
+    
+    for idx, frame_pil in enumerate(frames):
+        # Create black background
+        mask_frame = np.zeros((height, width, 3), dtype=np.uint8)
+        
+        if idx in output_frames_data:
+            results = output_frames_data[idx]
+            masks = results.get('masks', None)
+            
+            if masks is not None:
+                if isinstance(masks, torch.Tensor):
+                    masks = masks.cpu().numpy()
+                
+                if len(masks) > 0:
+                    combined_mask = np.zeros((height, width), dtype=bool)
+                    for mask in masks:
+                        if mask.ndim == 3 and mask.shape[0] == 1:
+                            mask = mask.squeeze(0)
+                        elif mask.ndim == 2:
+                            pass
+                        else:
+                            mask = mask.squeeze()
+                        
+                        if mask.shape != (height, width):
+                            mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
+                        
+                        combined_mask = np.logical_or(combined_mask, mask > 0.0)
+                    
+                    # Set mask areas to white (255)
+                    mask_frame[combined_mask] = [255, 255, 255]
+        
+        mask_writer.append_data(mask_frame)
+    
+    mask_writer.close()
+    print(f"✓ Mask video saved: {mask_video_path}")
 """, python_globals)
 
 Process.put(:python_globals, python_globals)
@@ -570,6 +618,11 @@ if return_zip:
         # Add video
         zipf.write(output_video_path, "output.mp4")
         
+        # Add mask video if it exists
+        mask_video_path = output_dir / "output_mask.mp4"
+        if mask_video_path.exists():
+            zipf.write(mask_video_path, "output_mask.mp4")
+        
         # Add masks
         masks_dir = output_dir / "masks"
         if masks_dir.exists():
@@ -581,6 +634,12 @@ if return_zip:
 else:
     print(f"✓ Video saved: {output_video_path}")
     print(f"📥 File location: {output_video_path.absolute()}")
+    
+    # Show mask video location if it was created
+    mask_video_path = output_dir / "output_mask.mp4"
+    if mask_video_path.exists():
+        print(f"✓ Mask video saved: {mask_video_path}")
+        print(f"📥 Mask video location: {mask_video_path.absolute()}")
 
 print("\\n✓ All done!")
 """, Process.get(:python_globals) || %{})
