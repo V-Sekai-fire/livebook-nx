@@ -117,7 +117,7 @@ config_json = Jason.encode!(config)
 File.write!("config.json", config_json)
 
 # Import libraries and process mask video
-{_, python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval("""
 import json
 import cv2
 import numpy as np
