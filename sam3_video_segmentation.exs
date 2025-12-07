@@ -12,7 +12,6 @@
 #   --mask-opacity 0.5             Mask opacity 0.0-1.0 (default: 0.5)
 #   --mask-only                    Output black and white mask only
 #   --return-zip                   Create ZIP file with video and masks
-#   --generate-3d                  Generate 3D models (placeholder)
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -36,10 +35,8 @@ dependencies = [
   "imageio[ffmpeg]",
   "opencv-python",
   "decord",
-  "open3d>=0.18.0",
-  "pygltflib>=1.15.0",
   "scipy>=1.10.0",
-  "gsply>=0.1.0",
+  "scikit-image>=0.20.0",
   "requests",
   "kernels",
 ]
@@ -85,8 +82,7 @@ defmodule ArgsParser do
         mask_color: :string,
         mask_opacity: :float,
         mask_only: :boolean,
-        return_zip: :boolean,
-        generate_3d: :boolean
+        return_zip: :boolean
       ],
       aliases: [
         p: :prompt,
@@ -112,7 +108,6 @@ defmodule ArgsParser do
         --mask-opacity, -o 0.5             Mask opacity 0.0-1.0 (default: 0.5)
         --mask-only                        Output original video on white background (masked areas only)
         --return-zip                       Create ZIP file with video and masks
-        --generate-3d                      Generate 3D models (placeholder)
       """)
       System.halt(1)
     end
@@ -138,7 +133,6 @@ defmodule ArgsParser do
       mask_opacity: Keyword.get(opts, :mask_opacity, 0.5),
       mask_only: Keyword.get(opts, :mask_only, false),
       return_zip: Keyword.get(opts, :return_zip, false),
-      generate_3d: Keyword.get(opts, :generate_3d, false),
       use_gpu: true
     }
 
@@ -169,7 +163,6 @@ Mask Color: #{config.mask_color}
 Mask Opacity: #{config.mask_opacity}
 Mask Only: #{config.mask_only}
 Return ZIP: #{config.return_zip}
-Generate 3D: #{config.generate_3d}
 """)
 
 # Save config to JSON for Python to read
@@ -203,23 +196,41 @@ except ImportError:
 from transformers import Sam3VideoModel, Sam3VideoProcessor
 import warnings
 import sys
-from io import StringIO
 
 MODEL_PATH = "checkpoints"
 MODEL_URL = "https://weights.replicate.delivery/default/facebook/sam3/model.tar"
 
-# Suppress kernels installation warnings/errors
-# The kernels library tries to install cv_utils but may fail on some systems
-# This doesn't affect core functionality, just some post-processing features
+# Suppress general warnings
 warnings.filterwarnings('ignore', category=UserWarning)
-# Redirect stderr temporarily during kernels operations
-class SuppressKernelsErrors:
-    def __enter__(self):
-        self.old_stderr = sys.stderr
-        sys.stderr = StringIO()
-        return self
-    def __exit__(self, *args):
-        sys.stderr = self.old_stderr
+
+# Pre-install cv_utils kernel to avoid warnings during inference
+print("Pre-installing cv_utils kernel (if available)...")
+try:
+    from kernels import get_kernel
+    import os
+    
+    # Set environment variable to allow kernel installation
+    os.environ.setdefault("KERNELS_CACHE_DIR", os.path.expanduser("~/.cache/kernels"))
+    
+    try:
+        # Try to get/install the kernel with explicit revision
+        print("  Attempting to install kernels-community/cv_utils...")
+        cv_utils_kernel = get_kernel("kernels-community/cv_utils", revision="main")
+        print("✓ cv_utils kernel installed successfully")
+    except Exception as e:
+        error_msg = str(e)
+        if "Cannot install kernel" in error_msg or "not supported" in error_msg.lower():
+            print(f"⚠ cv_utils kernel installation failed: {error_msg}")
+            print("  This may be due to CUDA/PyTorch compatibility or missing build tools")
+            print("  Post-processing will use CPU fallback methods (this is normal and works fine)")
+        else:
+            print(f"⚠ cv_utils kernel installation error: {error_msg}")
+            print("  Post-processing will use fallback methods")
+except ImportError:
+    print("⚠ kernels library not available - installing...")
+    print("  Run: pip install kernels")
+except Exception as e:
+    print(f"⚠ Unexpected error during kernel setup: {e}")
 
 def download_weights(url, dest):
     \"\"\"Download model weights\"\"\"
@@ -312,8 +323,10 @@ if not os.path.exists(MODEL_PATH):
 
 # Load model
 print(f"\\nLoading SAM 3 model from {MODEL_PATH}...")
+
 model = Sam3VideoModel.from_pretrained(MODEL_PATH).to(device, dtype=dtype).eval()
 processor = Sam3VideoProcessor.from_pretrained(MODEL_PATH)
+
 
 print("✓ Model loaded successfully!")
 """, python_globals)
@@ -341,7 +354,6 @@ mask_color = config.get('mask_color', 'white')
 mask_opacity = config.get('mask_opacity', 0.5)
 mask_only = config.get('mask_only', False)
 return_zip = config.get('return_zip', False)
-generate_3d = config.get('generate_3d', False)
 video_filename = config.get('video_filename', None)
 
 # Check if video_filename is set
@@ -390,6 +402,7 @@ if prompt and prompt != "":
 # Run inference
 print("Running segmentation inference...")
 output_frames_data = {}
+
 for model_outputs in model.propagate_in_video_iterator(
     inference_session=inference_session,
     max_frame_num_to_track=len(frames)
@@ -435,7 +448,7 @@ writer = imageio.get_writer(str(output_video_path), fps=original_fps, codec='lib
 for idx, frame_pil in enumerate(frames):
     frame_np = np.array(frame_pil)
     
-    # Start with white background (better for 3D generation)
+    # Start with white background for clean mask visualization
     output_frame = np.ones_like(frame_np) * 255
 
     if idx in output_frames_data:
@@ -538,31 +551,7 @@ if config.return_zip do
   Process.put(:python_globals, python_globals)
 end
 
-# Step 5: Generate 3D models (placeholder)
-if config.generate_3d do
-  IO.puts("\n=== Step 5: Generate 3D Models ===")
-
-  {_, python_globals} = Pythonx.eval("""
-  # Get configuration from JSON file
-  import json
-
-  with open("config.json", 'r') as f:
-      config = json.load(f)
-
-  generate_3d = config.get('generate_3d', False)
-
-  # Note: Full 3D generation with SAM 3D Objects requires complex setup
-  # This is a placeholder - you would need to integrate SAM 3D Objects separately
-  if generate_3d:
-      print("⚠ Full 3D generation requires SAM 3D Objects setup")
-      print("For now, you can use the PLY to GLB converter notebook separately")
-      print("This feature will be available in a future update")
-  """, python_globals)
-
-  Process.put(:python_globals, python_globals)
-end
-
-IO.puts("\n=== Step 6: Create Output Files ===")
+IO.puts("\n=== Step 5: Create Output Files ===")
 
 # Create ZIP if return_zip is True
 {_, _python_globals} = Pythonx.eval("""
@@ -597,4 +586,3 @@ print("\\n✓ All done!")
 """, Process.get(:python_globals) || %{})
 
 IO.puts("\n=== Complete ===")
-
