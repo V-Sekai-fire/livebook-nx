@@ -16,7 +16,6 @@
 #   --num-steps <int>            Number of inference steps (default: 50)
 #   --guidance-scale <float>     Guidance scale (default: 7.0)
 #   --use-flash-decoder          Use flash decoder for faster inference (default: true)
-#   --mask <path>                Path to mask image or video to focus generation on specific regions
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -90,8 +89,7 @@ defmodule ArgsParser do
         num_tokens: :integer,
         num_steps: :integer,
         guidance_scale: :float,
-        use_flash_decoder: :boolean,
-        mask: :string
+        use_flash_decoder: :boolean
       ],
       aliases: [
         f: :output_format,
@@ -120,7 +118,6 @@ defmodule ArgsParser do
         --num-steps, --steps <int>      Number of inference steps (default: 50)
         --guidance-scale, -g <float>    Guidance scale (default: 7.0)
         --use-flash-decoder             Use flash decoder for faster inference (default: true)
-        --mask <path>                   Path to mask image or video to focus generation on specific regions
       """)
       System.halt(1)
     end
@@ -138,12 +135,6 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    mask_path = Keyword.get(opts, :mask)
-    if mask_path && !File.exists?(mask_path) do
-      IO.puts("Error: Mask file not found: #{mask_path}")
-      System.halt(1)
-    end
-
     config = %{
       image_path: image_path,
       output_format: Keyword.get(opts, :output_format, "glb"),
@@ -152,8 +143,7 @@ defmodule ArgsParser do
       num_tokens: num_tokens,
       num_steps: Keyword.get(opts, :num_steps, 50),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.0),
-      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true),
-      mask_path: mask_path
+      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true)
     }
 
     # Validate output_format
@@ -186,7 +176,6 @@ Number of Tokens: #{config.num_tokens}
 Inference Steps: #{config.num_steps}
 Guidance Scale: #{config.guidance_scale}
 Use Flash Decoder: #{config.use_flash_decoder}
-Mask: #{if config.mask_path, do: config.mask_path, else: "none"}
 """)
 
 # Add weights directories to config for Python
@@ -399,7 +388,6 @@ num_tokens = config.get('num_tokens', 1024)
 num_steps = config.get('num_steps', 50)
 guidance_scale = config.get('guidance_scale', 7.0)
 use_flash_decoder = config.get('use_flash_decoder', True)
-mask_path = config.get('mask_path')
 
 # Get weights directories from config
 partcrafter_weights_dir = config.get('partcrafter_weights_dir')
@@ -491,57 +479,6 @@ set_seed(seed)
 try:
     # Load image
     img_pil = Image.open(input_image_path)
-    
-    # Apply mask if provided (can be image or video)
-    if mask_path:
-        mask_path_resolved = str(Path(mask_path).resolve())
-        if not Path(mask_path_resolved).exists():
-            raise FileNotFoundError(f"Mask file not found: {mask_path_resolved}")
-        
-        print(f"Applying mask from: {mask_path_resolved}")
-        
-        # Check if mask is a video and extract first frame
-        mask_path_str = str(mask_path_resolved)
-        if mask_path_str.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
-            print(f"Mask is a video, extracting first frame...")
-            cap = cv2.VideoCapture(mask_path_str)
-            if not cap.isOpened():
-                raise ValueError(f"Could not open mask video file: {mask_path_str}")
-            
-            ret, frame = cap.read()
-            cap.release()
-            
-            if not ret:
-                raise ValueError(f"Could not read frame from mask video: {mask_path_str}")
-            
-            # Convert BGR to grayscale
-            mask_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            mask_img = Image.fromarray(mask_frame)
-            print(f"[OK] Extracted mask frame from video")
-        else:
-            mask_img = Image.open(mask_path_resolved).convert('L')
-        
-        # Resize mask to match image size if needed
-        if mask_img.size != img_pil.size:
-            mask_img = mask_img.resize(img_pil.size, Image.Resampling.LANCZOS)
-        
-        # Convert mask to numpy array
-        mask_array = np.array(mask_img)
-        # Normalize mask to 0-1 range if it's not already
-        if mask_array.max() > 1:
-            mask_array = mask_array.astype(np.float32) / 255.0
-        
-        # Convert image to numpy array
-        img_array = np.array(img_pil.convert('RGB'))
-        
-        # Apply mask: multiply image by mask (white areas keep image, black areas become white)
-        # For mask: 1 = keep, 0 = remove (make white)
-        mask_3d = np.stack([mask_array] * 3, axis=-1)
-        masked_img = img_array * mask_3d + (1 - mask_3d) * 255
-        
-        # Convert back to PIL Image
-        img_pil = Image.fromarray(masked_img.astype(np.uint8))
-        print("[OK] Mask applied to image")
     
     # Run inference
     generator = torch.Generator(device=pipe.device).manual_seed(seed)
