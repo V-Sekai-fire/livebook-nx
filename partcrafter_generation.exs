@@ -16,7 +16,7 @@
 #   --num-steps <int>            Number of inference steps (default: 50)
 #   --guidance-scale <float>     Guidance scale (default: 7.0)
 #   --rmbg                       Remove background from input image (default: false)
-#   --use-flash-decoder          Use flash decoder for faster inference (default: false)
+#   --use-flash-decoder          Use flash decoder for faster inference (default: true)
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -121,7 +121,7 @@ defmodule ArgsParser do
         --num-steps, --steps <int>      Number of inference steps (default: 50)
         --guidance-scale, -g <float>    Guidance scale (default: 7.0)
         --rmbg, -r                      Remove background from input image (default: false)
-        --use-flash-decoder             Use flash decoder for faster inference (default: false)
+        --use-flash-decoder             Use flash decoder for faster inference (default: true)
       """)
       System.halt(1)
     end
@@ -148,7 +148,7 @@ defmodule ArgsParser do
       num_steps: Keyword.get(opts, :num_steps, 50),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.0),
       rmbg: Keyword.get(opts, :rmbg, false),
-      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, false)
+      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true)
     }
 
     # Validate output_format
@@ -402,7 +402,7 @@ num_tokens = config.get('num_tokens', 1024)
 num_steps = config.get('num_steps', 50)
 guidance_scale = config.get('guidance_scale', 7.0)
 rmbg = config.get('rmbg', False)
-use_flash_decoder = config.get('use_flash_decoder', False)
+use_flash_decoder = config.get('use_flash_decoder', True)
 
 # Get weights directories from config
 partcrafter_weights_dir = config.get('partcrafter_weights_dir')
