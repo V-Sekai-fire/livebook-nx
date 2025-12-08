@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/V-Sekai-fire/Optimized-Tris-to-Quads-Converter.git
+	branch = main
+	commit = 576f8c5da63c8da75085dd51cf0b584e04b21ea6
+	parent = 4304da8ebaa6e4891efbcbce8504d885813b646c
+	method = merge
+	cmdver = 0.4.9
