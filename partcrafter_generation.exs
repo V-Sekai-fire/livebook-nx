@@ -12,7 +12,7 @@
 #   --output-format "glb"        Output format: glb (default: "glb")
 #   --num-parts <int>            Number of parts to generate (1-16, default: 6)
 #   --seed <int>                 Random seed for generation (default: 0)
-#   --num-tokens <int>           Number of tokens (256/512/1024/1536/2048/3072/4096, default: 1024)
+#   --num-tokens <int>           Number of tokens (256/512/1024/1536/2048, default: 1024)
 #   --num-steps <int>            Number of inference steps (default: 50)
 #   --guidance-scale <float>     Guidance scale (default: 7.0)
 #   --use-flash-decoder          Use flash decoder for faster inference (default: true)
@@ -114,7 +114,7 @@ defmodule ArgsParser do
         --output-format, -f "glb"      Output format: glb (default: "glb")
         --num-parts, -n <int>           Number of parts to generate (1-16, default: 6)
         --seed, -s <int>                Random seed for generation (default: 0)
-        --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048, 3072, 4096 (default: 1024)
+        --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048 (default: 1024)
         --num-steps, --steps <int>      Number of inference steps (default: 50)
         --guidance-scale, -g <float>    Guidance scale (default: 7.0)
         --use-flash-decoder             Use flash decoder for faster inference (default: true)
@@ -129,7 +129,7 @@ defmodule ArgsParser do
     end
 
     num_tokens = Keyword.get(opts, :num_tokens, 1024)
-    valid_tokens = [256, 512, 1024, 1536, 2048, 3072, 4096]
+    valid_tokens = [256, 512, 1024, 1536, 2048]
     if num_tokens not in valid_tokens do
       IO.puts("Error: num_tokens must be one of: #{Enum.join(valid_tokens, ", ")}")
       System.halt(1)
