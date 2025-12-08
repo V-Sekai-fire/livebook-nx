@@ -80,6 +80,15 @@ def load(filepath: str, return_armature: bool=False):
             bpy.ops.import_scene.fbx(filepath=filepath, ignore_leaf_bones=False, use_image_search=False)
         elif filepath.endswith(".glb") or filepath.endswith(".gltf"):
             bpy.ops.import_scene.gltf(filepath=filepath, import_pack_images=False)
+        elif filepath.endswith(".usd") or filepath.endswith(".usda") or filepath.endswith(".usdc"):
+            bpy.ops.wm.usd_import(
+                filepath=filepath,
+                import_materials=True,
+                import_textures=True,
+                import_uv=True,
+                import_normals=True,
+                import_colors=True
+            )
         elif filepath.endswith(".dae"):
             bpy.ops.wm.collada_import(filepath=filepath)
         elif filepath.endswith(".blend"):
@@ -385,6 +394,23 @@ def merge(
             bpy.ops.export_scene.fbx(filepath=output_path, add_leaf_bones=True)
         elif output_path.endswith(".glb") or output_path.endswith(".gltf"):
             bpy.ops.export_scene.gltf(filepath=output_path)
+        elif output_path.endswith(".usd") or output_path.endswith(".usda") or output_path.endswith(".usdc"):
+            # USD export with embedded images and material preservation
+            # Preserves quads and materials from GLTF/FBX sources
+            # Using only essential parameters that are valid in Blender 4.5
+            # Note: Texture embedding is controlled by relative_paths=False
+            bpy.ops.wm.usd_export(
+                filepath=output_path,
+                export_materials=True,
+                export_textures=True,
+                relative_paths=False,  # False = embed textures, True = use relative paths
+                export_uvmaps=True,
+                export_armatures=True,  # Preserve armatures for rigged models
+                selected_objects_only=False,
+                visible_objects_only=False,
+                use_instancing=False,
+                evaluation_mode='RENDER'
+            )
         elif output_path.endswith(".dae"):
             bpy.ops.wm.collada_export(filepath=output_path)
         elif output_path.endswith(".blend"):

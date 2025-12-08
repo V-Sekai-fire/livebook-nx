@@ -9,7 +9,9 @@
 #   elixir unirig_generation.exs <mesh_path> [options]
 #
 # Options:
-#   --output-format "fbx"        Output format: fbx, glb (default: "fbx")
+#   --output-format "usdc"       Output format: usdc only (default: "usdc")
+#                                Binary USDC format preserves quads and embedded materials
+#                                with optimal performance and file size
 #   --seed <int>                 Random seed for skeleton generation (default: 42)
 #   --skeleton-only              Only generate skeleton, skip skinning (default: false)
 #   --skin-only                  Only generate skinning (requires existing skeleton) (default: false)
@@ -107,7 +109,9 @@ defmodule ArgsParser do
         elixir unirig_generation.exs <mesh_path> [options]
 
       Options:
-        --output-format, -f "fbx"      Output format: fbx, glb (default: "fbx")
+        --output-format, -f "usdc"    Output format: usdc only (default: "usdc")
+                                       Binary USDC format preserves quads and embedded materials
+                                       with optimal performance and file size
         --seed, -s <int>                Random seed for skeleton generation (default: 42)
         --skeleton-only, -sk            Only generate skeleton, skip skinning (default: false)
         --skin-only, -so                Only generate skinning (requires existing skeleton) (default: false)
@@ -127,7 +131,7 @@ defmodule ArgsParser do
 
     config = %{
       mesh_path: mesh_path,
-      output_format: Keyword.get(opts, :output_format, "fbx"),
+      output_format: Keyword.get(opts, :output_format, "usdc"),
       seed: Keyword.get(opts, :seed, 42),
       skeleton_only: skeleton_only,
       skin_only: skin_only,
@@ -135,10 +139,10 @@ defmodule ArgsParser do
       skin_task: Keyword.get(opts, :skin_task)
     }
 
-    # Validate output_format
-    valid_formats = ["fbx", "glb"]
-    if config.output_format not in valid_formats do
-      IO.puts("Error: Invalid output format. Must be one of: #{Enum.join(valid_formats, ", ")}")
+    # Validate output_format - only USDC allowed
+    if config.output_format != "usdc" do
+      IO.puts("Error: Only USDC output format is supported, got: #{config.output_format}")
+      IO.puts("  Please use 'usdc' as output format")
       System.halt(1)
     end
 
