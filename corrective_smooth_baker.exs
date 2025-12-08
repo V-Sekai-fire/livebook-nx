@@ -767,7 +767,12 @@ else:
 print(f"✓ Corrected model saved: {output_path}")
 
 # Cleanup
-os.remove('config.json')
+try:
+    if os.path.exists('config.json'):
+        os.remove('config.json')
+except Exception as e:
+    # Ignore cleanup errors
+    pass
 """, %{})
 
 IO.puts("""
