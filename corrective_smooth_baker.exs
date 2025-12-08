@@ -227,6 +227,16 @@ input_path = config['input_path']
 output_path = config['output_path']
 workspace_root = config.get('workspace_root', os.getcwd())
 
+# Convert paths to absolute paths
+if not os.path.isabs(input_path):
+    input_path = os.path.abspath(os.path.join(workspace_root, input_path))
+if not os.path.isabs(output_path):
+    output_path = os.path.abspath(os.path.join(workspace_root, output_path))
+
+# Normalize path separators for Windows compatibility
+input_path = os.path.normpath(input_path)
+output_path = os.path.normpath(output_path)
+
 # Add corrective smooth baker to path
 corrective_smooth_baker_path = os.path.join(workspace_root, 'thirdparty', 'corrective_smooth_baker')
 if os.path.exists(corrective_smooth_baker_path):
