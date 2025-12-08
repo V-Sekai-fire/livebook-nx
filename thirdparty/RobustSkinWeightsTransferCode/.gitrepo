@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/rin-23/RobustSkinWeightsTransferCode
+	branch = main
+	commit = a60263c17f38625b98a62bea09c91f61f7b865f0
+	parent = 50edaaf1df325670168d6ecdaf69299a2379c89c
+	method = merge
+	cmdver = 0.4.9
