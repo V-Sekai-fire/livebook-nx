@@ -153,7 +153,7 @@ File.write!("config.json", config_json)
 # Run RigNet prediction
 IO.puts("\n=== Running RigNet Prediction ===")
 
-Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval("""
 import json
 import os
 import sys
@@ -164,7 +164,9 @@ import bpy
 
 # Add RigNet to path
 riget_path = Path.cwd() / "thirdparty" / "blender-rignet"
+riget_rig_path = riget_path / "RigNet"
 sys.path.insert(0, str(riget_path))
+sys.path.insert(0, str(riget_rig_path))
 
 with open("config.json", 'r') as f:
     config = json.load(f)
@@ -265,14 +267,71 @@ if not skip_optimization:
         print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
 
         # Use meshoptimizer to simplify
-        # meshoptimizer expects: simplify(indices, vertices, target_index_count, target_error)
+        # meshoptimizer API: simplify(destination, indices, vertex_positions, index_count=None, vertex_count=None,
+        #                             vertex_positions_stride=None, target_index_count=None, target_error=0.01,
+        #                             options=0, result_error=None)
+        # Flatten vertices array and ensure it's contiguous
+        vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
+        # Try stride as number of floats (3) - some bindings use this instead of bytes
+        # If this doesn't work, try 12 (bytes: 3 floats * 4 bytes)
+        vertex_positions_stride = 3  # number of floats per vertex
+        target_error = 0.01  # Error threshold
+
+        # Prepare arrays with correct types and ensure contiguous
+        indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
+        index_count = len(indices_uint32)
+        vertex_count = len(vertices)
+        target_indices_int = int(target_indices)
+
+        # Validate inputs
+        if index_count == 0 or vertex_count == 0:
+            raise ValueError("Empty mesh data")
+        if target_indices_int <= 0:
+            raise ValueError("Invalid target index count")
+
+        # Create destination array for simplified indices (must be contiguous and large enough)
+        # Make it slightly larger than target to be safe
+        destination = np.zeros(max(target_indices_int, index_count), dtype=np.uint32)
+
         try:
-            simplified_indices = meshoptimizer.simplify(
-                indices,
-                vertices,
-                target_index_count=target_indices,
-                target_error=1e-2  # Error threshold
+            # Call meshoptimizer.simplify with all required parameters
+            # Use keyword arguments for optional parameters to avoid type issues
+            result_count = meshoptimizer.simplify(
+                destination,
+                indices_uint32,
+                vertex_positions,
+                index_count=index_count,
+                vertex_count=vertex_count,
+                vertex_positions_stride=vertex_positions_stride,
+                target_index_count=target_indices_int,
+                target_error=target_error
             )
+            # Extract the actual simplified indices
+            if result_count is not None and result_count > 0:
+                actual_count = int(result_count)
+                simplified_indices = destination[:actual_count]
+                print(f"  meshoptimizer returned {actual_count} indices ({actual_count // 3} triangles)")
+            else:
+                # If no count returned, check if destination was modified
+                # Find first zero or use target count
+                nonzero_mask = destination != 0
+                if np.any(nonzero_mask):
+                    actual_count = np.where(nonzero_mask)[0][-1] + 1 if len(np.where(nonzero_mask)[0]) > 0 else target_indices_int
+                else:
+                    actual_count = target_indices_int
+                simplified_indices = destination[:actual_count]
+                print(f"  meshoptimizer modified destination in place, using {actual_count} indices")
+
+            # Validate that we actually got simplified indices
+            if len(simplified_indices) >= len(indices_uint32):
+                print(f"  Warning: Simplified indices ({len(simplified_indices)}) >= original ({len(indices_uint32)}), meshoptimizer may not have simplified")
+                raise ValueError("meshoptimizer did not reduce mesh complexity")
+
+            # Get unique vertices from simplified indices (these reference original vertex array)
+            unique_vertex_indices = np.unique(simplified_indices)
+            simplified_vertices = vertices[unique_vertex_indices]
+
+            print(f"  Simplified to {len(unique_vertex_indices)} unique vertices, {len(simplified_indices) // 3} triangles")
         except Exception as e:
             print(f"Warning: meshoptimizer.simplify failed: {e}")
             print("Falling back to Blender's decimate modifier...")
@@ -284,26 +343,24 @@ if not skip_optimization:
             bpy.ops.object.modifier_apply(modifier='Decimate')
             print(f"Decimated to {len(mesh_obj.data.vertices)} vertices (fallback)")
         else:
-            # Get unique vertices from simplified indices
-            unique_vertex_indices = np.unique(simplified_indices)
-            simplified_vertices = vertices[unique_vertex_indices]
-
             # Remap indices to new vertex array
             vertex_map = {old_idx: new_idx for new_idx, old_idx in enumerate(unique_vertex_indices)}
             remapped_indices = np.array([vertex_map[idx] for idx in simplified_indices], dtype=np.uint32)
 
-            # Update Blender mesh with optimized data
-            mesh_data.clear_geometry()
-            mesh_data.from_pydata(simplified_vertices.tolist(), [], [])
-
-            # Add faces
+            # Build faces list for from_pydata (list of lists, each inner list is vertex indices for a face)
+            faces_list = []
             for i in range(0, len(remapped_indices), 3):
                 if i + 2 < len(remapped_indices):
-                    mesh_data.faces.add(1)
-                    face = mesh_data.faces[-1]
-                    face.vertices[0] = int(remapped_indices[i])
-                    face.vertices[1] = int(remapped_indices[i + 1])
-                    face.vertices[2] = int(remapped_indices[i + 2])
+                    faces_list.append([
+                        int(remapped_indices[i]),
+                        int(remapped_indices[i + 1]),
+                        int(remapped_indices[i + 2])
+                    ])
+
+            # Update Blender mesh with optimized data
+            # from_pydata(vertices, edges, faces) - faces is list of vertex index lists
+            mesh_data.clear_geometry()
+            mesh_data.from_pydata(simplified_vertices.tolist(), [], faces_list)
 
             mesh_data.update()
             print(f"✓ Mesh optimized to {len(mesh_obj.data.vertices)} vertices using meshoptimizer")
@@ -456,7 +513,366 @@ except:
     pass
 
 print("\\n✓ USDC pipeline complete!")
-""")
+
+print("\\n✓ RigNet generation complete!")
+
+print("Output saved to: #{output_path}")
+import torch
+import numpy as np
+import bpy
+
+# Add RigNet to path
+riget_path = Path.cwd() / "thirdparty" / "blender-rignet"
+riget_rig_path = riget_path / "RigNet"
+sys.path.insert(0, str(riget_path))
+sys.path.insert(0, str(riget_rig_path))
+
+with open("config.json", 'r') as f:
+    config = json.load(f)
+
+mesh_path = config['mesh_path']
+output_path = config['output_path']
+checkpoint_dir = config['checkpoint_dir']
+device_str = config.get('device')
+threshold = config.get('threshold', 1e-5)
+bandwidth = config.get('bandwidth')
+target_vertices = config.get('target_vertices', 3000)
+skip_optimization = config.get('skip_optimization', False)
+
+# Determine device
+if device_str:
+    device = torch.device(device_str)
+else:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+print(f"Device: {device}")
+print(f"Input USDC: {mesh_path}")
+print(f"Output USDC: {output_path}")
+print(f"Checkpoints: {checkpoint_dir}")
+
+# Step 1: Load USDC in Blender and export as OBJ for RigNet
+print("\\n=== Step 1: Loading USDC Mesh ===")
+bpy.ops.wm.read_factory_settings(use_empty=True)
+
+# Import USDC
+try:
+    bpy.ops.wm.usd_import(
+        filepath=str(Path(mesh_path).resolve()),
+        import_materials=True
+    )
+    print("✓ USDC loaded successfully")
+except Exception as e:
+    print(f"Error loading USDC: {e}")
+    import traceback
+    traceback.print_exc()
+    raise
+
+# Find mesh objects
+mesh_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'MESH']
+if len(mesh_objects) == 0:
+    raise ValueError("No mesh objects found in USDC file")
+
+print(f"Found {len(mesh_objects)} mesh object(s)")
+
+# Select all meshes and join them if multiple
+if len(mesh_objects) > 1:
+    print("Joining multiple meshes into one...")
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in mesh_objects:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = mesh_objects[0]
+    bpy.ops.object.join()
+    mesh_obj = bpy.context.active_object
+else:
+    mesh_obj = mesh_objects[0]
+
+# Optimize mesh if needed using meshoptimizer
+if not skip_optimization:
+    print(f"\\n=== Optimizing Mesh to ~{target_vertices} vertices using meshoptimizer ===")
+    original_vertices = len(mesh_obj.data.vertices)
+    original_faces = len(mesh_obj.data.polygons)
+    print(f"Original: {original_vertices} vertices, {original_faces} faces")
+
+    if original_vertices > target_vertices:
+        import meshoptimizer
+
+        # Extract mesh data from Blender
+        mesh_data = mesh_obj.data
+        vertices = np.array([v.co[:] for v in mesh_data.vertices], dtype=np.float32)
+
+        # Get face indices
+        faces = []
+        for poly in mesh_data.polygons:
+            face_verts = [mesh_data.loops[i].vertex_index for i in range(poly.loop_start, poly.loop_start + poly.loop_total)]
+            # Triangulate if needed (meshoptimizer works with triangles)
+            if len(face_verts) == 3:
+                faces.append(face_verts)
+            elif len(face_verts) == 4:
+                # Split quad into two triangles
+                faces.append([face_verts[0], face_verts[1], face_verts[2]])
+                faces.append([face_verts[0], face_verts[2], face_verts[3]])
+            else:
+                # Triangulate n-gon (simple fan triangulation)
+                for i in range(1, len(face_verts) - 1):
+                    faces.append([face_verts[0], face_verts[i], face_verts[i + 1]])
+
+        indices = np.array(faces, dtype=np.uint32).flatten()
+
+        # Calculate target index count (approximately 3x target_vertices for triangles)
+        target_indices = target_vertices * 3
+
+        print(f"Simplifying mesh using meshoptimizer...")
+        print(f"  Input: {len(vertices)} vertices, {len(indices) // 3} triangles")
+        print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
+
+        # Use meshoptimizer to simplify
+        # meshoptimizer API: simplify(destination, indices, vertex_positions, index_count=None, vertex_count=None,
+        #                             vertex_positions_stride=None, target_index_count=None, target_error=0.01,
+        #                             options=0, result_error=None)
+        # Flatten vertices array and ensure it's contiguous
+        vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
+        # Try stride as number of floats (3) - some bindings use this instead of bytes
+        # If this doesn't work, try 12 (bytes: 3 floats * 4 bytes)
+        vertex_positions_stride = 3  # number of floats per vertex
+        target_error = 0.01  # Error threshold
+
+        # Prepare arrays with correct types and ensure contiguous
+        indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
+        index_count = len(indices_uint32)
+        vertex_count = len(vertices)
+        target_indices_int = int(target_indices)
+
+        # Validate inputs
+        if index_count == 0 or vertex_count == 0:
+            raise ValueError("Empty mesh data")
+        if target_indices_int <= 0:
+            raise ValueError("Invalid target index count")
+
+        # Create destination array for simplified indices (must be contiguous and large enough)
+        # Make it slightly larger than target to be safe
+        destination = np.zeros(max(target_indices_int, index_count), dtype=np.uint32)
+
+        try:
+            # Call meshoptimizer.simplify with all required parameters
+            # Use keyword arguments for optional parameters to avoid type issues
+            result_count = meshoptimizer.simplify(
+                destination,
+                indices_uint32,
+                vertex_positions,
+                index_count=index_count,
+                vertex_count=vertex_count,
+                vertex_positions_stride=vertex_positions_stride,
+                target_index_count=target_indices_int,
+                target_error=target_error
+            )
+            # Extract the actual simplified indices
+            if result_count is not None and result_count > 0:
+                actual_count = int(result_count)
+                simplified_indices = destination[:actual_count]
+                print(f"  meshoptimizer returned {actual_count} indices ({actual_count // 3} triangles)")
+            else:
+                # If no count returned, check if destination was modified
+                # Find first zero or use target count
+                nonzero_mask = destination != 0
+                if np.any(nonzero_mask):
+                    actual_count = np.where(nonzero_mask)[0][-1] + 1 if len(np.where(nonzero_mask)[0]) > 0 else target_indices_int
+                else:
+                    actual_count = target_indices_int
+                simplified_indices = destination[:actual_count]
+                print(f"  meshoptimizer modified destination in place, using {actual_count} indices")
+
+            # Validate that we actually got simplified indices
+            if len(simplified_indices) >= len(indices_uint32):
+                print(f"  Warning: Simplified indices ({len(simplified_indices)}) >= original ({len(indices_uint32)}), meshoptimizer may not have simplified")
+                raise ValueError("meshoptimizer did not reduce mesh complexity")
+
+            # Get unique vertices from simplified indices (these reference original vertex array)
+            unique_vertex_indices = np.unique(simplified_indices)
+            simplified_vertices = vertices[unique_vertex_indices]
+
+            print(f"  Simplified to {len(unique_vertex_indices)} unique vertices, {len(simplified_indices) // 3} triangles")
+        except Exception as e:
+            print(f"Warning: meshoptimizer.simplify failed: {e}")
+            print("Falling back to Blender's decimate modifier...")
+            # Fallback to Blender decimate
+            bpy.context.view_layer.objects.active = mesh_obj
+            decimate = mesh_obj.modifiers.new(name='Decimate', type='DECIMATE')
+            decimate.ratio = target_vertices / original_vertices
+            decimate.use_collapse_triangulate = True
+            bpy.ops.object.modifier_apply(modifier='Decimate')
+            print(f"Decimated to {len(mesh_obj.data.vertices)} vertices (fallback)")
+        else:
+            # Remap indices to new vertex array
+            vertex_map = {old_idx: new_idx for new_idx, old_idx in enumerate(unique_vertex_indices)}
+            remapped_indices = np.array([vertex_map[idx] for idx in simplified_indices], dtype=np.uint32)
+
+            # Build faces list for from_pydata (list of lists, each inner list is vertex indices for a face)
+            faces_list = []
+            for i in range(0, len(remapped_indices), 3):
+                if i + 2 < len(remapped_indices):
+                    faces_list.append([
+                        int(remapped_indices[i]),
+                        int(remapped_indices[i + 1]),
+                        int(remapped_indices[i + 2])
+                    ])
+
+            # Update Blender mesh with optimized data
+            # from_pydata(vertices, edges, faces) - faces is list of vertex index lists
+            mesh_data.clear_geometry()
+            mesh_data.from_pydata(simplified_vertices.tolist(), [], faces_list)
+
+            mesh_data.update()
+            print(f"✓ Mesh optimized to {len(mesh_obj.data.vertices)} vertices using meshoptimizer")
+    else:
+        print(f"Mesh already has {original_vertices} vertices (target: {target_vertices})")
+
+# Export as OBJ for RigNet processing
+temp_obj_path = str(Path(mesh_path).with_suffix('')) + '_temp_rignet.obj'
+bpy.ops.wm.obj_export(
+    filepath=temp_obj_path,
+    export_selected_objects=True,
+    export_uv=True,
+    export_normals=True
+)
+print(f"✓ Exported OBJ for RigNet: {temp_obj_path}")
+
+# Step 2: Run RigNet prediction
+print("\\n=== Step 2: Running RigNet Prediction ===")
+
+# Import RigNet modules
+try:
+    from RigNet.quick_start import (
+        create_single_data,
+        predict_joints,
+        predict_skeleton,
+        predict_skinning,
+    )
+    from RigNet.models.GCN import JOINTNET_MASKNET_MEANSHIFT as JOINTNET
+    from RigNet.models.ROOT_GCN import ROOTNET
+    from RigNet.models.PairCls_GCN import PairCls as BONENET
+    from RigNet.models.SKINNING import SKINNET
+    print("✓ RigNet modules imported")
+except Exception as e:
+    print(f"Error importing RigNet modules: {e}")
+    import traceback
+    traceback.print_exc()
+    raise
+
+# Load networks
+print("\\n=== Loading Networks ===")
+os.chdir(Path(checkpoint_dir).parent)
+
+# Joint network
+jointNet = JOINTNET()
+jointNet.to(device)
+jointNet.eval()
+joint_checkpoint = torch.load('checkpoints/pretrain_jointnet/model_best.pth.tar', map_location=device)
+jointNet.load_state_dict(joint_checkpoint['state_dict'])
+print("✓ Joint prediction network loaded")
+
+# Root network
+rootNet = ROOTNET()
+rootNet.to(device)
+rootNet.eval()
+root_checkpoint = torch.load('checkpoints/rootnet/model_best.pth.tar', map_location=device)
+rootNet.load_state_dict(root_checkpoint['state_dict'])
+print("✓ Root prediction network loaded")
+
+# Bone network
+boneNet = BONENET()
+boneNet.to(device)
+boneNet.eval()
+bone_checkpoint = torch.load('checkpoints/bonenet/model_best.pth.tar', map_location=device)
+boneNet.load_state_dict(bone_checkpoint['state_dict'])
+print("✓ Bone connectivity network loaded")
+
+# Skin network
+skinNet = SKINNET(nearest_bone=5, use_Dg=True, use_Lf=True)
+skin_checkpoint = torch.load('checkpoints/skinnet/model_best.pth.tar', map_location=device)
+skinNet.load_state_dict(skin_checkpoint['state_dict'])
+skinNet.to(device)
+skinNet.eval()
+print("✓ Skinning network loaded")
+
+# Create input data from OBJ
+print("\\n=== Processing Mesh for RigNet ===")
+data, vox, surface_geodesic, translation_normalize, scale_normalize = create_single_data(temp_obj_path)
+data.to(device)
+
+# Predict joints
+print("\\n=== Predicting Joints ===")
+data = predict_joints(data, vox, jointNet, threshold, bandwidth=bandwidth)
+data.to(device)
+
+# Predict skeleton
+print("\\n=== Predicting Skeleton ===")
+pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet)
+
+# Predict skinning
+print("\\n=== Predicting Skinning Weights ===")
+pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic)
+
+# Reverse normalization
+pred_rig.normalize(scale_normalize, -translation_normalize)
+
+# Save rig file temporarily
+temp_rig_path = str(Path(temp_obj_path).with_suffix('')) + '_rig.txt'
+pred_rig.save(temp_rig_path)
+print(f"✓ Rig saved to: {temp_rig_path}")
+
+# Clear GPU cache
+if device.type == 'cuda':
+    torch.cuda.empty_cache()
+
+# Step 3: Load rig back into Blender and apply to mesh
+print("\\n=== Step 3: Applying Rig to Mesh ===")
+
+# Use blender-rignet's rig parser and armature generator
+try:
+    from RigNet.utils.rig_parser import Info
+    from ob_utils.objects import ArmatureGenerator
+
+    # Parse rig file
+    skel_info = Info(filename=temp_rig_path)
+    print("✓ Rig file parsed")
+
+    # Create armature and apply to mesh
+    # The mesh_obj is already in the scene from Step 1
+    bpy.context.view_layer.objects.active = mesh_obj
+    ArmatureGenerator(skel_info, mesh_obj).generate()
+    print("✓ Armature created and applied to mesh")
+except Exception as e:
+    print(f"Error applying rig: {e}")
+    import traceback
+    traceback.print_exc()
+    raise
+
+# Step 4: Export final rigged model as USDC
+print("\\n=== Step 4: Exporting Rigged Model as USDC ===")
+bpy.ops.wm.usd_export(
+    filepath=output_path,
+    export_materials=True,
+    export_textures=True,
+    relative_paths=False,
+    export_uvmaps=True,
+    export_armatures=True,
+    selected_objects_only=False,
+    visible_objects_only=False,
+    use_instancing=False,
+    evaluation_mode='RENDER'
+)
+print(f"✓ Rigged USDC exported: {output_path}")
+
+# Cleanup temp files
+try:
+    os.remove(temp_obj_path)
+    os.remove(temp_rig_path)
+    print("✓ Cleaned up temporary files")
+except:
+    pass
+
+print("\\n✓ USDC pipeline complete!")
+""", %{})
 
 IO.puts("\n✓ RigNet generation complete!")
 IO.puts("Output saved to: #{output_path}")
