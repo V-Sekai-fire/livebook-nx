@@ -110,7 +110,7 @@ defmodule ArgsParser do
         elixir corrective_smooth_baker.exs <rigged_model> [options]
 
       Supported formats: GLB, GLTF, USD, FBX
-      Use --help for more information.
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end
@@ -175,18 +175,48 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
+    deviation_threshold = Keyword.get(opts, :deviation_threshold, 0.01)
+    if deviation_threshold < 0.0 do
+      IO.puts("Error: deviation_threshold must be non-negative")
+      System.halt(1)
+    end
+
+    twist_angle = Keyword.get(opts, :twist_angle, 45.0)
+    if twist_angle < 0.0 do
+      IO.puts("Error: twist_angle must be non-negative")
+      System.halt(1)
+    end
+
+    influence_bones = Keyword.get(opts, :influence_bones, 4)
+    if influence_bones < 1 do
+      IO.puts("Error: influence_bones must be at least 1")
+      System.halt(1)
+    end
+
+    prune_threshold = Keyword.get(opts, :prune_threshold, 0.01)
+    if prune_threshold < 0.0 or prune_threshold > 1.0 do
+      IO.puts("Error: prune_threshold must be between 0.0 and 1.0")
+      System.halt(1)
+    end
+
+    refresh_frequency = Keyword.get(opts, :refresh_frequency, 15.0)
+    if refresh_frequency <= 0.0 do
+      IO.puts("Error: refresh_frequency must be greater than 0.0")
+      System.halt(1)
+    end
+
     %{
       input_path: input_path,
       output_path: output_path,
       workspace_root: File.cwd!(),
       bake_range: bake_range,
-      deviation_threshold: Keyword.get(opts, :deviation_threshold, 0.01),
+      deviation_threshold: deviation_threshold,
       bake_quality: bake_quality,
-      twist_angle: Keyword.get(opts, :twist_angle, 45.0),
-      influence_bones: Keyword.get(opts, :influence_bones, 4),
-      prune_threshold: Keyword.get(opts, :prune_threshold, 0.01),
+      twist_angle: twist_angle,
+      influence_bones: influence_bones,
+      prune_threshold: prune_threshold,
       solver: solver,
-      refresh_frequency: Keyword.get(opts, :refresh_frequency, 15.0)
+      refresh_frequency: refresh_frequency
     }
   end
 end

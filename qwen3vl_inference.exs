@@ -58,6 +58,32 @@ explicit = true
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    Qwen3-VL Vision-Language Inference Script
+    Generate text responses from images using Huihui-Qwen3-VL-8B-Instruct-abliterated
+    Model: Huihui-Qwen3-VL-8B-Instruct-abliterated (uncensored version)
+    Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated
+
+    Usage:
+      elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
+
+    Options:
+      --max-tokens, -m <int>        Maximum number of tokens to generate (default: 128)
+      --temperature, -t <float>     Sampling temperature (default: 1.0)
+      --top-p <float>                Top-p (nucleus) sampling (default: 1.0)
+      --output, -o <path>            Output file path for text response (optional)
+      --use-flash-attention          Use Flash Attention 2 for better performance (default: false)
+      --use-4bit                     Use 4-bit quantization (default: true, recommended for 8B model, ~4-5GB VRAM)
+      --full-precision                Use full precision instead of 4-bit quantization (requires 16GB+ VRAM)
+      --help, -h                      Show this help message
+
+    Example:
+      elixir qwen3vl_inference.exs image.jpg "What is in this image?" --max-tokens 256
+      elixir qwen3vl_inference.exs photo.png "Describe this scene" -m 128 -t 0.7 -o output.txt
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -67,14 +93,21 @@ defmodule ArgsParser do
         output: :string,
         use_flash_attention: :boolean,
         use_4bit: :boolean,
-        full_precision: :boolean
+        full_precision: :boolean,
+        help: :boolean
       ],
       aliases: [
         m: :max_tokens,
         t: :temperature,
-        o: :output
+        o: :output,
+        h: :help
       ]
     )
+
+    if Keyword.get(opts, :help, false) do
+      show_help()
+      System.halt(0)
+    end
 
     image_path = List.first(args)
     prompt = args |> Enum.at(1)
@@ -86,14 +119,7 @@ defmodule ArgsParser do
       Usage:
         elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
 
-      Options:
-        --max-tokens, -m <int>        Maximum number of tokens to generate (default: 128)
-        --temperature, -t <float>     Sampling temperature (default: 1.0)
-        --top-p <float>                Top-p (nucleus) sampling (default: 1.0)
-        --output, -o <path>            Output file path for text response (optional)
-        --use-flash-attention          Use Flash Attention 2 for better performance (default: false)
-        --use-4bit                     Use 4-bit quantization (default: true, recommended for 8B model, ~4-5GB VRAM)
-        --full-precision                Use full precision instead of 4-bit quantization (requires 16GB+ VRAM)
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end
@@ -104,6 +130,8 @@ defmodule ArgsParser do
 
       Usage:
         elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
+
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end
@@ -113,12 +141,30 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
+    max_tokens = Keyword.get(opts, :max_tokens, 128)
+    if max_tokens < 1 do
+      IO.puts("Error: max_tokens must be at least 1")
+      System.halt(1)
+    end
+
+    temperature = Keyword.get(opts, :temperature, 1.0)
+    if temperature < 0.0 do
+      IO.puts("Error: temperature must be non-negative")
+      System.halt(1)
+    end
+
+    top_p = Keyword.get(opts, :top_p, 1.0)
+    if top_p < 0.0 or top_p > 1.0 do
+      IO.puts("Error: top_p must be between 0.0 and 1.0")
+      System.halt(1)
+    end
+
     config = %{
       image_path: image_path,
       prompt: prompt,
-      max_tokens: Keyword.get(opts, :max_tokens, 128),
-      temperature: Keyword.get(opts, :temperature, 1.0),
-      top_p: Keyword.get(opts, :top_p, 1.0),
+      max_tokens: max_tokens,
+      temperature: temperature,
+      top_p: top_p,
       output_path: Keyword.get(opts, :output),
       use_flash_attention: Keyword.get(opts, :use_flash_attention, false),
       use_4bit: (if Keyword.get(opts, :full_precision, false), do: false, else: Keyword.get(opts, :use_4bit, true))

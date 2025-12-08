@@ -73,6 +73,37 @@ explicit = true
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    Kokoro TTS Generation Script
+    Generate speech from text using Kokoro-82M (Text-to-Speech)
+    Model: Kokoro-82M by hexgrad (82M parameters, Apache-2.0 License)
+    Repository: https://github.com/hexgrad/kokoro
+    Hugging Face: https://huggingface.co/hexgrad/Kokoro-82M
+
+    Usage:
+      elixir kokoro_tts_generation.exs "<text>" [options]
+      elixir kokoro_tts_generation.exs --input-file <file> [options]
+      echo "<text>" | elixir kokoro_tts_generation.exs [options]
+
+    Options:
+      --input-file, -i <path>         Read text from file (alternative to command-line text)
+      --lang-code, -l "a"              Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
+      --voice, -v "af_heart"          Voice to use (default: "af_heart")
+      --voice-file <path>              Path to voice tensor file (.pt) - overrides --voice if provided
+      --speed, -s <float>              Speech speed multiplier (default: 1.0)
+      --split-pattern <regex>          Pattern to split text into segments (default: "\\n+")
+      --output-format, -f "wav"        Output format: wav, mp3, flac (default: "wav")
+      --sample-rate, -r <int>          Audio sample rate in Hz (default: 24000)
+      --help, -h                       Show this help message
+
+    Example:
+      elixir kokoro_tts_generation.exs "Hello, world!" --lang-code a
+      elixir kokoro_tts_generation.exs --input-file text.txt --voice af_heart
+      echo "Hello" | elixir kokoro_tts_generation.exs
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -83,7 +114,8 @@ defmodule ArgsParser do
         split_pattern: :string,
         output_format: :string,
         sample_rate: :integer,
-        input_file: :string
+        input_file: :string,
+        help: :boolean
       ],
       aliases: [
         l: :lang_code,
@@ -91,9 +123,15 @@ defmodule ArgsParser do
         s: :speed,
         f: :output_format,
         r: :sample_rate,
-        i: :input_file
+        i: :input_file,
+        h: :help
       ]
     )
+
+    if Keyword.get(opts, :help, false) do
+      show_help()
+      System.halt(0)
+    end
 
     # Get text from various sources (priority: input_file > command-line arg > stdin)
     text = cond do
@@ -124,15 +162,7 @@ defmodule ArgsParser do
         elixir kokoro_tts_generation.exs --input-file <file> [options]
         echo "<text>" | elixir kokoro_tts_generation.exs [options]
 
-      Options:
-        --input-file, -i <path>         Read text from file (alternative to command-line text)
-        --lang-code, -l "a"              Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
-        --voice, -v "af_heart"          Voice to use (default: "af_heart")
-        --voice-file <path>              Path to voice tensor file (.pt) - overrides --voice if provided
-        --speed, -s <float>              Speech speed multiplier (default: 1.0)
-        --split-pattern <regex>          Pattern to split text into segments (default: "\\n+")
-        --output-format, -f "wav"        Output format: wav, mp3, flac (default: "wav")
-        --sample-rate, -r <int>          Audio sample rate in Hz (default: 24000)
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end

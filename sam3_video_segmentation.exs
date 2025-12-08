@@ -79,6 +79,31 @@ end
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    valid_colors_str = Enum.join(MaskColors.valid_colors(), ", ")
+    IO.puts("""
+    SAM 3 Video Segmentation Script
+    Segment objects in videos using SAM 3 (Segment Anything Model 3) from Meta Research
+
+    Usage:
+      elixir sam3_video_segmentation.exs <video_path> [options]
+
+    Options:
+      --prompt, -p "person"              Text prompt for segmentation (default: "person")
+      --mask-color, -c "green"           Mask color (default: "green")
+                                        Available colors: #{valid_colors_str}
+      --mask-opacity <float>             Mask opacity 0.0-1.0 (default: 0.5)
+      --mask-only                        Output original video on white background (masked areas only)
+      --mask-video                       Output a separate mask video (black and white masks)
+      --return-zip                       Create ZIP file with video and masks
+      --help, -h                         Show this help message
+
+    Example:
+      elixir sam3_video_segmentation.exs video.mp4 --prompt "person" --mask-color green
+      elixir sam3_video_segmentation.exs video.mp4 -p "car" -c red --mask-opacity 0.7
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -87,33 +112,31 @@ defmodule ArgsParser do
         mask_opacity: :float,
         mask_only: :boolean,
         mask_video: :boolean,
-        return_zip: :boolean
+        return_zip: :boolean,
+        help: :boolean
       ],
       aliases: [
         p: :prompt,
         c: :mask_color,
-        o: :mask_opacity
+        h: :help
       ]
     )
+
+    if Keyword.get(opts, :help, false) do
+      show_help()
+      System.halt(0)
+    end
 
     video_filename = List.first(args)
 
     if !video_filename do
-      valid_colors_str = Enum.join(MaskColors.valid_colors(), ", ")
       IO.puts("""
       Error: Video file path is required.
 
       Usage:
         elixir sam3_video_segmentation.exs <video_path> [options]
 
-      Options:
-        --prompt, -p "person"              Text prompt for segmentation (default: "person")
-        --mask-color, -c "green"           Mask color (default: "green")
-                                          Available colors: #{valid_colors_str}
-        --mask-opacity, -o 0.5             Mask opacity 0.0-1.0 (default: 0.5)
-        --mask-only                        Output original video on white background (masked areas only)
-        --mask-video                       Output a separate mask video (black and white masks)
-        --return-zip                       Create ZIP file with video and masks
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end

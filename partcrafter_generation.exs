@@ -83,6 +83,32 @@ explicit = true
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    PartCrafter Generation Script
+    Generate structured 3D mesh parts using PartCrafter
+    Repository: https://github.com/wgsxm/PartCrafter
+    Hugging Face: https://huggingface.co/wgsxm/PartCrafter
+
+    Usage:
+      elixir partcrafter_generation.exs <image_path> [options]
+
+    Options:
+      --output-format, -f "glb"      Output format: glb (default: "glb")
+      --num-parts, -n <int>           Number of parts to generate (1-16, default: 6)
+      --seed, -s <int>                Random seed for generation (default: 0)
+      --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048 (default: 1024)
+      --num-steps, --steps <int>      Number of inference steps (default: 50)
+      --guidance-scale, -g <float>    Guidance scale (default: 7.0)
+      --use-flash-decoder             Use flash decoder for faster inference (default: true)
+      --help, -h                       Show this help message
+
+    Example:
+      elixir partcrafter_generation.exs image.jpg --num-parts 8 --seed 42
+      elixir partcrafter_generation.exs image.png -n 6 -s 0 -t 1024
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -92,7 +118,8 @@ defmodule ArgsParser do
         num_tokens: :integer,
         num_steps: :integer,
         guidance_scale: :float,
-        use_flash_decoder: :boolean
+        use_flash_decoder: :boolean,
+        help: :boolean
       ],
       aliases: [
         f: :output_format,
@@ -100,9 +127,15 @@ defmodule ArgsParser do
         s: :seed,
         t: :num_tokens,
         steps: :num_steps,
-        g: :guidance_scale
+        g: :guidance_scale,
+        h: :help
       ]
     )
+
+    if Keyword.get(opts, :help, false) do
+      show_help()
+      System.halt(0)
+    end
 
     image_path = List.first(args)
 
@@ -113,14 +146,7 @@ defmodule ArgsParser do
       Usage:
         elixir partcrafter_generation.exs <image_path> [options]
 
-      Options:
-        --output-format, -f "glb"      Output format: glb (default: "glb")
-        --num-parts, -n <int>           Number of parts to generate (1-16, default: 6)
-        --seed, -s <int>                Random seed for generation (default: 0)
-        --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048 (default: 1024)
-        --num-steps, --steps <int>      Number of inference steps (default: 50)
-        --guidance-scale, -g <float>    Guidance scale (default: 7.0)
-        --use-flash-decoder             Use flash decoder for faster inference (default: true)
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end
@@ -138,14 +164,26 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
+    num_steps = Keyword.get(opts, :num_steps, 50)
+    if num_steps < 1 do
+      IO.puts("Error: num_steps must be at least 1")
+      System.halt(1)
+    end
+
+    guidance_scale = Keyword.get(opts, :guidance_scale, 7.0)
+    if guidance_scale < 0.0 do
+      IO.puts("Error: guidance_scale must be non-negative")
+      System.halt(1)
+    end
+
     config = %{
       image_path: image_path,
       output_format: Keyword.get(opts, :output_format, "glb"),
       num_parts: num_parts,
       seed: Keyword.get(opts, :seed, 0),
       num_tokens: num_tokens,
-      num_steps: Keyword.get(opts, :num_steps, 50),
-      guidance_scale: Keyword.get(opts, :guidance_scale, 7.0),
+      num_steps: num_steps,
+      guidance_scale: guidance_scale,
       use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true)
     }
 

@@ -84,6 +84,34 @@ explicit = true
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    UniRig Generation Script
+    Automatically rig 3D models with skeleton and skinning weights using UniRig
+    Repository: https://github.com/VAST-AI-Research/UniRig
+    Hugging Face: https://huggingface.co/VAST-AI/UniRig
+
+    Usage:
+      elixir unirig_generation.exs <mesh_path> [options]
+
+    Options:
+      --output-format, -f "usdc"    Output format: usdc only (default: "usdc")
+                                     Binary USDC format preserves quads and embedded materials
+                                     with optimal performance and file size
+      --seed, -s <int>                Random seed for skeleton generation (default: 42)
+      --skeleton-only, -sk            Only generate skeleton, skip skinning (default: false)
+      --skin-only, -so                Only generate skinning (requires existing skeleton) (default: false)
+      --skeleton-task <path>          Custom skeleton task config (optional)
+      --skin-task <path>              Custom skin task config (optional)
+      --help, -h                       Show this help message
+
+    Example:
+      elixir unirig_generation.exs model.obj --seed 42
+      elixir unirig_generation.exs model.usdc --skeleton-only
+      elixir unirig_generation.exs model.glb --skin-only
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -92,15 +120,22 @@ defmodule ArgsParser do
         skeleton_only: :boolean,
         skin_only: :boolean,
         skeleton_task: :string,
-        skin_task: :string
+        skin_task: :string,
+        help: :boolean
       ],
       aliases: [
         f: :output_format,
         s: :seed,
         sk: :skeleton_only,
-        so: :skin_only
+        so: :skin_only,
+        h: :help
       ]
     )
+
+    if Keyword.get(opts, :help, false) do
+      show_help()
+      System.halt(0)
+    end
 
     mesh_path = List.first(args)
 
@@ -111,15 +146,7 @@ defmodule ArgsParser do
       Usage:
         elixir unirig_generation.exs <mesh_path> [options]
 
-      Options:
-        --output-format, -f "usdc"    Output format: usdc only (default: "usdc")
-                                       Binary USDC format preserves quads and embedded materials
-                                       with optimal performance and file size
-        --seed, -s <int>                Random seed for skeleton generation (default: 42)
-        --skeleton-only, -sk            Only generate skeleton, skip skinning (default: false)
-        --skin-only, -so                Only generate skinning (requires existing skeleton) (default: false)
-        --skeleton-task <path>          Custom skeleton task config (optional)
-        --skin-task <path>              Custom skin task config (optional)
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end
