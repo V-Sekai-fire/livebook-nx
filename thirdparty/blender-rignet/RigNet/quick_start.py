@@ -8,9 +8,17 @@
 
 import os
 from sys import platform
+import subprocess
 import trimesh
 import numpy as np
+# Prevent Open3D GUI windows
+os.environ["OPEN3D_HEADLESS"] = "1"
 import open3d as o3d
+# Disable Open3D visualization if available
+try:
+    o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+except:
+    pass
 import itertools as it
 
 import torch
@@ -27,6 +35,14 @@ from utils.mst_utils import increase_cost_for_outside_bone, primMST_symmetry, lo
 
 from geometric_proc.common_ops import get_bones, calc_surface_geodesic
 from geometric_proc.compute_volumetric_geodesic import pts2line, calc_pts2bone_visible_mat
+
+# Module-level global variables (can be set by calling code)
+device = None
+output_folder = None
+
+# Module-level global variables (can be set by calling code)
+device = None
+output_folder = None
 
 from gen_dataset import get_tpl_edges, get_geo_edges
 from mst_generate import sample_on_bone, getInitId
@@ -161,13 +177,20 @@ def create_single_data(mesh_filaname):
             # Use shell=True and quote paths for Windows compatibility
             # This helps with path spaces and executable compatibility
             cmd = f'"{binvox_exe}" -d 88 "{normalized_obj_for_binvox}"'
+            # Prevent popup window on Windows
+            startupinfo = None
+            if hasattr(subprocess, 'STARTUPINFO'):
+                startupinfo = subprocess.STARTUPINFO()
+                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = subprocess.SW_HIDE
             result = subprocess.run(
                 cmd,
                 shell=True,
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
-                cwd=os.path.dirname(binvox_exe) if os.path.dirname(binvox_exe) else os.getcwd()
+                cwd=os.path.dirname(binvox_exe) if os.path.dirname(binvox_exe) else os.getcwd(),
+                startupinfo=startupinfo
             )
         else:
             # Linux/Mac: use list format
@@ -422,7 +445,7 @@ def predict_skinning(input_data, pred_skel, skin_pred_net, surface_geodesic, mes
     input_data.skin_input = skin_input
     input_data.to(device)
 
-    skin_pred = skin_pred_net(data)
+    skin_pred = skin_pred_net(input_data)
     skin_pred = torch.softmax(skin_pred, dim=1)
     skin_pred = skin_pred.data.cpu().numpy()
     skin_pred = skin_pred * loss_mask

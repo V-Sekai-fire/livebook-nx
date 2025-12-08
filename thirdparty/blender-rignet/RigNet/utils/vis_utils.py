@@ -6,8 +6,16 @@
 # Please see the LICENSE README.txt file in the main directory for more information and instruction on using and licensing RigNet.
 #-------------------------------------------------------------------------------
 
+import os
+# Prevent Open3D GUI windows
+os.environ["OPEN3D_HEADLESS"] = "1"
 import numpy as np
 import open3d as o3d
+# Disable Open3D visualization if available
+try:
+    o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
+except:
+    pass
 
 
 def drawSphere(center, radius, color=[0.0,0.0,0.0]):

@@ -49,6 +49,7 @@ dependencies = [
   "scikit-learn",
   "fast-simplification",
   "bpy==4.5.*",
+  "rtree",
 ]
 
 [tool.uv.sources]
@@ -177,6 +178,21 @@ from pathlib import Path
 import torch
 import numpy as np
 import bpy
+
+# Prevent Python popups/windows on Windows
+if sys.platform == "win32":
+    os.environ["PYTHONUNBUFFERED"] = "1"
+    # Prevent GUI dialogs
+    os.environ["QT_QPA_PLATFORM"] = "offscreen"
+    # Prevent Open3D GUI windows
+    os.environ["OPEN3D_HEADLESS"] = "1"
+    # Prevent subprocess windows
+    import subprocess
+    # Set CREATE_NO_WINDOW flag for subprocess calls
+    subprocess.CREATE_NO_WINDOW = 0x08000000
+
+# Prevent Open3D visualization windows globally
+os.environ["OPEN3D_HEADLESS"] = "1"
 
 # Add RigNet to path
 riget_path = Path.cwd() / "thirdparty" / "blender-rignet"
@@ -468,6 +484,8 @@ except Exception as e:
 
 # Import RigNet modules
 try:
+    # Import the module first so we can set its global variables
+    import RigNet.quick_start as quick_start_module
     from RigNet.quick_start import (
         create_single_data,
         predict_joints,
@@ -588,6 +606,8 @@ pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet, normalized_obj_pat
 
 # Predict skinning
 print("\\n=== Predicting Skinning Weights ===")
+# Set device as global variable in RigNet module for predict_skinning
+quick_start_module.device = device
 pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic, normalized_obj_path)
 
 # Reverse normalization
@@ -952,6 +972,8 @@ except Exception as e:
 
 # Import RigNet modules
 try:
+    # Import the module first so we can set its global variables
+    import RigNet.quick_start as quick_start_module
     from RigNet.quick_start import (
         create_single_data,
         predict_joints,
@@ -1072,6 +1094,8 @@ pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet, normalized_obj_pat
 
 # Predict skinning
 print("\\n=== Predicting Skinning Weights ===")
+# Set device as global variable in RigNet module for predict_skinning
+quick_start_module.device = device
 pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic, normalized_obj_path)
 
 # Reverse normalization
