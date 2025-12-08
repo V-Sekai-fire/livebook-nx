@@ -175,7 +175,7 @@ defmodule ArgsParser do
     %{
       input_path: input_path,
       output_path: output_path,
-      workspace_root: System.cwd!(),
+      workspace_root: File.cwd!(),
       bake_range: bake_range,
       deviation_threshold: Keyword.get(opts, :deviation_threshold, 0.01),
       bake_quality: bake_quality,
