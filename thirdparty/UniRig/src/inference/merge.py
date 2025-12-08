@@ -81,13 +81,10 @@ def load(filepath: str, return_armature: bool=False):
         elif filepath.endswith(".glb") or filepath.endswith(".gltf"):
             bpy.ops.import_scene.gltf(filepath=filepath, import_pack_images=False)
         elif filepath.endswith(".usd") or filepath.endswith(".usda") or filepath.endswith(".usdc"):
+            # USD import - using only essential parameters that work in Blender 4.5
             bpy.ops.wm.usd_import(
                 filepath=filepath,
-                import_materials=True,
-                import_textures=True,
-                import_uv=True,
-                import_normals=True,
-                import_colors=True
+                import_materials=True
             )
         elif filepath.endswith(".dae"):
             bpy.ops.wm.collada_import(filepath=filepath)

@@ -201,13 +201,10 @@ try:
         )
         print("✓ GLB/GLTF loaded successfully")
     elif input_ext in ['.usd', '.usda', '.usdc']:
+        # USD import - using only essential parameters that work in Blender 4.5
         bpy.ops.wm.usd_import(
             filepath=input_path,
-            import_materials=True,
-            import_textures=True,
-            import_uv=True,
-            import_normals=True,
-            import_colors=True
+            import_materials=True
         )
         print("✓ USD loaded successfully")
     elif input_ext == '.fbx':

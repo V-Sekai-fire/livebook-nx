@@ -46,6 +46,12 @@ def load(filepath: str):
             bpy.ops.import_scene.fbx(filepath=filepath, ignore_leaf_bones=False, use_image_search=False)
         elif filepath.endswith(".glb") or filepath.endswith(".gltf"):
             bpy.ops.import_scene.gltf(filepath=filepath, import_pack_images=False)
+        elif filepath.endswith(".usd") or filepath.endswith(".usda") or filepath.endswith(".usdc"):
+            # USD import - using only essential parameters that work in Blender 4.5
+            bpy.ops.wm.usd_import(
+                filepath=filepath,
+                import_materials=True
+            )
         elif filepath.endswith(".dae"):
             bpy.ops.wm.collada_import(filepath=filepath)
         elif filepath.endswith(".blend"):
@@ -56,8 +62,11 @@ def load(filepath: str):
                     bpy.context.collection.objects.link(obj)
         else:
             raise ValueError(f"not suported type {filepath}")
-    except:
-        raise ValueError(f"failed to load {filepath}")
+    except Exception as e:
+        import traceback
+        print(f"Error loading {filepath}: {e}")
+        traceback.print_exc()
+        raise ValueError(f"failed to load {filepath}: {e}")
 
     armature = [x for x in set(bpy.context.scene.objects)-old_objs if x.type=="ARMATURE"]
     if len(armature)==0:

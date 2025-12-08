@@ -33,7 +33,7 @@ version = "0.0.0"
 requires-python = "==3.11.*"
 dependencies = [
   "numpy<2.0",
-  "bpy==4.*",
+  "bpy==4.5.*",
   "pillow",
   "opencv-python",
   "torch==2.7.0",
@@ -230,15 +230,27 @@ def run_unirig_inference(
     data_config = load_config('data', os.path.join('configs/data', task.components.data))
     transform_config = load_config('transform', os.path.join('configs/transform', task.components.transform))
 
-    # Get files
+    # Get files - include USD formats in require_suffix
+    # Extract just the filename stem to avoid nested directory structures
+    # get_files creates output_dir based on the input path, which can create nested paths
+    # We fix this by using just the filename stem for the output directory
+    input_path_abs = os.path.abspath(input_path)
+    input_basename = os.path.basename(input_path_abs)
+    input_stem = os.path.splitext(input_basename)[0]  # Get filename without extension
+
     files = get_files(
         data_name=task.components.data_name,
-        inputs=input_path,
+        inputs=input_path_abs,
         input_dataset_dir=None,
-        output_dataset_dir=npz_dir,
+        output_dataset_dir=str(npz_dir),
+        require_suffix=['obj', 'fbx', 'FBX', 'dae', 'glb', 'gltf', 'vrm', 'usd', 'usda', 'usdc'],
         force_override=True,
         warning=False,
     )
+
+    # Fix output directories to use just the filename stem, not the full nested path
+    # This ensures output_dir is npz_dir/filename_stem instead of npz_dir/full/path/filename_stem
+    files = [(input_file, os.path.join(str(npz_dir), input_stem)) for input_file, output_dir in files]
 
     # Extract mesh files to create raw_data.npz if they don't exist
     from src.data.extract import extract_builtin
@@ -249,23 +261,58 @@ def run_unirig_inference(
     data_name_actual = task.components.get('data_name', 'raw_data.npz')
     files_to_extract = []
     for input_file, output_dir in files:
+        # Ensure output directory exists
+        os.makedirs(output_dir, exist_ok=True)
         raw_data_npz = os.path.join(output_dir, data_name_actual)
         if not os.path.exists(raw_data_npz):
             files_to_extract.append((input_file, output_dir))
 
     if files_to_extract:
         print(f"\\n=== Extracting {len(files_to_extract)} mesh file(s) ===")
+        for input_file, output_dir in files_to_extract:
+            print(f"  Input: {input_file}")
+            print(f"  Output dir: {output_dir}")
+
         # Get target_count from data config if available, default to 50000
         target_count = data_config.get('faces_target_count', 50000)
-        extract_builtin(
-            output_folder=npz_dir,
-            target_count=target_count,
-            num_runs=1,
-            id=0,
-            time=timestamp,
-            files=files_to_extract,
-        )
-        print("✓ Mesh extraction complete")
+        try:
+            extract_builtin(
+                output_folder=str(npz_dir),
+                target_count=target_count,
+                num_runs=1,
+                id=0,
+                time=timestamp,
+                files=files_to_extract,
+            )
+            print("✓ Mesh extraction complete")
+
+            # Verify extraction succeeded
+            all_extracted = True
+            for input_file, output_dir in files_to_extract:
+                raw_data_npz = os.path.join(output_dir, data_name_actual)
+                if os.path.exists(raw_data_npz):
+                    print(f"  ✓ Verified: {raw_data_npz}")
+                else:
+                    print(f"  ✗ Missing: {raw_data_npz}")
+                    all_extracted = False
+
+            if not all_extracted:
+                raise FileNotFoundError(f"Extraction failed - raw_data.npz files not found")
+        except Exception as e:
+            print(f"✗ Error during extraction: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+    else:
+        print("\\n=== No extraction needed (raw_data.npz files already exist) ===")
+        # Verify files exist
+        for input_file, output_dir in files:
+            raw_data_npz = os.path.join(output_dir, data_name_actual)
+            if not os.path.exists(raw_data_npz):
+                print(f"✗ Error: Expected raw_data.npz not found: {raw_data_npz}")
+                raise FileNotFoundError(f"raw_data.npz not found: {raw_data_npz}")
+            else:
+                print(f"  ✓ Found: {raw_data_npz}")
 
     files = [f[1] for f in files]
     datapath = Datapath(files=files, cls=None)
