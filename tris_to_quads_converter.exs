@@ -39,6 +39,34 @@ dependencies = [
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    Tris-to-Quads Converter
+    Converts triangles to quads in 3D model files using Optimized-Tris-to-Quads-Converter
+    Based on: https://github.com/Rulesobeyer/Tris-Quads-Ex
+
+    Usage:
+      elixir tris_to_quads_converter.exs <input_file> [options]
+
+    Supported Input Formats: GLB, GLTF, USD (usd, usda, usdc), FBX
+    Supported Output Format: USDC (binary only)
+
+    Note: Output is always binary USDC format to preserve quads and materials
+          with optimal performance and file size. Embedded images are supported.
+          FBX export is not supported (materials are lost).
+
+    Options:
+      --output, -o <path>        Output USDC file path (default: input file with _quads.usdc suffix)
+      --help, -h                 Show this help message
+
+    Example:
+      elixir tris_to_quads_converter.exs model.glb -o model_quads.usdc
+      elixir tris_to_quads_converter.exs model.fbx
+      elixir tris_to_quads_converter.exs model.usda
+      elixir tris_to_quads_converter.exs model.usd
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -52,29 +80,7 @@ defmodule ArgsParser do
     )
 
     if Keyword.get(opts, :help, false) do
-      IO.puts("""
-      Tris-to-Quads Converter
-
-      Usage:
-        elixir tris_to_quads_converter.exs <input_file> [options]
-
-      Supported Input Formats: GLB, GLTF, USD (usd, usda, usdc), FBX
-      Supported Output Format: USDC (binary only)
-
-      Note: Output is always binary USDC format to preserve quads and materials
-            with optimal performance and file size. Embedded images are supported.
-            FBX export is not supported (materials are lost).
-
-      Options:
-        --output, -o <path>        Output USDC file path (default: input file with _quads.usdc suffix)
-        --help, -h                 Show this help message
-
-      Example:
-        elixir tris_to_quads_converter.exs model.glb -o model_quads.usdc
-        elixir tris_to_quads_converter.exs model.fbx
-        elixir tris_to_quads_converter.exs model.usda
-        elixir tris_to_quads_converter.exs model.usd
-      """)
+      show_help()
       System.halt(0)
     end
 

@@ -44,6 +44,43 @@ dependencies = [
 
 # Parse command-line arguments
 defmodule ArgsParser do
+  def show_help do
+    IO.puts("""
+    Corrective Smooth Baker
+    Improves deformation quality by baking Corrective Smooth modifier effects into vertex weights
+    Based on: https://superhivemarket.com/products/corrective-smooth-baker
+
+    Usage:
+      elixir corrective_smooth_baker.exs <rigged_model> [options]
+
+    Supported Input Formats: GLB, GLTF, USD (usd, usda, usdc), FBX
+    Supported Output Format: USDC (binary only)
+
+    The script will:
+    1. Load the rigged model (must have armature and mesh)
+    2. Add a Corrective Smooth modifier to the mesh
+    3. Bake the modifier effects into vertex weights
+    4. Remove the modifier
+    5. Export the corrected model
+
+    Options:
+      --output, -o <path>              Output USDC file path (default: input file with _corrected.usdc suffix)
+      --bake-range <mode>              Bake range: All, Selected, Deviation (default: Deviation)
+      --deviation-threshold <float>    Deviation threshold in cm (default: 0.01)
+      --bake-quality <quality>         Bake quality: 0.5, 0.75, 1.0, 2.0, 3.0 (default: 1.0)
+      --twist-angle <degrees>          Maximum twist angle (default: 45.0)
+      --influence-bones <count>        Max influence bones per vertex (default: 4)
+      --prune-threshold <float>        Prune threshold (default: 0.01)
+      --solver <solver>                Linear system solver: STD, CHOLESKY, QR, INV, PINV, LSTSQ, SVD (default: SVD)
+      --refresh-frequency <fps>        Refresh frequency (default: 15.0)
+      --help, -h                       Show this help message
+
+    Example:
+      elixir corrective_smooth_baker.exs rigged.usdc
+      elixir corrective_smooth_baker.exs rigged.usdc --bake-quality 2.0 --output corrected.usdc
+    """)
+  end
+
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -65,38 +102,7 @@ defmodule ArgsParser do
     )
 
     if Keyword.get(opts, :help, false) do
-      IO.puts("""
-      Corrective Smooth Baker
-
-      Usage:
-        elixir corrective_smooth_baker.exs <rigged_model> [options]
-
-      Supported Input Formats: GLB, GLTF, USD (usd, usda, usdc), FBX
-      Supported Output Format: USDC (binary only)
-
-      The script will:
-      1. Load the rigged model (must have armature and mesh)
-      2. Add a Corrective Smooth modifier to the mesh
-      3. Bake the modifier effects into vertex weights
-      4. Remove the modifier
-      5. Export the corrected model
-
-      Options:
-        --output, -o <path>              Output USDC file path (default: input file with _corrected.usdc suffix)
-        --bake-range <mode>              Bake range: All, Selected, Deviation (default: Deviation)
-        --deviation-threshold <float>    Deviation threshold in cm (default: 0.01)
-        --bake-quality <quality>         Bake quality: 0.5, 0.75, 1.0, 2.0, 3.0 (default: 1.0)
-        --twist-angle <degrees>          Maximum twist angle (default: 45.0)
-        --influence-bones <count>        Max influence bones per vertex (default: 4)
-        --prune-threshold <float>        Prune threshold (default: 0.01)
-        --solver <solver>                Linear system solver: STD, CHOLESKY, QR, INV, PINV, LSTSQ, SVD (default: SVD)
-        --refresh-frequency <fps>        Refresh frequency (default: 15.0)
-        --help, -h                       Show this help message
-
-      Example:
-        elixir corrective_smooth_baker.exs rigged.usdc
-        elixir corrective_smooth_baker.exs rigged.usdc --bake-quality 2.0 --output corrected.usdc
-      """)
+      show_help()
       System.halt(0)
     end
 

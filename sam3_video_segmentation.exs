@@ -141,6 +141,12 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
+    # Check if video file exists
+    if !File.exists?(video_filename) do
+      IO.puts("Error: Video file not found: #{video_filename}")
+      System.halt(1)
+    end
+
     mask_color_name = Keyword.get(opts, :mask_color, "green")
 
     # Validate mask_color using the enum
@@ -154,29 +160,24 @@ defmodule ArgsParser do
     # Get RGB values from the enum
     mask_color_rgb = MaskColors.get_rgb(mask_color_name)
 
+    mask_opacity = Keyword.get(opts, :mask_opacity, 0.5)
+    # Validate mask_opacity
+    if mask_opacity < 0.0 or mask_opacity > 1.0 do
+      IO.puts("Error: mask_opacity must be between 0.0 and 1.0")
+      System.halt(1)
+    end
+
     config = %{
       video_filename: video_filename,
       prompt: Keyword.get(opts, :prompt, "person"),
       mask_color: mask_color_name,
       mask_color_rgb: mask_color_rgb,
-      mask_opacity: Keyword.get(opts, :mask_opacity, 0.5),
+      mask_opacity: mask_opacity,
       mask_only: Keyword.get(opts, :mask_only, false),
       mask_video: Keyword.get(opts, :mask_video, false),
       return_zip: Keyword.get(opts, :return_zip, false),
       use_gpu: true
     }
-
-    # Validate mask_opacity
-    if config.mask_opacity < 0.0 or config.mask_opacity > 1.0 do
-      IO.puts("Error: mask_opacity must be between 0.0 and 1.0")
-      System.halt(1)
-    end
-
-    # Check if video file exists
-    if !File.exists?(config.video_filename) do
-      IO.puts("Error: Video file not found: #{config.video_filename}")
-      System.halt(1)
-    end
 
     config
   end
