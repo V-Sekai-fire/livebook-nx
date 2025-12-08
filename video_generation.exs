@@ -591,7 +591,7 @@ end
   print(f"Checkpoint directory: {ckpt_dir}")
 
   # Map size to Wan2.2 size format
-  # Wan2.2 uses predefined sizes like "720p", "1080p", etc.
+  # Wan2.2 uses predefined sizes like "720*1280", "480*832", etc.
   # For custom sizes, we'll use the closest match or default
   size_key = None
   for key, (w, h) in SIZE_CONFIGS.items():
@@ -600,13 +600,32 @@ end
           break
 
   if not size_key:
-      # Use closest match or default
-      if width <= 720 and height <= 1280:
-          size_key = "720p"
-      elif width <= 1080 and height <= 1920:
-          size_key = "1080p"
+      # Use closest match based on resolution
+      # Valid sizes: "720*1280", "1280*720", "480*832", "832*480", "704*1280", "1280*704", "1024*704", "704*1024"
+      # For i2v-A14B, supported sizes are: "720*1280", "1280*720", "480*832", "832*480"
+
+      # Check if it's a portrait orientation (height > width)
+      is_portrait = height > width
+
+      if is_portrait:
+          # Portrait: match by width first, then height
+          if width <= 480:
+              # For 480 width, use 480*832 (closest match)
+              size_key = "480*832"
+          elif width <= 720:
+              # For 720 width, use 720*1280
+              size_key = "720*1280"
+          else:
+              size_key = "720*1280"  # Default portrait
       else:
-          size_key = "720p"  # Default
+          # Landscape: match by height first, then width
+          if height <= 480:
+              size_key = "832*480"
+          elif height <= 720:
+              size_key = "1280*720"
+          else:
+              size_key = "1280*720"  # Default landscape
+
       print(f"Size {width}x{height} mapped to {size_key} ({SIZE_CONFIGS[size_key]})")
 
   size_tuple = SIZE_CONFIGS[size_key]
