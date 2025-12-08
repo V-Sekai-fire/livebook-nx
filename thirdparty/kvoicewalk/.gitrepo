@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/RobViren/kvoicewalk.git
+	branch = main
+	commit = c89f74d2b3e03e5a48f1f34a4c80cc6203c1f609
+	parent = c8e9552402011c50fb1d7b3e9151d5ce4f7ba669
+	method = merge
+	cmdver = 0.4.9
