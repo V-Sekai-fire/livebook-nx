@@ -27,6 +27,43 @@ except ImportError as e:
     ) from e
 
 
+def compute_barycentric_coordinates(P: np.ndarray, V1: np.ndarray, V2: np.ndarray, V3: np.ndarray) -> np.ndarray:
+    """
+    Compute barycentric coordinates for points P in triangles (V1, V2, V3).
+    
+    Args:
+        P: #P by 3, query points
+        V1: #P by 3, first triangle vertices
+        V2: #P by 3, second triangle vertices
+        V3: #P by 3, third triangle vertices
+    Returns:
+        B: #P by 3, barycentric coordinates [b1, b2, b3]
+    """
+    # Compute vectors
+    v0 = V1 - V3  # V1 relative to V3
+    v1 = V2 - V3  # V2 relative to V3
+    v2 = P - V3   # P relative to V3
+    
+    # Compute dot products
+    d00 = np.sum(v0 * v0, axis=1)
+    d01 = np.sum(v0 * v1, axis=1)
+    d11 = np.sum(v1 * v1, axis=1)
+    d20 = np.sum(v2 * v0, axis=1)
+    d21 = np.sum(v2 * v1, axis=1)
+    
+    # Compute denominator
+    denom = d00 * d11 - d01 * d01
+    denom = np.where(np.abs(denom) < 1e-10, 1.0, denom)  # Avoid division by zero
+    
+    # Compute barycentric coordinates
+    b1 = (d11 * d20 - d01 * d21) / denom
+    b2 = (d00 * d21 - d01 * d20) / denom
+    b3 = 1.0 - b1 - b2
+    
+    B = np.column_stack([b1, b2, b3])
+    return B
+
+
 def find_closest_point_on_surface(P: np.ndarray, V: np.ndarray, F: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Given points, find their closest points on the surface of the V,F mesh.
@@ -46,7 +83,7 @@ def find_closest_point_on_surface(P: np.ndarray, V: np.ndarray, F: np.ndarray) -
     V1 = V[F_closest[:, 0], :]
     V2 = V[F_closest[:, 1], :]
     V3 = V[F_closest[:, 2], :]
-    B = igl.barycentric_coordinates_tri(C, V1, V2, V3)
+    B = compute_barycentric_coordinates(C, V1, V2, V3)
     return sqrD, I, C, B
 
 
@@ -149,7 +186,12 @@ def inpaint(V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray)
     """
     # Compute the laplacian
     L = 2 * igl.cotmatrix(V2, F2)
-    M = igl.massmatrix(V2, F2, igl.MASSMATRIX_TYPE_VORONOI)
+    # Use MASSMATRIX_TYPE_VORONOI if available, otherwise use numeric constant (1)
+    try:
+        mass_type = igl.MASSMATRIX_TYPE_VORONOI
+    except AttributeError:
+        mass_type = 1  # MASSMATRIX_TYPE_VORONOI = 1
+    M = igl.massmatrix(V2, F2, mass_type)
     Minv = diags(1 / M.diagonal())
     
     if not is_valid_array(L):
@@ -172,7 +214,9 @@ def inpaint(V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray)
     b = b[Matched]
     bc = W2[Matched, :]
     
-    results, W_inpainted = igl.min_quad_with_fixed(Q, B, b, bc, Aeq, Beq, True)
+    # Use keyword arguments to match the expected function signature
+    # The Python bindings expect: A, B, known, Y, Aeq, Beq, pd
+    results, W_inpainted = igl.min_quad_with_fixed(A=Q, B=B, known=b, Y=bc, Aeq=Aeq, Beq=Beq, pd=True)
     return W_inpainted, results
 
 
@@ -271,7 +315,15 @@ def robust_skin_weights_transfer(
     
     # Set default search radius if not provided
     if SearchRadius is None:
-        SearchRadius = 0.05 * igl.bounding_box_diagonal(V2)
+        # Compute bounding box diagonal manually if igl.bounding_box_diagonal doesn't exist
+        try:
+            bbox_diag = igl.bounding_box_diagonal(V2)
+        except AttributeError:
+            # Manual computation: diagonal of axis-aligned bounding box
+            bbox_min = np.min(V2, axis=0)
+            bbox_max = np.max(V2, axis=0)
+            bbox_diag = np.linalg.norm(bbox_max - bbox_min)
+        SearchRadius = 0.05 * bbox_diag
     
     SearchRadiusSqrd = SearchRadius * SearchRadius
     
