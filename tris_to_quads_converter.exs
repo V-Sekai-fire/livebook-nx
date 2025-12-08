@@ -88,7 +88,7 @@ defmodule ArgsParser do
         elixir tris_to_quads_converter.exs <input_file> [options]
 
       Supported formats: GLB, GLTF, USD, FBX
-      Use --help for more information.
+      Use --help or -h for more information.
       """)
       System.halt(1)
     end

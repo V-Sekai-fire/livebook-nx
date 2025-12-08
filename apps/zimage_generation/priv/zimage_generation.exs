@@ -63,34 +63,6 @@ explicit = true
 
 # Parse command-line arguments
 defmodule ArgsParser do
-  def show_help do
-    IO.puts("""
-    Z-Image-Turbo Generation Script
-    Generate photorealistic images from text prompts using Z-Image-Turbo
-    Model: Z-Image-Turbo by Tongyi-MAI (6B parameters)
-    Repository: https://replicate.com/prunaai/z-image-turbo
-
-    Usage:
-      elixir zimage_generation.exs "<prompt>" [options]
-
-    Options:
-      --width, -w <int>               Image width in pixels (default: 1024)
-      --height <int>                  Image height in pixels (default: 1024)
-      --seed, -s <int>                 Random seed for generation (default: 0)
-      --num-steps, --steps <int>      Number of inference steps (default: 9, results in 8 DiT forwards)
-      --guidance-scale, -g <float>     Guidance scale (default: 0.0 for turbo models)
-      --output-format, -f "png"        Output format: png, jpg, jpeg (default: "png")
-      --help, -h                       Show this help message
-
-    Note: Image-to-image editing is not supported by Z-Image-Turbo.
-          Z-Image-Edit (a separate model) is required for image editing but is not yet released.
-
-    Example:
-      elixir zimage_generation.exs "a beautiful sunset over mountains" --width 1024 --height 1024
-      elixir zimage_generation.exs "a cat wearing a hat" -w 512 -h 512 -s 42
-    """)
-  end
-
   def parse(args) do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
@@ -99,23 +71,17 @@ defmodule ArgsParser do
         seed: :integer,
         num_steps: :integer,
         guidance_scale: :float,
-        output_format: :string,
-        help: :boolean
+        output_format: :string
       ],
       aliases: [
         w: :width,
-        h: :help,
+        h: :height,
         s: :seed,
         steps: :num_steps,
         g: :guidance_scale,
         f: :output_format
       ]
     )
-
-    if Keyword.get(opts, :help, false) do
-      show_help()
-      System.halt(0)
-    end
 
     prompt = List.first(args)
 
@@ -126,7 +92,13 @@ defmodule ArgsParser do
       Usage:
         elixir zimage_generation.exs "<prompt>" [options]
 
-      Use --help or -h for more information.
+      Options:
+        --width, -w <int>               Image width in pixels (default: 1024)
+        --height, -h <int>               Image height in pixels (default: 1024)
+        --seed, -s <int>                 Random seed for generation (default: 0)
+        --num-steps, --steps <int>      Number of inference steps (default: 9, results in 8 DiT forwards)
+        --guidance-scale, -g <float>     Guidance scale (default: 0.0 for turbo models)
+        --output-format, -f "png"        Output format: png, jpg, jpeg (default: "png")
       """)
       System.halt(1)
     end
@@ -146,25 +118,13 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    num_steps = Keyword.get(opts, :num_steps, 9)
-    if num_steps < 1 do
-      IO.puts("Error: num_steps must be at least 1")
-      System.halt(1)
-    end
-
-    guidance_scale = Keyword.get(opts, :guidance_scale, 0.0)
-    if guidance_scale < 0.0 do
-      IO.puts("Error: guidance_scale must be non-negative")
-      System.halt(1)
-    end
-
     config = %{
       prompt: prompt,
       width: width,
       height: height,
       seed: Keyword.get(opts, :seed, 0),
-      num_steps: num_steps,
-      guidance_scale: guidance_scale,
+      num_steps: Keyword.get(opts, :num_steps, 9),
+      guidance_scale: Keyword.get(opts, :guidance_scale, 0.0),
       output_format: output_format
     }
 
