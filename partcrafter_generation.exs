@@ -115,7 +115,7 @@ defmodule ArgsParser do
 
       Options:
         --output-format, -f "glb"      Output format: glb (default: "glb")
-        --num-parts, -n <int>           Number of parts to generate (1-16, default: 4)
+        --num-parts, -n <int>           Number of parts to generate (1-16, default: 6)
         --seed, -s <int>                Random seed for generation (default: 0)
         --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048 (default: 1024)
         --num-steps, --steps <int>      Number of inference steps (default: 50)
