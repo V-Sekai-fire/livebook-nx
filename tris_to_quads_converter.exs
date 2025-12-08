@@ -165,7 +165,7 @@ import bmesh
 from pulp import PULP_CBC_CMD, LpMaximize, LpProblem, LpVariable, lpSum, value
 
 # Get configuration from JSON file
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 input_path = config['input_path']

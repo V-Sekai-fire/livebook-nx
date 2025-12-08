@@ -454,7 +454,7 @@ IO.puts("\n=== Step 3: Generate Output Video ===")
 # Get configuration from JSON file
 import json
 
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 mask_color = config.get('mask_color', 'green')
@@ -633,7 +633,7 @@ IO.puts("\n=== Step 5: Create Output Files ===")
 # Create ZIP if return_zip is True, otherwise just provide video download
 import json
 
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 return_zip = config.get('return_zip', False)

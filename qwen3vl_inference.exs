@@ -395,7 +395,7 @@ os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
 # Get configuration from JSON file
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 image_path = config.get('image_path')

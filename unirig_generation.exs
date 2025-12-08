@@ -596,7 +596,7 @@ def run_unirig_inference(
         Exporter._export_fbx = original_export_fbx
 
 # Get configuration from JSON file
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 mesh_path = config.get('mesh_path')

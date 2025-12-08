@@ -172,8 +172,7 @@ defmodule ArgsParser do
           # If any error occurs, return nil (will show error message)
           _ -> nil
         catch
-          # Catch any errors from blocking reads
-          :error, _ -> nil
+          # Catch exit signals
           :exit, _ -> nil
         end
     end
@@ -547,7 +546,7 @@ sys.exit = _patched_sys_exit
 from kokoro import KPipeline
 
 # Get configuration from JSON file
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 text = config.get('text')

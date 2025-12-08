@@ -373,7 +373,7 @@ from accelerate.utils import set_seed
 from diffusers import ZImagePipeline
 
 # Get configuration from JSON file
-with open("config.json", 'r') as f:
+with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 prompt = config.get('prompt')
