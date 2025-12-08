@@ -205,19 +205,30 @@ def inpaint(V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray)
     if not is_valid_array(Q):
         raise ValueError("[Error] System matrix is invalid")
     
+    # Convert Q to csc_matrix format explicitly
+    Q = csc_matrix(Q)
+    
     # Set up boundary conditions
     Aeq = csc_matrix((0, 0))
-    Beq = np.array([])
-    B = np.zeros((L.shape[0], W2.shape[1]))
+    Beq = np.empty((0, 0), dtype=np.float64)  # Must be 2D array with shape (0, 0)
+    B = np.zeros((L.shape[0], W2.shape[1]), dtype=np.float64)
     
-    b = np.array(range(0, int(V2.shape[0])), dtype=int)
+    b = np.array(range(0, int(V2.shape[0])), dtype=np.int64)
     b = b[Matched]
-    bc = W2[Matched, :]
+    bc = W2[Matched, :].astype(np.float64)
     
     # Use keyword arguments to match the expected function signature
     # The Python bindings expect: A, B, known, Y, Aeq, Beq, pd
-    results, W_inpainted = igl.min_quad_with_fixed(A=Q, B=B, known=b, Y=bc, Aeq=Aeq, Beq=Beq, pd=True)
-    return W_inpainted, results
+    # The function returns a single array, not a tuple
+    try:
+        W_inpainted = igl.min_quad_with_fixed(A=Q, B=B, known=b, Y=bc, Aeq=Aeq, Beq=Beq, pd=True)
+        success = True
+    except Exception as e:
+        # If inpainting fails, return interpolated weights
+        W_inpainted = W2
+        success = False
+    
+    return W_inpainted, success
 
 
 def smooth(
