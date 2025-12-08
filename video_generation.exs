@@ -14,8 +14,8 @@
 # Options:
 #   --image <path>                    Input image for image-to-video (I2V)
 #   --model "wan-2.5-t2v"            Model to use: wan-2.5-t2v, wan-2.5-i2v, wan-2.5-t2v-fast, wan-2.5-i2v-fast, ti2v-5b, wan-2.2-animate (default: auto)
-#   --width <int>                    Video width in pixels (default: 720)
-#   --height <int>                   Video height in pixels (default: 1280)
+#   --width <int>                    Video width in pixels (default: 480)
+#   --height <int>                   Video height in pixels (default: 854)
 #   --duration <int>                  Video duration in seconds: 5 or 10 (default: 5)
 #   --fps <int>                      Frames per second: 8, 12, 16, 24 (default: 24)
 #   --seed <int>                     Random seed for generation (default: 0)
@@ -135,8 +135,8 @@ defmodule ArgsParser do
       Options:
         --image, -i <path>              Input image for image-to-video (I2V)
         --model, -m "wan-2.5-t2v"      Model: wan-2.5-t2v, wan-2.5-i2v, wan-2.5-t2v-fast, wan-2.5-i2v-fast, ti2v-5b, wan-2.2-animate (default: auto)
-        --width, -w <int>               Video width in pixels (default: 720)
-        --height, -h <int>              Video height in pixels (default: 1280)
+        --width, -w <int>               Video width in pixels (default: 480)
+        --height, -h <int>              Video height in pixels (default: 854)
         --duration, -d <int>             Video duration: 5 or 10 seconds (default: 5)
         --fps <int>                     Frames per second: 8, 12, 16, 24 (default: 24)
         --seed, -s <int>                Random seed (default: 0)
@@ -171,8 +171,8 @@ defmodule ArgsParser do
     end
 
     # Validate dimensions
-    width = Keyword.get(opts, :width, 720)
-    height = Keyword.get(opts, :height, 1280)
+    width = Keyword.get(opts, :width, 480)
+    height = Keyword.get(opts, :height, 854)
 
     if width < 256 or width > 1920 or height < 256 or height > 1920 do
       IO.puts("Error: Width and height must be between 256 and 1920 pixels")
@@ -497,8 +497,8 @@ end
   prompt = config.get('prompt', '')
   image_path = config.get('image_path')
   model_name = config.get('model', 'wan-2.5-i2v')
-  width = config.get('width', 720)
-  height = config.get('height', 1280)
+  width = config.get('width', 480)
+  height = config.get('height', 854)
   duration = config.get('duration', 5)
   fps = config.get('fps', 24)
   seed = config.get('seed', 0)
@@ -723,6 +723,10 @@ end
       print(f"  Guidance: {guidance_scale}")
       print(f"  Seed: {seed}")
       print(f"  Frames: {frame_num}")
+      print("\\n⚠ Note: Video generation can take 10-30 minutes or longer depending on your GPU.")
+      print("Progress will be shown below. Please be patient...\\n")
+      import sys
+      sys.stdout.flush()
 
       if mode == 'image_to_video' and image_path:
           # Resolve image path relative to original working directory
