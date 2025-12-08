@@ -737,21 +737,19 @@ print(f"\\nExporting to: {output_path}")
 os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
 
 if output_path.endswith('.usdc') or output_path.endswith('.usda') or output_path.endswith('.usd'):
+    # USD export with embedded images and material preservation
+    # Using only essential parameters that are valid in Blender 4.5
     bpy.ops.wm.usd_export(
         filepath=output_path,
         export_materials=True,
-        relative_paths=False,
-        default_prim_path='',
-        root_prim_path='',
+        export_textures=True,
+        relative_paths=False,  # False = embed textures, True = use relative paths
+        export_uvmaps=True,
+        export_armatures=True,  # Preserve armatures for rigged models
         selected_objects_only=False,
         visible_objects_only=False,
-        export_animation=False,
-        export_hair=False,
-        export_uvmaps=True,
-        export_normals=True,
-        export_colors=True,
-        mesh_format='USD',
-        export_textures=True
+        use_instancing=False,
+        evaluation_mode='RENDER'
     )
 else:
     raise ValueError(f"Unsupported output format: {output_path}")
