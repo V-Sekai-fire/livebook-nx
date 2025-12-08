@@ -66,7 +66,14 @@ def create_single_data(mesh_filaname):
 
     mesh_v, translation_normalize, scale_normalize = normalize_obj(mesh_v)
     mesh_normalized = o3d.geometry.TriangleMesh(vertices=o3d.utility.Vector3dVector(mesh_v), triangles=o3d.utility.Vector3iVector(mesh_f))
-    o3d.io.write_triangle_mesh(mesh_filename.replace("_remesh.obj", "_normalized.obj"), mesh_normalized)
+    # Fix typo: use mesh_filaname instead of mesh_filename
+    # Also handle files that don't have "_remesh.obj" in the name
+    if "_remesh.obj" in mesh_filaname:
+        normalized_obj_path = mesh_filaname.replace("_remesh.obj", "_normalized.obj")
+    else:
+        # For files without "_remesh.obj", just replace .obj with _normalized.obj
+        normalized_obj_path = mesh_filaname.replace(".obj", "_normalized.obj")
+    o3d.io.write_triangle_mesh(normalized_obj_path, mesh_normalized)
 
     # vertices
     v = np.concatenate((mesh_v, mesh_vn), axis=1)
@@ -92,15 +99,104 @@ def create_single_data(mesh_filaname):
     batch = torch.zeros(len(v), dtype=torch.long)
 
     # voxel
-    if not os.path.exists(mesh_filaname.replace('_remesh.obj', '_normalized.binvox')):
-        if platform == "linux" or platform == "linux2":
-            os.system("./binvox -d 88 -pb " + mesh_filaname.replace("_remesh.obj", "_normalized.obj"))
-        elif platform == "win32":
-            os.system("binvox.exe -d 88 " + mesh_filaname.replace("_remesh.obj", "_normalized.obj"))
+    # Handle files with or without "_remesh.obj" in the name
+    if "_remesh.obj" in mesh_filaname:
+        binvox_path = mesh_filaname.replace('_remesh.obj', '_normalized.binvox')
+        normalized_obj_for_binvox = mesh_filaname.replace("_remesh.obj", "_normalized.obj")
+    else:
+        binvox_path = mesh_filaname.replace('.obj', '_normalized.binvox')
+        normalized_obj_for_binvox = mesh_filaname.replace(".obj", "_normalized.obj")
+    
+    if not os.path.exists(binvox_path):
+        # Try to find binvox executable in various locations
+        binvox_exe = None
+        script_dir = os.path.dirname(__file__)
+        possible_paths = [
+            os.path.join(script_dir, "binvox.exe"),  # RigNet/binvox.exe (primary location)
+            os.path.join(script_dir, "binvox"),  # RigNet/binvox (Linux/Mac or no extension)
+            "binvox.exe",  # Current directory or PATH
+            "./binvox.exe",  # Current directory
+            os.path.join(script_dir, "tools", "binvox.exe"),  # RigNet/tools/
+            os.path.join(script_dir, "..", "tools", "binvox.exe"),  # tools/ in parent
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                binvox_exe = path
+                break
+        
+        if binvox_exe is None:
+            # Try to find in PATH
+            import shutil
+            binvox_in_path = shutil.which("binvox.exe") or shutil.which("binvox")
+            if binvox_in_path:
+                binvox_exe = binvox_in_path
+        
+        if binvox_exe is None:
+            script_dir = os.path.dirname(__file__)
+            raise FileNotFoundError(
+                f"binvox executable not found. Please download binvox from https://www.patrickmin.com/binvox/ "
+                f"and place binvox.exe (or binvox) in one of these locations:\n"
+                f"  - {os.path.join(script_dir, 'binvox.exe')} (preferred)\n"
+                f"  - {os.path.join(script_dir, 'tools', 'binvox.exe')}\n"
+                f"  - Current directory\n"
+                f"  - System PATH\n"
+                f"Or install it system-wide and ensure it's in your PATH."
+            )
+        
+        # Verify normalized OBJ exists
+        if not os.path.exists(normalized_obj_for_binvox):
+            raise FileNotFoundError(f"Normalized OBJ file not found: {normalized_obj_for_binvox}")
+        
+        # Run binvox
+        import subprocess
+        import time
+        print(f"     Running binvox to create voxel representation...")
+        print(f"     Using binvox: {binvox_exe}")
+        print(f"     Input OBJ: {normalized_obj_for_binvox}")
+        start_time = time.time()
+        
+        # On Windows, use shell=True and proper path handling for compatibility
+        if platform == "win32":
+            # Use shell=True and quote paths for Windows compatibility
+            # This helps with path spaces and executable compatibility
+            cmd = f'"{binvox_exe}" -d 88 "{normalized_obj_for_binvox}"'
+            result = subprocess.run(
+                cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                cwd=os.path.dirname(binvox_exe) if os.path.dirname(binvox_exe) else os.getcwd()
+            )
         else:
-            raise Exception('Sorry, we currently only support windows and linux.')
+            # Linux/Mac: use list format
+            result = subprocess.run(
+                [binvox_exe, "-d", "88", normalized_obj_for_binvox],
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
+            )
+        
+        elapsed = time.time() - start_time
+        print(f"     binvox completed in {elapsed:.2f} seconds")
+        
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"binvox failed with return code {result.returncode}.\n"
+                f"Error output: {result.stderr}\n"
+                f"Standard output: {result.stdout}"
+            )
+        
+        # Verify binvox file was created
+        if not os.path.exists(binvox_path):
+            raise FileNotFoundError(
+                f"binvox completed but output file not found: {binvox_path}\n"
+                f"binvox output: {result.stdout}"
+            )
+        print(f"     ✓ Voxel file created: {binvox_path}")
 
-    with open(mesh_filaname.replace('_remesh.obj', '_normalized.binvox'), 'rb') as fvox:
+    with open(binvox_path, 'rb') as fvox:
         vox = binvox_rw.read_as_3d_array(fvox)
 
     data = Data(x=v[:, 3:6], pos=v[:, 0:3], tpl_edge_index=tpl_e, geo_edge_index=geo_e, batch=batch)
@@ -118,7 +214,9 @@ def predict_joints(input_data, vox, joint_pred_net, threshold, bandwidth=None, m
     :param mesh_filename: mesh filename for visualization
     :return: wrapped data with predicted joints, pair-wise bone representation added.
     """
+    print("     Running joint prediction network...")
     data_displacement, _, attn_pred, bandwidth_pred = joint_pred_net(input_data)
+    print("     Network inference complete, processing results...")
     y_pred = data_displacement + input_data.pos
     y_pred_np = y_pred.data.cpu().numpy()
     attn_pred_np = attn_pred.data.cpu().numpy()
@@ -135,7 +233,9 @@ def predict_joints(input_data, vox, joint_pred_net, threshold, bandwidth=None, m
     #img = draw_shifted_pts(mesh_filename, y_pred_np, weights=attn_pred_np)
     if bandwidth is None:
         bandwidth = bandwidth_pred.item()
+    print(f"     Running meanshift clustering (bandwidth={bandwidth:.4f})...")
     y_pred_np = meanshift_cluster(y_pred_np, bandwidth, attn_pred_np, max_iter=40)
+    print(f"     Clustering complete, found {len(y_pred_np)} candidate points")
     #img = draw_shifted_pts(mesh_filename, y_pred_np, weights=attn_pred_np)
 
     Y_dist = np.sum(((y_pred_np[np.newaxis, ...] - y_pred_np[:, np.newaxis, :]) ** 2), axis=2)

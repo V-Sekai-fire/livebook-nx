@@ -65,9 +65,25 @@ def read_header(fp):
     line = fp.readline().strip()
     if not line.startswith(b'#binvox'):
         raise IOError('Not a binvox file')
-    dims = list(map(int, fp.readline().strip().split(b' ')[1:]))
-    translate = list(map(float, fp.readline().strip().split(b' ')[1:]))
-    scale = list(map(float, fp.readline().strip().split(b' ')[1:]))[0]
+    
+    # Skip any comment lines (lines starting with #)
+    while True:
+        line = fp.readline().strip()
+        if not line.startswith(b'#'):
+            break
+    
+    # Parse dimensions
+    dims = list(map(int, line.split(b' ')[1:]))
+    
+    # Parse translate
+    line = fp.readline().strip()
+    translate = list(map(float, line.split(b' ')[1:]))
+    
+    # Parse scale
+    line = fp.readline().strip()
+    scale = list(map(float, line.split(b' ')[1:]))[0]
+    
+    # Skip to data line
     line = fp.readline()
 
     return dims, translate, scale

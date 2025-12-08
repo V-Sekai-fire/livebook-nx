@@ -21,8 +21,17 @@ checkpoints/
 output/
 uploads/
 
+# Temporary files in thirdparty (generated during processing)
+thirdparty/*_temp_*.obj
+thirdparty/*_temp_*.binvox
+thirdparty/*_temp_*.mtl
+thirdparty/*_normalized.obj
+thirdparty/*_normalized.binvox
+
 # Configuration files (generated)
 config.json
+# But allow checkpoints/config.json (model configs)
+!checkpoints/config.json
 
 # OS files
 .DS_Store
@@ -44,6 +53,16 @@ lightning_logs/
 # Temporary files
 *.tmp
 *.temp
+
+# RigNet temporary files
+*_temp_rignet.obj
+*_temp_rignet_normalized.obj
+*_temp_rignet_normalized.binvox
+*_temp_rignet.mtl
+*_temp_rignet_rig.txt
+*_normalized.obj
+*_normalized.binvox
+*_simplified.obj
 
 # Pretrained weights (large model files)
 pretrained_weights/

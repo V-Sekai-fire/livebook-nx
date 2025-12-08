@@ -12,7 +12,7 @@
 #   --output-format "txt"        Output format: txt (rig file) or fbx (default: "txt")
 #   --bandwidth <float>          Bandwidth for meanshift clustering (default: auto)
 #   --threshold <float>          Density threshold for joint filtering (default: 1e-5)
-#   --target-vertices <int>      Target vertex count for mesh optimization (2000-5000, default: 3000)
+#   --target-vertices <int>      Target vertex count for mesh optimization (2000-5000, default: 2000)
 #   --checkpoint-dir <path>      Path to RigNet checkpoints (default: thirdparty/blender-rignet/RigNet/checkpoints)
 #   --device "cuda"              Device: cuda or cpu (default: auto-detect)
 #   --skip-optimization          Skip mesh optimization (use original mesh)
@@ -36,6 +36,8 @@ dependencies = [
   "torchvision",
   "tensorboard",
   "torch-geometric",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux'",
   "torch_scatter @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_scatter-2.1.2%2Bpt27cu118-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'",
   "torch_scatter @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_scatter-2.1.2%2Bpt27cu118-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux'",
   "torch-sparse @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_sparse-0.6.18%2Bpt27cu118-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'",
@@ -93,7 +95,7 @@ defmodule ArgsParser do
         --output-format, -f "txt"         Output format: txt (rig file) or fbx (default: "txt")
         --bandwidth, -b <float>           Bandwidth for meanshift clustering (default: auto)
         --threshold, -t <float>           Density threshold for joint filtering (default: 1e-5)
-        --target-vertices, -v <int>       Target vertex count for mesh optimization (2000-5000, default: 3000)
+        --target-vertices, -v <int>       Target vertex count for mesh optimization (2000-5000, default: 2000)
         --skip-optimization               Skip mesh optimization (use original mesh)
         --checkpoint-dir, -c <path>       Path to RigNet checkpoints (default: thirdparty/blender-rignet/RigNet/checkpoints)
         --device, -d "cuda"               Device: cuda or cpu (default: auto-detect)
@@ -110,7 +112,7 @@ defmodule ArgsParser do
       mesh_path: mesh_path,
       bandwidth: Keyword.get(opts, :bandwidth),
       threshold: Keyword.get(opts, :threshold, 1.0e-5),
-      target_vertices: Keyword.get(opts, :target_vertices, 3000),
+      target_vertices: Keyword.get(opts, :target_vertices, 2000),
       checkpoint_dir: Keyword.get(opts, :checkpoint_dir),
       device: Keyword.get(opts, :device),
       skip_optimization: Keyword.get(opts, :skip_optimization, false)
@@ -191,7 +193,7 @@ checkpoint_dir = config['checkpoint_dir']
 device_str = config.get('device')
 threshold = config.get('threshold', 1e-5)
 bandwidth = config.get('bandwidth')
-target_vertices = config.get('target_vertices', 3000)
+target_vertices = config.get('target_vertices', 2000)
 skip_optimization = config.get('skip_optimization', False)
 
 # Determine device
@@ -435,7 +437,9 @@ if not skip_optimization:
         print(f"Mesh already has {original_vertices} vertices (target: {target_vertices})")
 
 # Export as OBJ for RigNet processing
-temp_obj_path = str(Path(mesh_path).with_suffix('')) + '_temp_rignet.obj'
+# Make path absolute to avoid issues when changing directories
+temp_obj_path_base = Path(mesh_path).with_suffix('').resolve()
+temp_obj_path = str(temp_obj_path_base) + '_temp_rignet.obj'
 bpy.ops.wm.obj_export(
     filepath=temp_obj_path,
     export_selected_objects=True,
@@ -443,6 +447,9 @@ bpy.ops.wm.obj_export(
     export_normals=True
 )
 print(f"✓ Exported OBJ for RigNet: {temp_obj_path}")
+# Verify file exists
+if not os.path.exists(temp_obj_path):
+    raise FileNotFoundError(f"Failed to export OBJ file: {temp_obj_path}")
 
 # Step 2: Run RigNet prediction
 print("\\n=== Step 2: Running RigNet Prediction ===")
@@ -481,43 +488,91 @@ except Exception as e:
 
 # Load networks
 print("\\n=== Loading Networks ===")
-os.chdir(Path(checkpoint_dir).parent)
+# Save original working directory
+original_cwd = os.getcwd()
+# Change to checkpoint directory for loading models
+checkpoint_parent = Path(checkpoint_dir).parent.resolve()
+os.chdir(str(checkpoint_parent))
 
-# Joint network
+# Helper function to load state dict with error handling
+def load_state_dict_safe(model, checkpoint_path, model_name):
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        state_dict = checkpoint.get('state_dict', checkpoint)
+
+        # Try strict loading first
+        try:
+            model.load_state_dict(state_dict, strict=True)
+            print(f"✓ {model_name} loaded (strict)")
+        except RuntimeError as e:
+            # If strict fails, try non-strict and filter out unexpected keys
+            print(f"Warning: {model_name} strict loading failed")
+            print(f"  Attempting non-strict loading...")
+
+            # Get model's expected keys
+            model_keys = set(model.state_dict().keys())
+            checkpoint_keys = set(state_dict.keys())
+
+            # Filter state_dict to only include keys that exist in model
+            filtered_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+            missing_keys = model_keys - checkpoint_keys
+            unexpected_keys = checkpoint_keys - model_keys
+
+            if missing_keys:
+                print(f"  Missing keys: {len(missing_keys)} (will use random initialization)")
+            if unexpected_keys:
+                print(f"  Unexpected keys: {len(unexpected_keys)} (will be ignored)")
+
+            model.load_state_dict(filtered_dict, strict=False)
+            print(f"✓ {model_name} loaded (non-strict)")
+    except Exception as e:
+        print(f"Error loading {model_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Joint network - use gcn_meanshift (finetuned) instead of pretrain_jointnet
 jointNet = JOINTNET()
 jointNet.to(device)
 jointNet.eval()
-joint_checkpoint = torch.load('checkpoints/pretrain_jointnet/model_best.pth.tar', map_location=device)
-jointNet.load_state_dict(joint_checkpoint['state_dict'])
+joint_checkpoint_path = 'checkpoints/gcn_meanshift/model_best.pth.tar'
+if not os.path.exists(joint_checkpoint_path):
+    # Fallback to pretrain_jointnet if gcn_meanshift doesn't exist
+    joint_checkpoint_path = 'checkpoints/pretrain_jointnet/model_best.pth.tar'
+load_state_dict_safe(jointNet, joint_checkpoint_path, "Joint prediction network")
 print("✓ Joint prediction network loaded")
 
 # Root network
 rootNet = ROOTNET()
 rootNet.to(device)
 rootNet.eval()
-root_checkpoint = torch.load('checkpoints/rootnet/model_best.pth.tar', map_location=device)
-rootNet.load_state_dict(root_checkpoint['state_dict'])
+load_state_dict_safe(rootNet, 'checkpoints/rootnet/model_best.pth.tar', "Root prediction network")
 print("✓ Root prediction network loaded")
 
 # Bone network
 boneNet = BONENET()
 boneNet.to(device)
 boneNet.eval()
-bone_checkpoint = torch.load('checkpoints/bonenet/model_best.pth.tar', map_location=device)
-boneNet.load_state_dict(bone_checkpoint['state_dict'])
+load_state_dict_safe(boneNet, 'checkpoints/bonenet/model_best.pth.tar', "Bone connectivity network")
 print("✓ Bone connectivity network loaded")
 
 # Skin network
 skinNet = SKINNET(nearest_bone=5, use_Dg=True, use_Lf=True)
-skin_checkpoint = torch.load('checkpoints/skinnet/model_best.pth.tar', map_location=device)
-skinNet.load_state_dict(skin_checkpoint['state_dict'])
 skinNet.to(device)
 skinNet.eval()
+load_state_dict_safe(skinNet, 'checkpoints/skinnet/model_best.pth.tar', "Skinning network")
 print("✓ Skinning network loaded")
 
 # Create input data from OBJ
 print("\\n=== Processing Mesh for RigNet ===")
-data, vox, surface_geodesic, translation_normalize, scale_normalize = create_single_data(temp_obj_path)
+# Use absolute path (already resolved before chdir)
+# Convert to string and normalize path separators for cross-platform compatibility
+temp_obj_absolute = os.path.normpath(temp_obj_path)
+print(f"Loading OBJ from: {temp_obj_absolute}")
+if not os.path.exists(temp_obj_absolute):
+    raise FileNotFoundError(f"OBJ file not found: {temp_obj_absolute}")
+print(f"OBJ file exists: {os.path.exists(temp_obj_absolute)}, size: {os.path.getsize(temp_obj_absolute)} bytes")
+data, vox, surface_geodesic, translation_normalize, scale_normalize = create_single_data(temp_obj_absolute)
 data.to(device)
 
 # Predict joints
@@ -527,23 +582,29 @@ data.to(device)
 
 # Predict skeleton
 print("\\n=== Predicting Skeleton ===")
-pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet)
+# Construct normalized OBJ path for predict_skeleton (required parameter)
+normalized_obj_path = temp_obj_absolute.replace('.obj', '_normalized.obj')
+pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet, normalized_obj_path)
 
 # Predict skinning
 print("\\n=== Predicting Skinning Weights ===")
-pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic)
+pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic, normalized_obj_path)
 
 # Reverse normalization
 pred_rig.normalize(scale_normalize, -translation_normalize)
 
 # Save rig file temporarily
-temp_rig_path = str(Path(temp_obj_path).with_suffix('')) + '_rig.txt'
+# Use absolute path for rig file
+temp_rig_path = str(Path(temp_obj_path).with_suffix('').resolve()) + '_rig.txt'
 pred_rig.save(temp_rig_path)
 print(f"✓ Rig saved to: {temp_rig_path}")
 
 # Clear GPU cache
 if device.type == 'cuda':
     torch.cuda.empty_cache()
+
+# Restore original working directory before returning to Blender
+os.chdir(original_cwd)
 
 # Step 3: Load rig back into Blender and apply to mesh
 print("\\n=== Step 3: Applying Rig to Mesh ===")
@@ -553,8 +614,8 @@ try:
     from RigNet.utils.rig_parser import Info
     from ob_utils.objects import ArmatureGenerator
 
-    # Parse rig file
-    skel_info = Info(filename=temp_rig_path)
+    # Parse rig file - use absolute path
+    skel_info = Info(filename=str(Path(temp_rig_path).resolve()))
     print("✓ Rig file parsed")
 
     # Create armature and apply to mesh
@@ -616,7 +677,7 @@ checkpoint_dir = config['checkpoint_dir']
 device_str = config.get('device')
 threshold = config.get('threshold', 1e-5)
 bandwidth = config.get('bandwidth')
-target_vertices = config.get('target_vertices', 3000)
+target_vertices = config.get('target_vertices', 2000)
 skip_optimization = config.get('skip_optimization', False)
 
 # Determine device
@@ -860,7 +921,9 @@ if not skip_optimization:
         print(f"Mesh already has {original_vertices} vertices (target: {target_vertices})")
 
 # Export as OBJ for RigNet processing
-temp_obj_path = str(Path(mesh_path).with_suffix('')) + '_temp_rignet.obj'
+# Make path absolute to avoid issues when changing directories
+temp_obj_path_base = Path(mesh_path).with_suffix('').resolve()
+temp_obj_path = str(temp_obj_path_base) + '_temp_rignet.obj'
 bpy.ops.wm.obj_export(
     filepath=temp_obj_path,
     export_selected_objects=True,
@@ -868,6 +931,9 @@ bpy.ops.wm.obj_export(
     export_normals=True
 )
 print(f"✓ Exported OBJ for RigNet: {temp_obj_path}")
+# Verify file exists
+if not os.path.exists(temp_obj_path):
+    raise FileNotFoundError(f"Failed to export OBJ file: {temp_obj_path}")
 
 # Step 2: Run RigNet prediction
 print("\\n=== Step 2: Running RigNet Prediction ===")
@@ -906,43 +972,91 @@ except Exception as e:
 
 # Load networks
 print("\\n=== Loading Networks ===")
-os.chdir(Path(checkpoint_dir).parent)
+# Save original working directory
+original_cwd = os.getcwd()
+# Change to checkpoint directory for loading models
+checkpoint_parent = Path(checkpoint_dir).parent.resolve()
+os.chdir(str(checkpoint_parent))
 
-# Joint network
+# Helper function to load state dict with error handling
+def load_state_dict_safe(model, checkpoint_path, model_name):
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        state_dict = checkpoint.get('state_dict', checkpoint)
+
+        # Try strict loading first
+        try:
+            model.load_state_dict(state_dict, strict=True)
+            print(f"✓ {model_name} loaded (strict)")
+        except RuntimeError as e:
+            # If strict fails, try non-strict and filter out unexpected keys
+            print(f"Warning: {model_name} strict loading failed")
+            print(f"  Attempting non-strict loading...")
+
+            # Get model's expected keys
+            model_keys = set(model.state_dict().keys())
+            checkpoint_keys = set(state_dict.keys())
+
+            # Filter state_dict to only include keys that exist in model
+            filtered_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+            missing_keys = model_keys - checkpoint_keys
+            unexpected_keys = checkpoint_keys - model_keys
+
+            if missing_keys:
+                print(f"  Missing keys: {len(missing_keys)} (will use random initialization)")
+            if unexpected_keys:
+                print(f"  Unexpected keys: {len(unexpected_keys)} (will be ignored)")
+
+            model.load_state_dict(filtered_dict, strict=False)
+            print(f"✓ {model_name} loaded (non-strict)")
+    except Exception as e:
+        print(f"Error loading {model_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Joint network - use gcn_meanshift (finetuned) instead of pretrain_jointnet
 jointNet = JOINTNET()
 jointNet.to(device)
 jointNet.eval()
-joint_checkpoint = torch.load('checkpoints/pretrain_jointnet/model_best.pth.tar', map_location=device)
-jointNet.load_state_dict(joint_checkpoint['state_dict'])
+joint_checkpoint_path = 'checkpoints/gcn_meanshift/model_best.pth.tar'
+if not os.path.exists(joint_checkpoint_path):
+    # Fallback to pretrain_jointnet if gcn_meanshift doesn't exist
+    joint_checkpoint_path = 'checkpoints/pretrain_jointnet/model_best.pth.tar'
+load_state_dict_safe(jointNet, joint_checkpoint_path, "Joint prediction network")
 print("✓ Joint prediction network loaded")
 
 # Root network
 rootNet = ROOTNET()
 rootNet.to(device)
 rootNet.eval()
-root_checkpoint = torch.load('checkpoints/rootnet/model_best.pth.tar', map_location=device)
-rootNet.load_state_dict(root_checkpoint['state_dict'])
+load_state_dict_safe(rootNet, 'checkpoints/rootnet/model_best.pth.tar', "Root prediction network")
 print("✓ Root prediction network loaded")
 
 # Bone network
 boneNet = BONENET()
 boneNet.to(device)
 boneNet.eval()
-bone_checkpoint = torch.load('checkpoints/bonenet/model_best.pth.tar', map_location=device)
-boneNet.load_state_dict(bone_checkpoint['state_dict'])
+load_state_dict_safe(boneNet, 'checkpoints/bonenet/model_best.pth.tar', "Bone connectivity network")
 print("✓ Bone connectivity network loaded")
 
 # Skin network
 skinNet = SKINNET(nearest_bone=5, use_Dg=True, use_Lf=True)
-skin_checkpoint = torch.load('checkpoints/skinnet/model_best.pth.tar', map_location=device)
-skinNet.load_state_dict(skin_checkpoint['state_dict'])
 skinNet.to(device)
 skinNet.eval()
+load_state_dict_safe(skinNet, 'checkpoints/skinnet/model_best.pth.tar', "Skinning network")
 print("✓ Skinning network loaded")
 
 # Create input data from OBJ
 print("\\n=== Processing Mesh for RigNet ===")
-data, vox, surface_geodesic, translation_normalize, scale_normalize = create_single_data(temp_obj_path)
+# Use absolute path (already resolved before chdir)
+# Convert to string and normalize path separators for cross-platform compatibility
+temp_obj_absolute = os.path.normpath(temp_obj_path)
+print(f"Loading OBJ from: {temp_obj_absolute}")
+if not os.path.exists(temp_obj_absolute):
+    raise FileNotFoundError(f"OBJ file not found: {temp_obj_absolute}")
+print(f"OBJ file exists: {os.path.exists(temp_obj_absolute)}, size: {os.path.getsize(temp_obj_absolute)} bytes")
+data, vox, surface_geodesic, translation_normalize, scale_normalize = create_single_data(temp_obj_absolute)
 data.to(device)
 
 # Predict joints
@@ -952,23 +1066,29 @@ data.to(device)
 
 # Predict skeleton
 print("\\n=== Predicting Skeleton ===")
-pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet)
+# Construct normalized OBJ path for predict_skeleton (required parameter)
+normalized_obj_path = temp_obj_absolute.replace('.obj', '_normalized.obj')
+pred_skeleton = predict_skeleton(data, vox, rootNet, boneNet, normalized_obj_path)
 
 # Predict skinning
 print("\\n=== Predicting Skinning Weights ===")
-pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic)
+pred_rig = predict_skinning(data, pred_skeleton, skinNet, surface_geodesic, normalized_obj_path)
 
 # Reverse normalization
 pred_rig.normalize(scale_normalize, -translation_normalize)
 
 # Save rig file temporarily
-temp_rig_path = str(Path(temp_obj_path).with_suffix('')) + '_rig.txt'
+# Use absolute path for rig file
+temp_rig_path = str(Path(temp_obj_path).with_suffix('').resolve()) + '_rig.txt'
 pred_rig.save(temp_rig_path)
 print(f"✓ Rig saved to: {temp_rig_path}")
 
 # Clear GPU cache
 if device.type == 'cuda':
     torch.cuda.empty_cache()
+
+# Restore original working directory before returning to Blender
+os.chdir(original_cwd)
 
 # Step 3: Load rig back into Blender and apply to mesh
 print("\\n=== Step 3: Applying Rig to Mesh ===")
@@ -978,8 +1098,8 @@ try:
     from RigNet.utils.rig_parser import Info
     from ob_utils.objects import ArmatureGenerator
 
-    # Parse rig file
-    skel_info = Info(filename=temp_rig_path)
+    # Parse rig file - use absolute path
+    skel_info = Info(filename=str(Path(temp_rig_path).resolve()))
     print("✓ Rig file parsed")
 
     # Create armature and apply to mesh
