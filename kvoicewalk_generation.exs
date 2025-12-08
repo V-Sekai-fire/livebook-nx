@@ -32,39 +32,26 @@ Mix.install([
 # Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
 
-# Initialize Python environment with required dependencies
+# Initialize Python environment with KVoiceWalk dependencies
 # KVoiceWalk uses Kokoro, Resemblyzer, and various audio processing libraries
-# All dependencies managed by uv (no pip)
 Pythonx.uv_init("""
 [project]
 name = "kvoicewalk-generation"
 version = "0.0.0"
-requires-python = "==3.10.*"
+requires-python = ">=3.10,<3.13"
 dependencies = [
   "kokoro>=0.9.4",
-  "resemblyzer",
-  "soundfile",
-  "torch",
-  "torchaudio",
-  "numpy<2.0",
-  "scipy",
+  "numpy>=2.2.6",
+  "resemblyzer>=0.1.4",
+  "soundfile>=0.13.1",
+  "torch>=2.7.0",
+  "tqdm>=4.67.1",
   "librosa",
+  "scipy",
   "faster-whisper",
-  "pillow",
-  "huggingface-hub",
-  "tokenizers>=0.20.0",
-  "transformers>=4.30.0",
-  "misaki[en]",
+  "pip",
+  "spacy",
 ]
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu118" }
-torchaudio = { index = "pytorch-cu118" }
-
-[[tool.uv.index]]
-name = "pytorch-cu118"
-url = "https://download.pytorch.org/whl/cu118"
-explicit = true
 """)
 
 # Parse command-line arguments
@@ -188,7 +175,7 @@ defmodule ArgsParser do
       transcribe_start: Keyword.get(opts, :transcribe_start, false),
       population_limit: population_limit,
       step_limit: step_limit,
-      output_name: Keyword.get(opts, :output_name, "generated_voice.pt")
+      output_name: Keyword.get(opts, :output_name, "generated_voice") |> String.replace_suffix(".pt", "")
     }
 
     config
@@ -213,7 +200,7 @@ Output Name: #{config.output_name}
 # Add paths to config for Python
 base_dir = Path.expand(".")
 config_with_paths = Map.merge(config, %{
-  kvoicewalk_path: Path.join([base_dir, "thirdparty", "KVoiceWalk"]),
+  kvoicewalk_path: Path.join([base_dir, "thirdparty", "kvoicewalk"]),
   workspace_root: base_dir
 })
 
@@ -221,36 +208,24 @@ config_with_paths = Map.merge(config, %{
 config_json = Jason.encode!(config_with_paths)
 File.write!("config.json", config_json)
 
-# Clone KVoiceWalk repository if it doesn't exist
+# Check if KVoiceWalk repository exists
 IO.puts("\n=== Step 1: Setup KVoiceWalk Repository ===")
 kvoicewalk_path = config_with_paths.kvoicewalk_path
 
 if !File.exists?(kvoicewalk_path) do
-  IO.puts("KVoiceWalk repository not found. Cloning from GitHub...")
-  IO.puts("Repository: https://github.com/RobViren/kvoicewalk")
-
-  # Create thirdparty directory if it doesn't exist
-  File.mkdir_p!(Path.dirname(kvoicewalk_path))
-
-  # Clone the repository
-  case System.cmd("git", ["clone", "https://github.com/RobViren/kvoicewalk.git", kvoicewalk_path], stderr_to_stdout: true) do
-    {output, 0} ->
-      IO.puts("[OK] KVoiceWalk repository cloned successfully")
-    {output, exit_code} ->
-      IO.puts("[ERROR] Failed to clone KVoiceWalk repository")
-      IO.puts(output)
-      System.halt(1)
-  end
+  IO.puts("[ERROR] KVoiceWalk repository not found at: #{kvoicewalk_path}")
+  IO.puts("Please ensure the repository exists in thirdparty/kvoicewalk")
+  System.halt(1)
 else
   IO.puts("✓ KVoiceWalk repository found at: #{kvoicewalk_path}")
 end
 
-# Import libraries and run KVoiceWalk
+# Import libraries and run KVoiceWalk directly (no subprocess)
 {_, _python_globals} = Pythonx.eval("""
 import json
 import sys
 import os
-import subprocess
+import shutil
 from pathlib import Path
 
 # Get configuration from JSON file
@@ -266,29 +241,29 @@ interpolate_start = config.get('interpolate_start', False)
 transcribe_start = config.get('transcribe_start', False)
 population_limit = config.get('population_limit', 10)
 step_limit = config.get('step_limit', 10000)
-output_name = config.get('output_name', 'generated_voice.pt')
+output_name = config.get('output_name', 'generated_voice')
 kvoicewalk_path = config.get('kvoicewalk_path')
 workspace_root = config.get('workspace_root')
 
 # Resolve paths
-target_audio = str(Path(target_audio).resolve())
-kvoicewalk_path = str(Path(kvoicewalk_path).resolve())
-workspace_root = str(Path(workspace_root).resolve())
+target_audio = Path(target_audio).resolve()
+kvoicewalk_path = Path(kvoicewalk_path).resolve()
+workspace_root = Path(workspace_root).resolve()
 
 # Check if KVoiceWalk exists
-if not Path(kvoicewalk_path).exists():
+if not kvoicewalk_path.exists():
     raise FileNotFoundError(f"KVoiceWalk repository not found at: {kvoicewalk_path}")
 
 # Add KVoiceWalk to Python path
 if str(kvoicewalk_path) not in sys.path:
     sys.path.insert(0, str(kvoicewalk_path))
 
-# Change to KVoiceWalk directory
+# Change to KVoiceWalk directory (needed for relative imports)
 original_cwd = os.getcwd()
 os.chdir(kvoicewalk_path)
 
 # Create output directory
-output_dir = Path(workspace_root) / "output"
+output_dir = workspace_root / "output"
 output_dir.mkdir(exist_ok=True, parents=True)
 
 # Create timestamped folder for this run
@@ -301,76 +276,150 @@ print(f"\\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
 print(f"Target Audio: {target_audio}")
 print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
 print(f"Output Directory: {export_dir}")
+print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
 
-# Build command arguments for KVoiceWalk main.py
-cmd_args = [
-    sys.executable, "main.py",
-    "--target_audio", target_audio,
-    "--target_text", target_text,
-    "--population_limit", str(population_limit),
-    "--step_limit", str(step_limit),
-    "--output_name", output_name,
-    "--voice_folder", voice_folder,
-]
-
-# Add optional arguments
-if other_text:
-    cmd_args.extend(["--other_text", other_text])
-
-if starting_voice:
-    cmd_args.extend(["--starting_voice", starting_voice])
-
-if interpolate_start:
-    cmd_args.append("--interpolate_start")
-
-if transcribe_start:
-    cmd_args.append("--transcribe_start")
-
-print(f"\\nRunning KVoiceWalk with command:")
-print(f"  {' '.join(cmd_args)}")
-print(f"\\nThis may take a while depending on step_limit and population_limit...")
-
-# Run KVoiceWalk
-generated_voice = None
+# Pre-download spacy model if needed (before importing KVoiceWalk)
+# This avoids the pip dependency issue when misaki tries to download it
+print("\\nChecking spacy model...")
 try:
-    result = subprocess.run(
-        cmd_args,
-        cwd=kvoicewalk_path,
-        check=True,
-        capture_output=False  # Show output in real-time
-    )
+    import spacy
+    try:
+        # Try to load the model - if it fails, download it
+        nlp = spacy.load("en_core_web_sm")
+        print("Spacy model 'en_core_web_sm' already available.")
+    except OSError:
+        print("Downloading spacy model 'en_core_web_sm'...")
+        import subprocess
+        import sys
+        # Use python -m spacy download - this works without pip
+        result = subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], 
+                              capture_output=True, text=True)
+        if result.returncode == 0:
+            print("Spacy model downloaded successfully.")
+        else:
+            print(f"\\n[WARN] Spacy download output: {result.stdout}")
+            print(f"[WARN] Spacy download error: {result.stderr}")
+            # Try alternative: download via direct URL
+            print("Attempting alternative download method...")
+            import urllib.request
+            import tarfile
+            import tempfile
+            model_url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
+            with tempfile.NamedTemporaryFile(suffix=".whl", delete=False) as tmp:
+                urllib.request.urlretrieve(model_url, tmp.name)
+                subprocess.run([sys.executable, "-m", "pip", "install", tmp.name], 
+                             check=False, capture_output=True)
+except Exception as e:
+    print(f"\\n[WARN] Could not pre-download spacy model: {e}")
+    print("KVoiceWalk will attempt to download it automatically, but may fail without pip.")
 
+# Import KVoiceWalk modules (after spacy model is ready)
+from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
+from utilities.kvoicewalk import KVoiceWalk
+
+# Handle target_audio - convert to mono wav 24K if needed
+if target_audio.exists() and target_audio.is_file():
+    target_audio = Path(convert_to_wav_mono_24k(target_audio))
+else:
+    raise FileNotFoundError(f"Target audio file not found: {target_audio}")
+
+# Handle transcription if requested
+if transcribe_start:
+    print(f"\\nTranscribing target audio...")
+    transcriber = Transcriber()
+    target_text = transcriber.transcribe(audio_path=target_audio)
+    print(f"Transcribed text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
+
+# Handle text input - read from file if it's a .txt file path
+if target_text and str(target_text).endswith('.txt'):
+    text_path = Path(target_text)
+    if text_path.exists() and text_path.is_file():
+        target_text = text_path.read_text(encoding='utf-8')
+    else:
+        print(f"Warning: Text file not found: {text_path}, using as literal text")
+
+# Set default other_text if not provided
+if not other_text:
+    other_text = "If you mix vinegar, baking soda, and a bit of dish soap in a tall cylinder, the resulting eruption is both a visual and tactile delight, often used in classrooms to simulate volcanic activity on a miniature scale."
+
+# Initialize and run KVoiceWalk
+print(f"\\nInitializing KVoiceWalk...")
+try:
+    kvoicewalk = KVoiceWalk(
+        target_audio=target_audio,
+        target_text=target_text,
+        other_text=other_text,
+        voice_folder=voice_folder,
+        interpolate_start=interpolate_start,
+        population_limit=population_limit,
+        starting_voice=starting_voice if starting_voice else None,
+        output_name=output_name
+    )
+    
+    print(f"\\nStarting random walk with {step_limit} steps...")
+    kvoicewalk.random_walk(step_limit)
+    
     print("\\n[OK] KVoiceWalk completed successfully")
 
     # Find the generated voice file
-    # KVoiceWalk saves to 'out' directory by default, or uses --output_name
-    possible_locations = [
-        Path(kvoicewalk_path) / "out" / output_name,
-        Path(kvoicewalk_path) / output_name,
-        Path(kvoicewalk_path) / "out" / "out.pt",  # Default output name
-    ]
-
-    for loc in possible_locations:
-        if loc.exists():
-            generated_voice = loc
-            break
+    # KVoiceWalk saves to 'out' directory with pattern:
+    # out/{output_name}_{target_audio_stem}_{timestamp}/{output_name}_{step}_{score}_{similarity}_{audio_stem}.pt
+    from utilities.path_router import OUT_DIR
+    out_dir = Path(OUT_DIR)
+    generated_voice = None
+    
+    if out_dir.exists():
+        # Find the most recent results directory matching the output_name pattern
+        # Directories are named: {output_name}_{target_audio_stem}_{timestamp}
+        result_dirs = [d for d in out_dir.iterdir() if d.is_dir() and d.name.startswith(f"{output_name}_")]
+        
+        if result_dirs:
+            # Get the most recent results directory (by modification time)
+            latest_result_dir = max(result_dirs, key=lambda x: x.stat().st_mtime)
+            # Find all .pt files in this directory
+            pt_files = list(latest_result_dir.glob("*.pt"))
+            
+            if pt_files:
+                # Get the file with the highest step number
+                # Files are named: {output_name}_{step}_{score}_{similarity}_{audio_stem}.pt
+                def get_step_number(pt_file):
+                    try:
+                        # Extract step number from filename
+                        # Format: {output_name}_{step}_{score}_{similarity}_{audio_stem}.pt
+                        parts = pt_file.stem.split('_')
+                        # Find where output_name ends - step should be the next part
+                        output_name_parts = output_name.split('_')
+                        # Find the index after output_name parts
+                        for i in range(len(parts) - len(output_name_parts) + 1):
+                            if parts[i:i+len(output_name_parts)] == output_name_parts:
+                                if i + len(output_name_parts) < len(parts):
+                                    return int(parts[i + len(output_name_parts)])
+                    except (ValueError, IndexError):
+                        pass
+                    return -1
+                
+                # Sort by step number and get the highest (most recent step)
+                pt_files.sort(key=get_step_number, reverse=True)
+                generated_voice = pt_files[0]
+                print(f"\\nFound generated voice tensor: {generated_voice.name}")
+            else:
+                print(f"\\n[WARN] No .pt files found in {latest_result_dir}")
+        else:
+            print(f"\\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
+    else:
+        print(f"\\n[WARN] Output directory not found: {out_dir}")
 
     if generated_voice:
         # Copy to output directory
-        output_voice = export_dir / output_name
-        import shutil
+        output_voice = export_dir / generated_voice.name
         shutil.copy2(generated_voice, output_voice)
         print(f"\\n[OK] Generated voice tensor saved to: {output_voice}")
         print(f"\\nYou can use this voice tensor with kokoro_tts_generation.exs:")
         print(f"  elixir kokoro_tts_generation.exs \"<text>\" --voice-file {output_voice}")
     else:
         print(f"\\n[WARN] Could not find generated voice tensor")
-        print(f"  Searched in: {possible_locations}")
-        print(f"  Check the KVoiceWalk output directory manually")
+        print(f"  Check the KVoiceWalk output directory manually: {out_dir}")
 
-except subprocess.CalledProcessError as e:
-    print(f"\\n[ERROR] KVoiceWalk failed with exit code {e.returncode}")
-    raise
 except Exception as e:
     print(f"\\n[ERROR] Error running KVoiceWalk: {e}")
     import traceback
@@ -382,9 +431,9 @@ finally:
 
 print("\\n=== Complete ===")
 print(f"Voice cloning completed!")
-if generated_voice:
+if 'generated_voice' in locals() and generated_voice:
     print(f"\\nOutput files in {export_dir.name}/:")
-    print(f"  - {output_name} (Generated voice tensor)")
+    print(f"  - {generated_voice.name if generated_voice else output_name} (Generated voice tensor)")
 """, %{})
 
 IO.puts("\n=== Complete ===")
