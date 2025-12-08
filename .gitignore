@@ -87,6 +87,9 @@ thirdparty/UniRig/examples/**/*.obj
 *.blend1
 *.blend2
 
+# Meshoptimizer build artifacts
+thirdparty/blender-meshoptimizer/meshoptimizer/
+
 # Jupyter/Notebook checkpoints
 .ipynb_checkpoints/
 
