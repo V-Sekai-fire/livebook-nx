@@ -34,15 +34,29 @@ dependencies = [
   "scipy",
   "torch",
   "torchvision",
+  "tensorboard",
   "torch-geometric",
+  "torch_scatter @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_scatter-2.1.2%2Bpt27cu118-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'",
+  "torch_scatter @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_scatter-2.1.2%2Bpt27cu118-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux'",
+  "torch-sparse @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_sparse-0.6.18%2Bpt27cu118-cp311-cp311-win_amd64.whl ; sys_platform == 'win32'",
+  "torch-sparse @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_sparse-0.6.18%2Bpt27cu118-cp311-cp311-linux_x86_64.whl ; sys_platform == 'linux'",
   "trimesh",
   "open3d",
+  "opencv-python",
   "tqdm",
   "scikit-learn",
   "fast-simplification",
-  "meshoptimizer",
   "bpy==4.5.*",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+torchvision = { index = "pytorch-cu118" }
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
 """)
 
 # Parse command-line arguments
@@ -235,92 +249,145 @@ if not skip_optimization:
     print(f"Original: {original_vertices} vertices, {original_faces} faces")
 
     if original_vertices > target_vertices:
-        import meshoptimizer
-
-        # Extract mesh data from Blender
-        mesh_data = mesh_obj.data
-        vertices = np.array([v.co[:] for v in mesh_data.vertices], dtype=np.float32)
-
-        # Get face indices
-        faces = []
-        for poly in mesh_data.polygons:
-            face_verts = [mesh_data.loops[i].vertex_index for i in range(poly.loop_start, poly.loop_start + poly.loop_total)]
-            # Triangulate if needed (meshoptimizer works with triangles)
-            if len(face_verts) == 3:
-                faces.append(face_verts)
-            elif len(face_verts) == 4:
-                # Split quad into two triangles
-                faces.append([face_verts[0], face_verts[1], face_verts[2]])
-                faces.append([face_verts[0], face_verts[2], face_verts[3]])
-            else:
-                # Triangulate n-gon (simple fan triangulation)
-                for i in range(1, len(face_verts) - 1):
-                    faces.append([face_verts[0], face_verts[i], face_verts[i + 1]])
-
-        indices = np.array(faces, dtype=np.uint32).flatten()
-
-        # Calculate target index count (approximately 3x target_vertices for triangles)
-        target_indices = target_vertices * 3
-
-        print(f"Simplifying mesh using meshoptimizer...")
-        print(f"  Input: {len(vertices)} vertices, {len(indices) // 3} triangles")
-        print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
-
-        # Use meshoptimizer to simplify
-        # meshoptimizer API: simplify(destination, indices, vertex_positions, index_count=None, vertex_count=None,
-        #                             vertex_positions_stride=None, target_index_count=None, target_error=0.01,
-        #                             options=0, result_error=None)
-        # Flatten vertices array and ensure it's contiguous
-        vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
-        # Try stride as number of floats (3) - some bindings use this instead of bytes
-        # If this doesn't work, try 12 (bytes: 3 floats * 4 bytes)
-        vertex_positions_stride = 3  # number of floats per vertex
-        target_error = 0.01  # Error threshold
-
-        # Prepare arrays with correct types and ensure contiguous
-        indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
-        index_count = len(indices_uint32)
-        vertex_count = len(vertices)
-        target_indices_int = int(target_indices)
-
-        # Validate inputs
-        if index_count == 0 or vertex_count == 0:
-            raise ValueError("Empty mesh data")
-        if target_indices_int <= 0:
-            raise ValueError("Invalid target index count")
-
-        # Create destination array for simplified indices (must be contiguous and large enough)
-        # Make it slightly larger than target to be safe
-        destination = np.zeros(max(target_indices_int, index_count), dtype=np.uint32)
-
         try:
-            # Call meshoptimizer.simplify with all required parameters
-            # Use keyword arguments for optional parameters to avoid type issues
-            result_count = meshoptimizer.simplify(
-                destination,
-                indices_uint32,
-                vertex_positions,
-                index_count=index_count,
-                vertex_count=vertex_count,
-                vertex_positions_stride=vertex_positions_stride,
-                target_index_count=target_indices_int,
-                target_error=target_error
-            )
-            # Extract the actual simplified indices
-            if result_count is not None and result_count > 0:
-                actual_count = int(result_count)
-                simplified_indices = destination[:actual_count]
-                print(f"  meshoptimizer returned {actual_count} indices ({actual_count // 3} triangles)")
-            else:
-                # If no count returned, check if destination was modified
-                # Find first zero or use target count
-                nonzero_mask = destination != 0
-                if np.any(nonzero_mask):
-                    actual_count = np.where(nonzero_mask)[0][-1] + 1 if len(np.where(nonzero_mask)[0]) > 0 else target_indices_int
+            import ctypes
+            import platform
+            import os
+
+            # Load meshoptimizer library from thirdparty/blender-meshoptimizer
+            meshopt_lib = None
+            system = platform.system()
+            if system == "Windows":
+                lib_name = "meshoptimizer.dll"
+            elif system == "Darwin":  # macOS
+                lib_name = "libmeshoptimizer.dylib"
+            else:  # Linux
+                lib_name = "libmeshoptimizer.so"
+
+            # Try to load from thirdparty/blender-meshoptimizer
+            meshopt_path = Path.cwd() / "thirdparty" / "blender-meshoptimizer"
+            search_paths = [
+                str(meshopt_path),
+                str(meshopt_path / "lib"),
+            ]
+
+            for path in search_paths:
+                lib_path = os.path.join(path, lib_name)
+                if os.path.exists(lib_path):
+                    try:
+                        meshopt_lib = ctypes.CDLL(lib_path)
+                        break
+                    except OSError:
+                        continue
+
+            # Try system path as fallback
+            if meshopt_lib is None:
+                try:
+                    meshopt_lib = ctypes.CDLL(lib_name)
+                except OSError:
+                    pass
+
+            if meshopt_lib is None:
+                raise ImportError(f"Could not load meshoptimizer library ({lib_name}). Please ensure it's built and available.")
+
+            # Setup function signatures
+            meshopt_lib.meshopt_simplify.argtypes = [
+                ctypes.POINTER(ctypes.c_uint32),  # destination
+                ctypes.POINTER(ctypes.c_uint32),  # indices
+                ctypes.c_size_t,  # index_count
+                ctypes.POINTER(ctypes.c_float),  # vertex_positions
+                ctypes.c_size_t,  # vertex_count
+                ctypes.c_size_t,  # vertex_positions_stride
+                ctypes.c_size_t,  # target_index_count
+                ctypes.c_float,  # target_error
+                ctypes.c_uint32,  # options
+                ctypes.POINTER(ctypes.c_float),  # result_error (can be NULL)
+            ]
+            meshopt_lib.meshopt_simplify.restype = ctypes.c_size_t
+
+            meshopt_lib.meshopt_simplifyScale.argtypes = [
+                ctypes.POINTER(ctypes.c_float),  # vertex_positions
+                ctypes.c_size_t,  # vertex_count
+                ctypes.c_size_t,  # vertex_positions_stride
+            ]
+            meshopt_lib.meshopt_simplifyScale.restype = ctypes.c_float
+
+            # Extract mesh data from Blender
+            mesh_data = mesh_obj.data
+            vertices = np.array([v.co[:] for v in mesh_data.vertices], dtype=np.float32)
+
+            # Get face indices
+            faces = []
+            for poly in mesh_data.polygons:
+                face_verts = [mesh_data.loops[i].vertex_index for i in range(poly.loop_start, poly.loop_start + poly.loop_total)]
+                # Triangulate if needed (meshoptimizer works with triangles)
+                if len(face_verts) == 3:
+                    faces.append(face_verts)
+                elif len(face_verts) == 4:
+                    # Split quad into two triangles
+                    faces.append([face_verts[0], face_verts[1], face_verts[2]])
+                    faces.append([face_verts[0], face_verts[2], face_verts[3]])
                 else:
-                    actual_count = target_indices_int
-                simplified_indices = destination[:actual_count]
-                print(f"  meshoptimizer modified destination in place, using {actual_count} indices")
+                    # Triangulate n-gon (simple fan triangulation)
+                    for i in range(1, len(face_verts) - 1):
+                        faces.append([face_verts[0], face_verts[i], face_verts[i + 1]])
+
+            indices = np.array(faces, dtype=np.uint32).flatten()
+
+            # Calculate target index count (approximately 3x target_vertices for triangles)
+            target_indices = target_vertices * 3
+
+            print(f"Simplifying mesh using meshoptimizer...")
+            print(f"  Input: {len(vertices)} vertices, {len(indices) // 3} triangles")
+            print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
+
+            # Prepare arrays for ctypes
+            vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
+            indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
+            index_count = len(indices_uint32)
+            vertex_count = len(vertices)
+            target_indices_int = int(target_indices)
+            vertex_positions_stride = ctypes.sizeof(ctypes.c_float) * 3  # 12 bytes
+
+            # Calculate error scale based on mesh bounding box
+            vertex_positions_ptr = vertex_positions.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            error_scale = meshopt_lib.meshopt_simplifyScale(
+                vertex_positions_ptr,
+                vertex_count,
+                vertex_positions_stride
+            )
+
+            # Use error-based simplification with target index count
+            target_error = 0.01 * error_scale  # Scale error relative to mesh size
+            options = 0  # No special options
+
+            # Create destination array for simplified indices
+            destination = np.zeros(index_count, dtype=np.uint32)
+            result_error = ctypes.c_float()
+
+            # Call meshopt_simplify
+            indices_ptr = indices_uint32.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+            destination_ptr = destination.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+
+            result_count = meshopt_lib.meshopt_simplify(
+                destination_ptr,
+                indices_ptr,
+                index_count,
+                vertex_positions_ptr,
+                vertex_count,
+                vertex_positions_stride,
+                target_indices_int,
+                target_error,
+                options,
+                ctypes.byref(result_error)
+            )
+
+            if result_count == 0:
+                raise ValueError("meshoptimizer returned 0 indices")
+
+            # Extract simplified indices
+            simplified_indices = destination[:result_count]
+            print(f"  meshoptimizer returned {result_count} indices ({result_count // 3} triangles)")
 
             # Validate that we actually got simplified indices
             if len(simplified_indices) >= len(indices_uint32):
@@ -332,8 +399,8 @@ if not skip_optimization:
             simplified_vertices = vertices[unique_vertex_indices]
 
             print(f"  Simplified to {len(unique_vertex_indices)} unique vertices, {len(simplified_indices) // 3} triangles")
-        except Exception as e:
-            print(f"Warning: meshoptimizer.simplify failed: {e}")
+        except (ImportError, Exception) as e:
+            print(f"Warning: meshoptimizer failed: {e}")
             print("Falling back to Blender's decimate modifier...")
             # Fallback to Blender decimate
             bpy.context.view_layer.objects.active = mesh_obj
@@ -380,6 +447,18 @@ print(f"✓ Exported OBJ for RigNet: {temp_obj_path}")
 # Step 2: Run RigNet prediction
 print("\\n=== Step 2: Running RigNet Prediction ===")
 
+# Try to handle torch_scatter import errors gracefully for CUDA
+# If CUDA version fails, the error will propagate but Erlang will handle it
+try:
+    import torch_scatter
+    print("✓ torch_scatter loaded")
+except Exception as e:
+    print(f"Warning: torch_scatter import failed: {e}")
+    print("  This may be due to missing CUDA dependencies")
+    print("  Attempting to continue...")
+    # Let the error propagate - Erlang will handle it
+    raise
+
 # Import RigNet modules
 try:
     from RigNet.quick_start import (
@@ -397,6 +476,7 @@ except Exception as e:
     print(f"Error importing RigNet modules: {e}")
     import traceback
     traceback.print_exc()
+    # Let Erlang handle the error
     raise
 
 # Load networks
@@ -594,92 +674,145 @@ if not skip_optimization:
     print(f"Original: {original_vertices} vertices, {original_faces} faces")
 
     if original_vertices > target_vertices:
-        import meshoptimizer
-
-        # Extract mesh data from Blender
-        mesh_data = mesh_obj.data
-        vertices = np.array([v.co[:] for v in mesh_data.vertices], dtype=np.float32)
-
-        # Get face indices
-        faces = []
-        for poly in mesh_data.polygons:
-            face_verts = [mesh_data.loops[i].vertex_index for i in range(poly.loop_start, poly.loop_start + poly.loop_total)]
-            # Triangulate if needed (meshoptimizer works with triangles)
-            if len(face_verts) == 3:
-                faces.append(face_verts)
-            elif len(face_verts) == 4:
-                # Split quad into two triangles
-                faces.append([face_verts[0], face_verts[1], face_verts[2]])
-                faces.append([face_verts[0], face_verts[2], face_verts[3]])
-            else:
-                # Triangulate n-gon (simple fan triangulation)
-                for i in range(1, len(face_verts) - 1):
-                    faces.append([face_verts[0], face_verts[i], face_verts[i + 1]])
-
-        indices = np.array(faces, dtype=np.uint32).flatten()
-
-        # Calculate target index count (approximately 3x target_vertices for triangles)
-        target_indices = target_vertices * 3
-
-        print(f"Simplifying mesh using meshoptimizer...")
-        print(f"  Input: {len(vertices)} vertices, {len(indices) // 3} triangles")
-        print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
-
-        # Use meshoptimizer to simplify
-        # meshoptimizer API: simplify(destination, indices, vertex_positions, index_count=None, vertex_count=None,
-        #                             vertex_positions_stride=None, target_index_count=None, target_error=0.01,
-        #                             options=0, result_error=None)
-        # Flatten vertices array and ensure it's contiguous
-        vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
-        # Try stride as number of floats (3) - some bindings use this instead of bytes
-        # If this doesn't work, try 12 (bytes: 3 floats * 4 bytes)
-        vertex_positions_stride = 3  # number of floats per vertex
-        target_error = 0.01  # Error threshold
-
-        # Prepare arrays with correct types and ensure contiguous
-        indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
-        index_count = len(indices_uint32)
-        vertex_count = len(vertices)
-        target_indices_int = int(target_indices)
-
-        # Validate inputs
-        if index_count == 0 or vertex_count == 0:
-            raise ValueError("Empty mesh data")
-        if target_indices_int <= 0:
-            raise ValueError("Invalid target index count")
-
-        # Create destination array for simplified indices (must be contiguous and large enough)
-        # Make it slightly larger than target to be safe
-        destination = np.zeros(max(target_indices_int, index_count), dtype=np.uint32)
-
         try:
-            # Call meshoptimizer.simplify with all required parameters
-            # Use keyword arguments for optional parameters to avoid type issues
-            result_count = meshoptimizer.simplify(
-                destination,
-                indices_uint32,
-                vertex_positions,
-                index_count=index_count,
-                vertex_count=vertex_count,
-                vertex_positions_stride=vertex_positions_stride,
-                target_index_count=target_indices_int,
-                target_error=target_error
-            )
-            # Extract the actual simplified indices
-            if result_count is not None and result_count > 0:
-                actual_count = int(result_count)
-                simplified_indices = destination[:actual_count]
-                print(f"  meshoptimizer returned {actual_count} indices ({actual_count // 3} triangles)")
-            else:
-                # If no count returned, check if destination was modified
-                # Find first zero or use target count
-                nonzero_mask = destination != 0
-                if np.any(nonzero_mask):
-                    actual_count = np.where(nonzero_mask)[0][-1] + 1 if len(np.where(nonzero_mask)[0]) > 0 else target_indices_int
+            import ctypes
+            import platform
+            import os
+
+            # Load meshoptimizer library from thirdparty/blender-meshoptimizer
+            meshopt_lib = None
+            system = platform.system()
+            if system == "Windows":
+                lib_name = "meshoptimizer.dll"
+            elif system == "Darwin":  # macOS
+                lib_name = "libmeshoptimizer.dylib"
+            else:  # Linux
+                lib_name = "libmeshoptimizer.so"
+
+            # Try to load from thirdparty/blender-meshoptimizer
+            meshopt_path = Path.cwd() / "thirdparty" / "blender-meshoptimizer"
+            search_paths = [
+                str(meshopt_path),
+                str(meshopt_path / "lib"),
+            ]
+
+            for path in search_paths:
+                lib_path = os.path.join(path, lib_name)
+                if os.path.exists(lib_path):
+                    try:
+                        meshopt_lib = ctypes.CDLL(lib_path)
+                        break
+                    except OSError:
+                        continue
+
+            # Try system path as fallback
+            if meshopt_lib is None:
+                try:
+                    meshopt_lib = ctypes.CDLL(lib_name)
+                except OSError:
+                    pass
+
+            if meshopt_lib is None:
+                raise ImportError(f"Could not load meshoptimizer library ({lib_name}). Please ensure it's built and available.")
+
+            # Setup function signatures
+            meshopt_lib.meshopt_simplify.argtypes = [
+                ctypes.POINTER(ctypes.c_uint32),  # destination
+                ctypes.POINTER(ctypes.c_uint32),  # indices
+                ctypes.c_size_t,  # index_count
+                ctypes.POINTER(ctypes.c_float),  # vertex_positions
+                ctypes.c_size_t,  # vertex_count
+                ctypes.c_size_t,  # vertex_positions_stride
+                ctypes.c_size_t,  # target_index_count
+                ctypes.c_float,  # target_error
+                ctypes.c_uint32,  # options
+                ctypes.POINTER(ctypes.c_float),  # result_error (can be NULL)
+            ]
+            meshopt_lib.meshopt_simplify.restype = ctypes.c_size_t
+
+            meshopt_lib.meshopt_simplifyScale.argtypes = [
+                ctypes.POINTER(ctypes.c_float),  # vertex_positions
+                ctypes.c_size_t,  # vertex_count
+                ctypes.c_size_t,  # vertex_positions_stride
+            ]
+            meshopt_lib.meshopt_simplifyScale.restype = ctypes.c_float
+
+            # Extract mesh data from Blender
+            mesh_data = mesh_obj.data
+            vertices = np.array([v.co[:] for v in mesh_data.vertices], dtype=np.float32)
+
+            # Get face indices
+            faces = []
+            for poly in mesh_data.polygons:
+                face_verts = [mesh_data.loops[i].vertex_index for i in range(poly.loop_start, poly.loop_start + poly.loop_total)]
+                # Triangulate if needed (meshoptimizer works with triangles)
+                if len(face_verts) == 3:
+                    faces.append(face_verts)
+                elif len(face_verts) == 4:
+                    # Split quad into two triangles
+                    faces.append([face_verts[0], face_verts[1], face_verts[2]])
+                    faces.append([face_verts[0], face_verts[2], face_verts[3]])
                 else:
-                    actual_count = target_indices_int
-                simplified_indices = destination[:actual_count]
-                print(f"  meshoptimizer modified destination in place, using {actual_count} indices")
+                    # Triangulate n-gon (simple fan triangulation)
+                    for i in range(1, len(face_verts) - 1):
+                        faces.append([face_verts[0], face_verts[i], face_verts[i + 1]])
+
+            indices = np.array(faces, dtype=np.uint32).flatten()
+
+            # Calculate target index count (approximately 3x target_vertices for triangles)
+            target_indices = target_vertices * 3
+
+            print(f"Simplifying mesh using meshoptimizer...")
+            print(f"  Input: {len(vertices)} vertices, {len(indices) // 3} triangles")
+            print(f"  Target: ~{target_vertices} vertices, ~{target_indices // 3} triangles")
+
+            # Prepare arrays for ctypes
+            vertex_positions = np.ascontiguousarray(vertices.flatten(), dtype=np.float32)
+            indices_uint32 = np.ascontiguousarray(indices.astype(np.uint32), dtype=np.uint32)
+            index_count = len(indices_uint32)
+            vertex_count = len(vertices)
+            target_indices_int = int(target_indices)
+            vertex_positions_stride = ctypes.sizeof(ctypes.c_float) * 3  # 12 bytes
+
+            # Calculate error scale based on mesh bounding box
+            vertex_positions_ptr = vertex_positions.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            error_scale = meshopt_lib.meshopt_simplifyScale(
+                vertex_positions_ptr,
+                vertex_count,
+                vertex_positions_stride
+            )
+
+            # Use error-based simplification with target index count
+            target_error = 0.01 * error_scale  # Scale error relative to mesh size
+            options = 0  # No special options
+
+            # Create destination array for simplified indices
+            destination = np.zeros(index_count, dtype=np.uint32)
+            result_error = ctypes.c_float()
+
+            # Call meshopt_simplify
+            indices_ptr = indices_uint32.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+            destination_ptr = destination.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32))
+
+            result_count = meshopt_lib.meshopt_simplify(
+                destination_ptr,
+                indices_ptr,
+                index_count,
+                vertex_positions_ptr,
+                vertex_count,
+                vertex_positions_stride,
+                target_indices_int,
+                target_error,
+                options,
+                ctypes.byref(result_error)
+            )
+
+            if result_count == 0:
+                raise ValueError("meshoptimizer returned 0 indices")
+
+            # Extract simplified indices
+            simplified_indices = destination[:result_count]
+            print(f"  meshoptimizer returned {result_count} indices ({result_count // 3} triangles)")
 
             # Validate that we actually got simplified indices
             if len(simplified_indices) >= len(indices_uint32):
@@ -691,8 +824,8 @@ if not skip_optimization:
             simplified_vertices = vertices[unique_vertex_indices]
 
             print(f"  Simplified to {len(unique_vertex_indices)} unique vertices, {len(simplified_indices) // 3} triangles")
-        except Exception as e:
-            print(f"Warning: meshoptimizer.simplify failed: {e}")
+        except (ImportError, Exception) as e:
+            print(f"Warning: meshoptimizer failed: {e}")
             print("Falling back to Blender's decimate modifier...")
             # Fallback to Blender decimate
             bpy.context.view_layer.objects.active = mesh_obj
@@ -739,6 +872,18 @@ print(f"✓ Exported OBJ for RigNet: {temp_obj_path}")
 # Step 2: Run RigNet prediction
 print("\\n=== Step 2: Running RigNet Prediction ===")
 
+# Try to handle torch_scatter import errors gracefully for CUDA
+# If CUDA version fails, the error will propagate but Erlang will handle it
+try:
+    import torch_scatter
+    print("✓ torch_scatter loaded")
+except Exception as e:
+    print(f"Warning: torch_scatter import failed: {e}")
+    print("  This may be due to missing CUDA dependencies")
+    print("  Attempting to continue...")
+    # Let the error propagate - Erlang will handle it
+    raise
+
 # Import RigNet modules
 try:
     from RigNet.quick_start import (
@@ -756,6 +901,7 @@ except Exception as e:
     print(f"Error importing RigNet modules: {e}")
     import traceback
     traceback.print_exc()
+    # Let Erlang handle the error
     raise
 
 # Load networks

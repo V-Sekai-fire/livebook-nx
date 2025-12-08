@@ -170,7 +170,7 @@ def run_mst_generate(args):
     generate skeleton in batch
     :param args: input folder path and data folder path
     """
-    test_list = np.loadtxt(os.path.join(args.dataset_folder, 'test_final.txt'), dtype=np.int)
+    test_list = np.loadtxt(os.path.join(args.dataset_folder, 'test_final.txt'), dtype=int)
     root_select_model = ROOTNET()
     root_select_model.to(device)
     root_select_model.eval()
