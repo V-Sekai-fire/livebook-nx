@@ -21,6 +21,9 @@ import itertools
 import bpy
 from mathutils import Vector
 
+# Require robust skin transfer - crash if not available
+from .robust_skin_transfer import robust_skin_weights_transfer
+
 from ..data.raw_data import RawData, RawSkin
 from ..data.extract import process_mesh, process_armature, get_arranged_bones
 
@@ -285,6 +288,27 @@ def make_armature(
     vertex_group_reweight = skin[np.arange(skin.shape[0])[..., None], argsorted]
     vertex_group_reweight = vertex_group_reweight / vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[...,None]
     vertex_group_reweight = np.nan_to_num(vertex_group_reweight)
+    
+    # Build source mesh faces from vertices (create a simple triangulation for robust transfer)
+    # For robust transfer, we need faces. If we don't have explicit faces, create a simple mesh
+    # This is a fallback - ideally we'd have the actual mesh topology
+    try:
+        # Try to get faces from mesh_vertices if available
+        # For now, we'll use a simple approach: create faces from a convex hull or use KDTree-based triangulation
+        from scipy.spatial import ConvexHull
+        try:
+            # Try to create a simple mesh from vertices using convex hull
+            # This is not ideal but works for the robust transfer
+            hull = ConvexHull(vertices)
+            source_faces = hull.simplices
+        except:
+            # If convex hull fails, create a minimal mesh structure
+            # This is a fallback - the robust transfer will use fallback methods
+            source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+    except Exception as e:
+        print(f"[Warning] Could not create source mesh faces: {e}")
+        source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+    
     tree = cKDTree(vertices)
     for ob in objects:
         if ob.type != 'MESH':
@@ -303,19 +327,66 @@ def make_armature(
         for v in ob.data.vertices:
             n_vertices.append(matrix_world_rot @ np.array(v.co) + matrix_world_bias)
         n_vertices = np.stack(n_vertices)
-
-        _, index = tree.query(n_vertices)
-
-        for v, co in enumerate(tqdm(n_vertices)):
+        
+        # Get target mesh faces from Blender object
+        target_faces = []
+        for poly in ob.data.polygons:
+            if len(poly.vertices) >= 3:
+                # Triangulate polygon if needed
+                for i in range(1, len(poly.vertices) - 1):
+                    target_faces.append([poly.vertices[0], poly.vertices[i], poly.vertices[i + 1]])
+        target_faces = np.array(target_faces, dtype=np.int32) if target_faces else np.array([], dtype=np.int32).reshape(0, 3)
+        
+        # Use robust transfer - requires libigl, will crash if not available
+        if len(source_faces) == 0 or len(target_faces) == 0:
+            raise ValueError(
+                f"Cannot use robust skin transfer: source_faces={len(source_faces)}, target_faces={len(target_faces)}. "
+                f"Both meshes must have valid face data."
+            )
+        
+        print(f"[Info] Using robust skin weight transfer for {ob.name}")
+        # Transfer weights using robust method
+        # Compute search radius as 5% of target mesh bounding box diagonal
+        bbox_min = n_vertices.min(axis=0)
+        bbox_max = n_vertices.max(axis=0)
+        search_radius = 0.05 * np.linalg.norm(bbox_max - bbox_min)
+        
+        # Transfer weights
+        transferred_skin, success = robust_skin_weights_transfer(
+            V1=vertices,
+            F1=source_faces,
+            W1=skin,
+            V2=n_vertices,
+            F2=target_faces,
+            SearchRadius=search_radius,
+            NormalThreshold=30.0,
+            num_smooth_iter_steps=10,
+            smooth_alpha=0.2,
+            use_smoothing=True
+        )
+        
+        if not success:
+            raise RuntimeError(f"Robust skin weight transfer failed for {ob.name}")
+        
+        # Recompute argsorted and vertex_group_reweight for transferred skin
+        transferred_argsorted = np.argsort(-transferred_skin, axis=1)
+        transferred_vertex_group_reweight = transferred_skin[np.arange(transferred_skin.shape[0])[..., None], transferred_argsorted]
+        transferred_vertex_group_reweight = transferred_vertex_group_reweight / transferred_vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[...,None]
+        transferred_vertex_group_reweight = np.nan_to_num(transferred_vertex_group_reweight)
+        
+        # Apply transferred weights
+        for v in range(len(n_vertices)):
             for ii in range(group_per_vertex):
-                i = argsorted[index[v], ii]
+                i = transferred_argsorted[v, ii]
                 if i >= len(names):
                     continue
                 n = names[i]
                 if n not in ob.vertex_groups:
                     continue
-                        
-                ob.vertex_groups[n].add([v], vertex_group_reweight[index[v], ii], 'REPLACE')
+                ob.vertex_groups[n].add([v], transferred_vertex_group_reweight[v, ii], 'REPLACE')
+        
+        print(f"[Info] Robust transfer completed successfully for {ob.name}")
+        
         armature.select_set(False)
         ob.select_set(False)
     armature.parent = local_parent

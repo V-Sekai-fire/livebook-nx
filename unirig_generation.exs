@@ -64,8 +64,8 @@ dependencies = [
   "open3d",
   "pyrender",
   "wandb",
-  # Note: flash-attn is installed separately after torch is available
-  # to avoid build isolation issues. See Python code below.
+  "torch",
+  "libigl",
   # Note: UniRig is used from local thirdparty/UniRig directory
 ]
 
