@@ -44,8 +44,8 @@ dependencies = [
   "kokoro>=0.9.4",
   "resemblyzer",
   "soundfile",
-  "torch",
-  "torchaudio",
+  "torch>=2.0.0,<2.5.0",  # Pin to stable version range for Windows compatibility
+  "torchaudio>=2.0.0,<2.5.0",
   "numpy<2.0",  # Pin to <2.0 for compatibility with thinc (spaCy dependency)
   "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl",
   "huggingface-hub",
@@ -109,7 +109,7 @@ defmodule ArgsParser do
   end
 
   def parse(args) do
-    {opts, args, _} = OptionParser.parse(args,
+    {opts, _args, _} = OptionParser.parse(args,
       switches: [
         target_audio: :string,
         target_text: :string,
@@ -301,7 +301,26 @@ print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''
 print(f"Output Directory: {export_dir}")
 print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
 
+# Verify PyTorch can be imported before proceeding
+print("\\nVerifying PyTorch installation...")
+try:
+    import torch
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+except ImportError as e:
+    print(f"\\n[ERROR] Failed to import PyTorch: {e}")
+    print("This may be due to missing DLLs or an incomplete installation.")
+    print("Please ensure Visual C++ Redistributables are installed.")
+    raise
+except Exception as e:
+    print(f"\\n[ERROR] PyTorch import error: {e}")
+    print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
+    raise
+
 # Import KVoiceWalk modules
+print("\\nImporting KVoiceWalk modules...")
 from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
 from utilities.kvoicewalk import KVoiceWalk
 
