@@ -318,116 +318,6 @@ def smooth(
     return W2_smoothed, VIDs_to_smooth
 
 
-def propagate_weights_from_matched(
-    V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray,
-    max_hops: int = 5
-) -> np.ndarray:
-    """
-    Propagate weights from matched vertices to unmatched vertices using mesh connectivity.
-    Uses edge-based propagation (geodesic distance) which is more natural than Euclidean distance.
-    This creates a "rubbery" fallback when inpainting fails.
-    
-    Args:
-        V2: #V2 by 3 target mesh vertices
-        F2: #F2 by 3 target mesh triangles indices
-        W2: #V2 by num_bones skin weights (matched vertices have valid weights)
-        Matched: #V2 array of bools, True if vertex has matched weights
-        max_hops: Maximum number of edge hops to search for matched neighbors
-    
-    Returns:
-        W2_propagated: #V2 by num_bones propagated weights
-    """
-    W2_propagated = np.array(W2, copy=True)
-    NotMatched = ~Matched
-    
-    # Build adjacency list for edge-based propagation
-    adj_list = igl.adjacency_list(F2)
-    
-    # For each unmatched vertex, find matched vertices reachable via mesh edges
-    for vid in range(V2.shape[0]):
-        if not NotMatched[vid]:
-            continue  # Skip matched vertices
-        
-        # BFS to find matched vertices within max_hops
-        queue = [(vid, 0)]  # (vertex_id, hop_count)
-        visited = {vid}
-        matched_neighbors = []  # (vertex_id, hop_count, edge_distance)
-        
-        while len(queue) > 0:
-            current, hops = queue.pop(0)
-            
-            # Check if we've exceeded max hops
-            if hops >= max_hops:
-                continue
-            
-            # Check neighbors
-            for neighbor in adj_list[current]:
-                if neighbor in visited:
-                    continue
-                visited.add(neighbor)
-                
-                # Check if this neighbor is matched
-                if Matched[neighbor]:
-                    # Compute edge distance (geodesic distance along mesh)
-                    edge_dist = np.linalg.norm(V2[current] - V2[neighbor])
-                    matched_neighbors.append((neighbor, hops + 1, edge_dist))
-                else:
-                    # Continue BFS
-                    queue.append((neighbor, hops + 1))
-        
-        # If we found matched neighbors, blend their weights
-        if len(matched_neighbors) > 0:
-            # Sort by hop count (prefer closer in mesh topology), then by edge distance
-            matched_neighbors.sort(key=lambda x: (x[1], x[2]))
-            
-            # Take closest neighbors (prefer 1-hop, then 2-hop, etc.)
-            # Use up to 5 neighbors, prioritizing lower hop counts
-            closest = matched_neighbors[:5]
-            
-            # Compute weights: inverse of (hop_count + edge_distance)
-            # This gives more weight to closer neighbors (fewer hops, shorter edges)
-            hop_counts = np.array([x[1] for x in closest])
-            edge_dists = np.array([x[2] for x in closest])
-            
-            # Normalize edge distances by average edge length for fair comparison
-            avg_edge_length = np.mean([np.linalg.norm(V2[i] - V2[j]) 
-                                      for i in range(min(100, len(V2))) 
-                                      for j in adj_list[i] if j < len(V2)])
-            if avg_edge_length > 1e-6:
-                normalized_dists = edge_dists / avg_edge_length
-            else:
-                normalized_dists = edge_dists
-            
-            # Weight = 1 / (hop_count + normalized_edge_distance)
-            # Lower hop count and shorter edges = higher weight
-            weights = 1.0 / (hop_counts + normalized_dists + 1e-6)
-            weights = weights / weights.sum()
-            
-            # Blend weights from matched neighbors
-            blended = np.zeros(W2.shape[1])
-            for i, (nid, _, _) in enumerate(closest):
-                blended += weights[i] * W2[nid]
-            
-            W2_propagated[vid] = blended
-        # If no matched neighbors found via mesh connectivity, 
-        # fall back to finding closest matched vertex by Euclidean distance
-        # (but this should be rare if mesh is well-connected)
-        else:
-            matched_indices = np.where(Matched)[0]
-            if len(matched_indices) > 0:
-                # Find closest matched vertex by Euclidean distance as last resort
-                distances = np.linalg.norm(V2[matched_indices] - V2[vid], axis=1)
-                closest_idx = matched_indices[np.argmin(distances)]
-                W2_propagated[vid] = W2[closest_idx]
-    
-    # Normalize weights to sum to 1 for each vertex
-    row_sums = W2_propagated.sum(axis=1, keepdims=True)
-    row_sums = np.where(row_sums < 1e-6, 1.0, row_sums)  # Avoid division by zero
-    W2_propagated = W2_propagated / row_sums
-    
-    return W2_propagated
-
-
 def robust_skin_weights_transfer(
     V1: np.ndarray, F1: np.ndarray, W1: np.ndarray,
     V2: np.ndarray, F2: np.ndarray,
@@ -483,13 +373,7 @@ def robust_skin_weights_transfer(
     InpaintedWeights, success = inpaint(V2, F2, SkinWeights_interpolated, Matched)
     
     if not success:
-        # Inpainting failed - use mesh connectivity-based propagation from matched vertices
-        # This creates a "rubbery" fallback that propagates weights along mesh edges,
-        # which is more natural than using far-away interpolated weights
-        PropagatedWeights = propagate_weights_from_matched(
-            V2, F2, SkinWeights_interpolated, Matched, max_hops=5
-        )
-        return PropagatedWeights, False
+        return SkinWeights_interpolated, False
     
     # Step 3: Optional smoothing
     if use_smoothing:
