@@ -30,7 +30,7 @@ requires-python = "==3.11.*"
 dependencies = [
   "torch",
   "torchvision",
-  "transformers @ git+https://github.com/huggingface/transformers.git@refs/pull/42407/head",
+  "transformers @ git+https://github.com/huggingface/transformers.git@ff13eb668aa03f151ded71636d723f2e490ad967",
   "numpy<2.0",
   "pillow",
   "imageio[ffmpeg]",
