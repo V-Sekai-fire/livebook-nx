@@ -500,20 +500,21 @@ class BakingRunner:
         while time.time() - start_time < time_out:
             sharp_vertex_index = sharp_vertex_indices[self._vertex_index][0]
             static_position = self._static_positions[self._mesh_index][sharp_vertex_index]
-            transform_position_stack = np.dot(self._transform_matrix_stack, np.array([[static_position[0]],[static_position[1]],[static_position[2]],[1.0]]))
+            # Calculate transform: result is (N, 1) array, flatten to 1D for indexing
+            transform_position_stack = np.dot(self._transform_matrix_stack, np.array([[static_position[0]],[static_position[1]],[static_position[2]],[1.0]])).flatten()
 
             for pose_index in range(pose_count):
                 dynamic_position = self._dynamic_positions[pose_index][self._mesh_index][sharp_vertex_index]
                 pose_index_per_coordinate = pose_index * 3
-                b[pose_index_per_coordinate  ][0] = dynamic_position[0]
-                b[pose_index_per_coordinate+1][0] = dynamic_position[1]
-                b[pose_index_per_coordinate+2][0] = dynamic_position[2]
+                b[pose_index_per_coordinate  ][0] = float(dynamic_position[0])
+                b[pose_index_per_coordinate+1][0] = float(dynamic_position[1])
+                b[pose_index_per_coordinate+2][0] = float(dynamic_position[2])
                 bone_count_per_pose = pose_index * bone_count
                 for bone_index in range(bone_count):
                     position_index_per_coordinate = (bone_count_per_pose + bone_index) * 4
-                    A[pose_index_per_coordinate  ][bone_index] = transform_position_stack[position_index_per_coordinate  ]
-                    A[pose_index_per_coordinate+1][bone_index] = transform_position_stack[position_index_per_coordinate+1]
-                    A[pose_index_per_coordinate+2][bone_index] = transform_position_stack[position_index_per_coordinate+2]
+                    A[pose_index_per_coordinate  ][bone_index] = float(transform_position_stack[position_index_per_coordinate  ])
+                    A[pose_index_per_coordinate+1][bone_index] = float(transform_position_stack[position_index_per_coordinate+1])
+                    A[pose_index_per_coordinate+2][bone_index] = float(transform_position_stack[position_index_per_coordinate+2])
 
             if linear_system_solver == 'SVD':
                 u, s, vh = np.linalg.svd(A, full_matrices=False)
@@ -582,6 +583,8 @@ class BakingRunner:
 import copy
 import random
 import numpy as np
+import time
+from collections import deque
 
 # Create baking runner
 operator = BakingRunner(armature, mesh_objects)
@@ -628,6 +631,16 @@ print("Stage 6: Optimizing vertex weights...")
 total_vertices = sum(len(dic) for dic in operator._sharp_vertex_index_dics)
 processed_vertices = 0
 
+# Initialize ETA estimation
+# Use exponential moving average for better predictions
+time_observations = deque(maxlen=50)  # Keep last 50 observations
+eta_alpha = 0.3  # Exponential smoothing factor (0-1, higher = more weight to recent)
+estimated_time_per_vertex = None
+
+stage6_start_time = time.time()
+last_eta_update_time = time.time()
+eta_update_interval = 5.0  # Update ETA every 5 seconds
+
 for mesh_idx in range(len(mesh_objects)):
     sharp_count = len(operator._sharp_vertex_index_dics[mesh_idx])
     if sharp_count == 0:
@@ -637,9 +650,13 @@ for mesh_idx in range(len(mesh_objects)):
     print(f"  Mesh {mesh_idx + 1}/{len(mesh_objects)}: Processing {sharp_count} sharp vertices...")
     operator._mesh_index = mesh_idx
     operator._vertex_index = 0
+    mesh_start_vertex_idx = processed_vertices
 
     # Process vertices in blocks (with timeout for UI responsiveness)
     while operator._vertex_index < sharp_count:
+        block_start_time = time.time()
+        block_start_vertex_idx = processed_vertices
+
         block_size = operator.optimize_stage_6(
             mesh_objects,
             config['solver'],
@@ -647,10 +664,61 @@ for mesh_idx in range(len(mesh_objects)):
             config['prune_threshold'],
             1.0 / config['refresh_frequency']
         )
+
+        block_end_time = time.time()
+        block_time = block_end_time - block_start_time
         processed_vertices += block_size
+
+        # Update time observations for ETA estimation
+        if block_size > 0:
+            time_per_vertex = block_time / block_size
+            time_observations.append(time_per_vertex)
+
+            # Update exponential moving average
+            if estimated_time_per_vertex is None:
+                estimated_time_per_vertex = time_per_vertex
+            else:
+                # Exponential moving average: more weight to recent observations
+                estimated_time_per_vertex = eta_alpha * time_per_vertex + (1 - eta_alpha) * estimated_time_per_vertex
+
+        # Print progress with ETA
         if block_size > 0:
             progress = 100.0 * processed_vertices / total_vertices if total_vertices > 0 else 0
-            print(f"    Progress: {progress:.1f}% ({processed_vertices}/{total_vertices} vertices)")
+            current_time = time.time()
+
+            # Calculate ETA using exponential moving average
+            eta_seconds = None
+            if processed_vertices > 0 and total_vertices > processed_vertices:
+                remaining_vertices = total_vertices - processed_vertices
+
+                # Use exponential moving average if available
+                if estimated_time_per_vertex is not None and estimated_time_per_vertex > 0:
+                    eta_seconds = estimated_time_per_vertex * remaining_vertices
+                elif len(time_observations) > 0:
+                    # Fall back to recent average
+                    recent_avg = np.mean(list(time_observations)[-min(10, len(time_observations)):])
+                    eta_seconds = recent_avg * remaining_vertices
+                else:
+                    # Simple linear extrapolation as last resort
+                    elapsed_time = current_time - stage6_start_time
+                    avg_time_per_vertex = elapsed_time / processed_vertices
+                    eta_seconds = avg_time_per_vertex * remaining_vertices
+
+            # Format ETA
+            if eta_seconds is not None:
+                eta_hours = int(eta_seconds / 3600)
+                eta_minutes = int((eta_seconds % 3600) / 60)
+                eta_secs = int(eta_seconds % 60)
+                if eta_hours > 0:
+                    eta_str = f"{eta_hours}h {eta_minutes}m {eta_secs}s"
+                elif eta_minutes > 0:
+                    eta_str = f"{eta_minutes}m {eta_secs}s"
+                else:
+                    eta_str = f"{eta_secs}s"
+                print(f"    Progress: {progress:.1f}% ({processed_vertices}/{total_vertices} vertices) | ETA: {eta_str}")
+            else:
+                print(f"    Progress: {progress:.1f}% ({processed_vertices}/{total_vertices} vertices)")
+
         if operator._should_terminate:
             break
 
