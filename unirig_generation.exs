@@ -276,241 +276,301 @@ def run_unirig_inference(
     data_name: str = None,
     unirig_base_path: str = None
 ):
-    # Run UniRig inference directly without subprocess
-    torch.set_float32_matmul_precision('high')
-    L.seed_everything(seed, workers=True)
+    # Patch UniRig's Exporter to use USD instead of FBX when path is USD
+    # This removes all internal FBX usage in UniRig
+    from src.data.exporter import Exporter
+    original_export_fbx = Exporter._export_fbx
 
-    # Load task config
-    task = load_config('task', task_path)
-    mode = task.mode
-    assert mode in ['train', 'predict', 'validate']
+    def patched_export_fbx(self, path, vertices=None, joints=None, skin=None, parents=None, names=None, faces=None, extrude_size=0.03, group_per_vertex=-1, add_root=False, do_not_normalize=False, use_extrude_bone=True, use_connect_unique_child=True, extrude_from_parent=True, tails=None):
+        # Always export as USD using Blender - no FBX usage
+        # Convert .fbx path to .usdc if needed
+        import bpy
+        import os
 
-    # Import UniRig modules (suppress warnings during import)
-    import warnings
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        from src.data.extract import get_files
-        from src.data.datapath import Datapath
-        from src.data.dataset import UniRigDatasetModule, DatasetConfig
-        from src.data.transform import TransformConfig
-        from src.tokenizer.spec import TokenizerConfig
-        from src.tokenizer.parse import get_tokenizer
-        from src.model.parse import get_model
-        from src.system.parse import get_system, get_writer
-        from src.inference.download import download
-        from lightning.pytorch.callbacks import ModelCheckpoint
+        # Change file extension from .fbx to .usdc
+        if path.lower().endswith('.fbx'):
+            path = path[:-4] + '.usdc'
+        elif not path.lower().endswith(('.usd', '.usda', '.usdc')):
+            # If no extension or other extension, add .usdc
+            path = path + '.usdc'
 
-    # Load configs first (needed for extraction)
-    data_config = load_config('data', os.path.join('configs/data', task.components.data))
-    transform_config = load_config('transform', os.path.join('configs/transform', task.components.transform))
+        # Build the armature/mesh in Blender (same as original _export_fbx)
+        self._safe_make_dir(path)
+        self._clean_bpy()
+        self._make_armature(
+            vertices=vertices,
+            joints=joints,
+            skin=skin,
+            parents=parents,
+            names=names,
+            faces=faces,
+            extrude_size=extrude_size,
+            group_per_vertex=group_per_vertex,
+            add_root=add_root,
+            do_not_normalize=do_not_normalize,
+            use_extrude_bone=use_extrude_bone,
+            use_connect_unique_child=use_connect_unique_child,
+            extrude_from_parent=extrude_from_parent,
+            tails=tails,
+        )
 
-    # Get files - include USD formats in require_suffix
-    # Extract just the filename stem to avoid nested directory structures
-    # get_files creates output_dir based on the input path, which can create nested paths
-    # We fix this by using just the filename stem for the output directory
-    input_path_abs = os.path.abspath(input_path)
-    input_basename = os.path.basename(input_path_abs)
-    input_stem = os.path.splitext(input_basename)[0]  # Get filename without extension
+        # Export as USD - pipeline is now Blender/USD only
+        bpy.ops.wm.usd_export(
+            filepath=path,
+            export_materials=True,
+            export_textures=True,
+            relative_paths=False,
+            export_uvmaps=True,
+            export_armatures=True,
+            selected_objects_only=False,
+            visible_objects_only=False,
+            use_instancing=False,
+            evaluation_mode='RENDER'
+        )
 
-    files = get_files(
-        data_name=task.components.data_name,
-        inputs=input_path_abs,
-        input_dataset_dir=None,
-        output_dataset_dir=str(npz_dir),
-        require_suffix=['obj', 'fbx', 'FBX', 'dae', 'glb', 'gltf', 'vrm', 'usd', 'usda', 'usdc'],
-        force_override=True,
-        warning=False,
-    )
+    # Apply patch globally to remove all FBX usage
+    Exporter._export_fbx = patched_export_fbx
 
-    # Fix output directories to use just the filename stem, not the full nested path
-    # This ensures output_dir is npz_dir/filename_stem instead of npz_dir/full/path/filename_stem
-    files = [(input_file, os.path.join(str(npz_dir), input_stem)) for input_file, output_dir in files]
+    try:
+        # Run UniRig inference directly without subprocess
+        torch.set_float32_matmul_precision('high')
+        L.seed_everything(seed, workers=True)
 
-    # Extract mesh files to create raw_data.npz if they don't exist
-    from src.data.extract import extract_builtin
-    import time
-    timestamp = time.strftime("%Y_%m_%d_%H_%M_%S")
+        # Load task config
+        task = load_config('task', task_path)
+        mode = task.mode
+        assert mode in ['train', 'predict', 'validate']
 
-    # Check which files need extraction
-    data_name_actual = task.components.get('data_name', 'raw_data.npz')
-    files_to_extract = []
-    for input_file, output_dir in files:
-        # Ensure output directory exists
-        os.makedirs(output_dir, exist_ok=True)
-        raw_data_npz = os.path.join(output_dir, data_name_actual)
-        if not os.path.exists(raw_data_npz):
-            files_to_extract.append((input_file, output_dir))
-
-    if files_to_extract:
-        print(f"\\n=== Extracting {len(files_to_extract)} mesh file(s) ===")
-        for input_file, output_dir in files_to_extract:
-            print(f"  Input: {input_file}")
-            print(f"  Output dir: {output_dir}")
-
-        # Get target_count from data config if available, default to 50000
-        target_count = data_config.get('faces_target_count', 50000)
-        try:
-            extract_builtin(
-                output_folder=str(npz_dir),
-                target_count=target_count,
-                num_runs=1,
-                id=0,
-                time=timestamp,
-                files=files_to_extract,
-            )
-            print("✓ Mesh extraction complete")
-
-            # Verify extraction succeeded
-            all_extracted = True
-            for input_file, output_dir in files_to_extract:
-                raw_data_npz = os.path.join(output_dir, data_name_actual)
-                if os.path.exists(raw_data_npz):
-                    print(f"  ✓ Verified: {raw_data_npz}")
-                else:
-                    print(f"  ✗ Missing: {raw_data_npz}")
-                    all_extracted = False
-
-            if not all_extracted:
-                raise FileNotFoundError(f"Extraction failed - raw_data.npz files not found")
-        except Exception as e:
-            print(f"✗ Error during extraction: {e}")
-            import traceback
-            traceback.print_exc()
-            raise
-    else:
-        print("\\n=== No extraction needed (raw_data.npz files already exist) ===")
-        # Verify files exist
-        for input_file, output_dir in files:
-            raw_data_npz = os.path.join(output_dir, data_name_actual)
-            if not os.path.exists(raw_data_npz):
-                print(f"✗ Error: Expected raw_data.npz not found: {raw_data_npz}")
-                raise FileNotFoundError(f"raw_data.npz not found: {raw_data_npz}")
-            else:
-                print(f"  ✓ Found: {raw_data_npz}")
-
-    files = [f[1] for f in files]
-    datapath = Datapath(files=files, cls=None)
-
-    # Get tokenizer
-    tokenizer_config = task.components.get('tokenizer', None)
-    if tokenizer_config is not None:
-        tokenizer_config = load_config('tokenizer', os.path.join('configs/tokenizer', task.components.tokenizer))
-        from src.tokenizer.spec import TokenizerConfig
-        tokenizer_config = TokenizerConfig.parse(config=tokenizer_config)
-
-    # Get data name
-    data_name_actual = task.components.get('data_name', 'raw_data.npz')
-    if data_name is not None:
-        data_name_actual = data_name
-
-    # Get predict dataset and transform
-    predict_dataset_config = data_config.get('predict_dataset_config', None)
-    if predict_dataset_config is not None:
-        predict_dataset_config = DatasetConfig.parse(config=predict_dataset_config).split_by_cls()
-
-    predict_transform_config = transform_config.get('predict_transform_config', None)
-    if predict_transform_config is not None:
-        predict_transform_config = TransformConfig.parse(config=predict_transform_config)
-
-    # Get model (suppress verbose warnings during loading)
-    model_config = task.components.get('model', None)
-    if model_config is not None:
-        model_config = load_config('model', os.path.join('configs/model', model_config))
-        if tokenizer_config is not None:
-            tokenizer = get_tokenizer(config=tokenizer_config)
-        else:
-            tokenizer = None
-        # Model loading will use filtered stdout/stderr automatically
+        # Import UniRig modules (suppress warnings during import)
+        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            model = get_model(tokenizer=tokenizer, **model_config)
-    else:
-        model = None
+            from src.data.extract import get_files
+            from src.data.datapath import Datapath
+            from src.data.dataset import UniRigDatasetModule, DatasetConfig
+            from src.data.transform import TransformConfig
+            from src.tokenizer.spec import TokenizerConfig
+            from src.tokenizer.parse import get_tokenizer
+            from src.model.parse import get_model
+            from src.system.parse import get_system, get_writer
+            from src.inference.download import download
+            from lightning.pytorch.callbacks import ModelCheckpoint
 
-    # Set up data module
-    data = UniRigDatasetModule(
-        process_fn=None if model is None else model._process_fn,
-        predict_dataset_config=predict_dataset_config,
-        predict_transform_config=predict_transform_config,
-        tokenizer_config=tokenizer_config,
-        debug=False,
-        data_name=data_name_actual,
-        datapath=datapath,
-        cls=None,
-    )
+        # Load configs first (needed for extraction)
+        data_config = load_config('data', os.path.join('configs/data', task.components.data))
+        transform_config = load_config('transform', os.path.join('configs/transform', task.components.transform))
 
-    # Get writer callback
-    writer_config = task.get('writer', None)
-    callbacks = []
-    if writer_config is not None:
-        assert predict_transform_config is not None, 'missing predict_transform_config in transform'
-        writer_config['npz_dir'] = npz_dir
-        # For skeleton generation, set output_dir to npz_dir so files are saved there
-        # For skin generation, we can use None (default behavior)
-        if writer_config.get('export_npz') == 'predict_skeleton':
-            writer_config['output_dir'] = npz_dir  # Save skeleton npz in npz_dir
-            writer_config['user_mode'] = False  # Need to save npz for skin generation
-        else:
-            writer_config['output_dir'] = None
-            writer_config['user_mode'] = True
-        writer_config['output_name'] = output_path
-        callbacks.append(get_writer(**writer_config, order_config=predict_transform_config.order_config))
+        # Get files - include USD formats in require_suffix
+        # Extract just the filename stem to avoid nested directory structures
+        # get_files creates output_dir based on the input path, which can create nested paths
+        # We fix this by using just the filename stem for the output directory
+        input_path_abs = os.path.abspath(input_path)
+        input_basename = os.path.basename(input_path_abs)
+        input_stem = os.path.splitext(input_basename)[0]  # Get filename without extension
 
-    # Get system
-    system_config = task.components.get('system', None)
-    if system_config is not None:
-        system_config = load_config('system', os.path.join('configs/system', system_config))
-        optimizer_config = task.get('optimizer', None)
-        loss_config = task.get('loss', None)
-        scheduler_config = task.get('scheduler', None)
-
-        train_dataset_config = data_config.get('train_dataset_config', None)
-        if train_dataset_config is not None:
-            train_dataset_config = DatasetConfig.parse(config=train_dataset_config)
-
-        system = get_system(
-            **system_config,
-            model=model,
-            optimizer_config=optimizer_config,
-            loss_config=loss_config,
-            scheduler_config=scheduler_config,
-            steps_per_epoch=1 if train_dataset_config is None else
-            ceil(len(data.train_dataloader()) // 1 // 1),
+        files = get_files(
+            data_name=task.components.data_name,
+            inputs=input_path_abs,
+            input_dataset_dir=None,
+            output_dataset_dir=str(npz_dir),
+            require_suffix=['obj', 'fbx', 'FBX', 'dae', 'glb', 'gltf', 'vrm', 'usd', 'usda', 'usdc'],
+            force_override=True,
+            warning=False,
         )
-    else:
-        system = None
 
-    # Get trainer
-    trainer_config = task.get('trainer', {})
+        # Fix output directories to use just the filename stem, not the full nested path
+        # This ensures output_dir is npz_dir/filename_stem instead of npz_dir/full/path/filename_stem
+        files = [(input_file, os.path.join(str(npz_dir), input_stem)) for input_file, output_dir in files]
 
-    # Set checkpoint path
-    resume_from_checkpoint = task.get('resume_from_checkpoint', None)
-    resume_from_checkpoint = download(resume_from_checkpoint)
+        # Extract mesh files to create raw_data.npz if they don't exist
+        from src.data.extract import extract_builtin
+        import time
+        timestamp = time.strftime("%Y_%m_%d_%H_%M_%S")
 
-    # Fix for PyTorch 2.7+ weights_only loading - allow Box objects in checkpoints
-    # This needs to be done before creating the trainer
-    try:
-        torch.serialization.add_safe_globals([Box])
-    except Exception:
-        # If already added, ignore
-        pass
+        # Check which files need extraction
+        data_name_actual = task.components.get('data_name', 'raw_data.npz')
+        files_to_extract = []
+        for input_file, output_dir in files:
+            # Ensure output directory exists
+            os.makedirs(output_dir, exist_ok=True)
+            raw_data_npz = os.path.join(output_dir, data_name_actual)
+            if not os.path.exists(raw_data_npz):
+                files_to_extract.append((input_file, output_dir))
 
-    trainer = L.Trainer(
-        callbacks=callbacks,
-        logger=None,
-        **trainer_config,
-    )
+        if files_to_extract:
+            print(f"\\n=== Extracting {len(files_to_extract)} mesh file(s) ===")
+            for input_file, output_dir in files_to_extract:
+                print(f"  Input: {input_file}")
+                print(f"  Output dir: {output_dir}")
 
-    # Run prediction
-    assert resume_from_checkpoint is not None, 'expect resume_from_checkpoint in task'
-    trainer.predict(system, datamodule=data, ckpt_path=resume_from_checkpoint, return_predictions=False)
+            # Get target_count from data config if available, default to 50000
+            target_count = data_config.get('faces_target_count', 50000)
+            try:
+                extract_builtin(
+                    output_folder=str(npz_dir),
+                    target_count=target_count,
+                    num_runs=1,
+                    id=0,
+                    time=timestamp,
+                    files=files_to_extract,
+                )
+                print("✓ Mesh extraction complete")
+
+                # Verify extraction succeeded
+                all_extracted = True
+                for input_file, output_dir in files_to_extract:
+                    raw_data_npz = os.path.join(output_dir, data_name_actual)
+                    if os.path.exists(raw_data_npz):
+                        print(f"  ✓ Verified: {raw_data_npz}")
+                    else:
+                        print(f"  ✗ Missing: {raw_data_npz}")
+                        all_extracted = False
+
+                if not all_extracted:
+                    raise FileNotFoundError(f"Extraction failed - raw_data.npz files not found")
+            except Exception as e:
+                print(f"✗ Error during extraction: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+        else:
+            print("\\n=== No extraction needed (raw_data.npz files already exist) ===")
+            # Verify files exist
+            for input_file, output_dir in files:
+                raw_data_npz = os.path.join(output_dir, data_name_actual)
+                if not os.path.exists(raw_data_npz):
+                    print(f"✗ Error: Expected raw_data.npz not found: {raw_data_npz}")
+                    raise FileNotFoundError(f"raw_data.npz not found: {raw_data_npz}")
+                else:
+                    print(f"  ✓ Found: {raw_data_npz}")
+
+        files = [f[1] for f in files]
+        datapath = Datapath(files=files, cls=None)
+
+        # Get tokenizer
+        tokenizer_config = task.components.get('tokenizer', None)
+        if tokenizer_config is not None:
+            tokenizer_config = load_config('tokenizer', os.path.join('configs/tokenizer', task.components.tokenizer))
+            from src.tokenizer.spec import TokenizerConfig
+            tokenizer_config = TokenizerConfig.parse(config=tokenizer_config)
+
+        # Get data name
+        data_name_actual = task.components.get('data_name', 'raw_data.npz')
+        if data_name is not None:
+            data_name_actual = data_name
+
+        # Get predict dataset and transform
+        predict_dataset_config = data_config.get('predict_dataset_config', None)
+        if predict_dataset_config is not None:
+            predict_dataset_config = DatasetConfig.parse(config=predict_dataset_config).split_by_cls()
+
+        predict_transform_config = transform_config.get('predict_transform_config', None)
+        if predict_transform_config is not None:
+            predict_transform_config = TransformConfig.parse(config=predict_transform_config)
+
+        # Get model (suppress verbose warnings during loading)
+        model_config = task.components.get('model', None)
+        if model_config is not None:
+            model_config = load_config('model', os.path.join('configs/model', model_config))
+            if tokenizer_config is not None:
+                tokenizer = get_tokenizer(config=tokenizer_config)
+            else:
+                tokenizer = None
+            # Model loading will use filtered stdout/stderr automatically
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                model = get_model(tokenizer=tokenizer, **model_config)
+        else:
+            model = None
+
+        # Set up data module
+        data = UniRigDatasetModule(
+            process_fn=None if model is None else model._process_fn,
+            predict_dataset_config=predict_dataset_config,
+            predict_transform_config=predict_transform_config,
+            tokenizer_config=tokenizer_config,
+            debug=False,
+            data_name=data_name_actual,
+            datapath=datapath,
+            cls=None,
+        )
+
+        # Get writer callback
+        writer_config = task.get('writer', None)
+        callbacks = []
+        if writer_config is not None:
+            assert predict_transform_config is not None, 'missing predict_transform_config in transform'
+            writer_config['npz_dir'] = npz_dir
+            # For skeleton generation, set output_dir to npz_dir so files are saved there
+            # For skin generation, we can use None (default behavior)
+            if writer_config.get('export_npz') == 'predict_skeleton':
+                writer_config['output_dir'] = npz_dir  # Save skeleton npz in npz_dir
+                writer_config['user_mode'] = False  # Need to save npz for skin generation
+            else:
+                writer_config['output_dir'] = None
+                writer_config['user_mode'] = True
+            writer_config['output_name'] = output_path
+            callbacks.append(get_writer(**writer_config, order_config=predict_transform_config.order_config))
+
+        # Get system
+        system_config = task.components.get('system', None)
+        if system_config is not None:
+            system_config = load_config('system', os.path.join('configs/system', system_config))
+            optimizer_config = task.get('optimizer', None)
+            loss_config = task.get('loss', None)
+            scheduler_config = task.get('scheduler', None)
+
+            train_dataset_config = data_config.get('train_dataset_config', None)
+            if train_dataset_config is not None:
+                train_dataset_config = DatasetConfig.parse(config=train_dataset_config)
+
+            system = get_system(
+                **system_config,
+                model=model,
+                optimizer_config=optimizer_config,
+                loss_config=loss_config,
+                scheduler_config=scheduler_config,
+                steps_per_epoch=1 if train_dataset_config is None else
+                ceil(len(data.train_dataloader()) // 1 // 1),
+            )
+        else:
+            system = None
+
+        # Get trainer
+        trainer_config = task.get('trainer', {})
+
+        # Set checkpoint path
+        resume_from_checkpoint = task.get('resume_from_checkpoint', None)
+        resume_from_checkpoint = download(resume_from_checkpoint)
+
+        # Fix for PyTorch 2.7+ weights_only loading - allow Box objects in checkpoints
+        # This needs to be done before creating the trainer
+        try:
+            torch.serialization.add_safe_globals([Box])
+        except Exception:
+            # If already added, ignore
+            pass
+
+        trainer = L.Trainer(
+            callbacks=callbacks,
+            logger=None,
+            **trainer_config,
+        )
+
+        # Run prediction
+        assert resume_from_checkpoint is not None, 'expect resume_from_checkpoint in task'
+        trainer.predict(system, datamodule=data, ckpt_path=resume_from_checkpoint, return_predictions=False)
+
+    finally:
+        # Restore original export method
+        Exporter._export_fbx = original_export_fbx
 
 # Get configuration from JSON file
 with open("config.json", 'r') as f:
     config = json.load(f)
 
 mesh_path = config.get('mesh_path')
-output_format = config.get('output_format', 'fbx')
+output_format = config.get('output_format', 'usdc')
 seed = config.get('seed', 42)
 skeleton_only = config.get('skeleton_only', False)
 skin_only = config.get('skin_only', False)
@@ -575,7 +635,7 @@ if skin_only:
     print("⚠ Note: Skin-only mode requires an existing skeleton file")
     print("  Please provide skeleton file path or use full pipeline")
 
-    skeleton_path = export_dir / "skeleton.fbx"
+    skeleton_path = export_dir / "skeleton.usdc"
     if not skeleton_path.exists():
         print(f"✗ Error: Skeleton file not found: {skeleton_path}")
         print("  Run without --skin-only to generate skeleton first")
@@ -585,7 +645,7 @@ if skin_only:
     print(f"Generating skinning weights for: {mesh_path}")
     print(f"Using skeleton: {skeleton_path}")
 
-    skin_output = export_dir / "skin.fbx"
+    skin_output = export_dir / "skin.usdc"
     skin_task_path = skin_task or "configs/task/quick_inference_unirig_skin.yaml"
 
     try:
@@ -593,7 +653,7 @@ if skin_only:
             task_path=skin_task_path,
             seed=seed,
             input_path=str(skeleton_path),
-            output_path=str(skin_output),
+            output_path=str(skin_output),  # Export directly as USD
             npz_dir=str(npz_dir),
             data_name="predict_skeleton.npz",
             unirig_base_path=str(unirig_path) if unirig_path else None
@@ -645,7 +705,7 @@ else:
     print("\\n=== Step 2: Generate Skeleton ===")
     print(f"Generating skeleton for: {mesh_path}")
 
-    skeleton_output = export_dir / "skeleton.fbx"
+    skeleton_output = export_dir / "skeleton.usdc"
     skeleton_task_path = skeleton_task or "configs/task/quick_inference_skeleton_articulationxl_ar_256.yaml"
 
     try:
@@ -653,7 +713,7 @@ else:
             task_path=skeleton_task_path,
             seed=seed,
             input_path=str(Path(mesh_path).resolve()),
-            output_path=str(skeleton_output),
+            output_path=str(skeleton_output),  # Export directly as USD
             npz_dir=str(npz_dir),
             data_name=None,
             unirig_base_path=str(unirig_path) if unirig_path else None
@@ -712,7 +772,7 @@ else:
         else:
             raise FileNotFoundError(f"predict_skeleton.npz not found. Searched in: {possible_paths}")
 
-    skin_output = export_dir / "skin.fbx"
+    skin_output = export_dir / "skin.usdc"
     skin_task_path = skin_task or "configs/task/quick_inference_unirig_skin.yaml"
 
     try:
@@ -721,7 +781,7 @@ else:
             task_path=skin_task_path,
             seed=seed,
             input_path=str(Path(mesh_path).resolve()),  # Use original mesh path, not skeleton file
-            output_path=str(skin_output),
+            output_path=str(skin_output),  # Export directly as USD
             npz_dir=str(npz_dir),
             data_name="predict_skeleton.npz",
             unirig_base_path=str(unirig_path) if unirig_path else None
@@ -739,13 +799,256 @@ else:
     final_output = export_dir / f"rigged.{output_format}"
 
     try:
-        from src.inference.merge import transfer
-        transfer(
-            source=str(skin_output),
-            target=str(Path(mesh_path).resolve()),
-            output=str(final_output),
-            add_root=False
+        # Custom merge with improved coordinate space handling
+        from src.inference.merge import clean_bpy, load, process_mesh, get_arranged_bones, process_armature, merge as merge_func, get_skin
+        import bpy
+        from mathutils import Vector
+        import numpy as np
+
+        # Step 1: Load skeleton from USD and extract data
+        clean_bpy()
+        armature = load(filepath=str(skin_output), return_armature=True)
+        if armature is None:
+            raise ValueError("Failed to load skeleton from USD")
+
+        vertices_skin, faces_skin, skin = process_mesh()
+        arranged_bones = get_arranged_bones(armature)
+        if skin is None:
+            skin = get_skin(arranged_bones)
+
+        joints, tails, parents, names, matrix_local = process_armature(armature, arranged_bones)
+
+        # Step 2: Load target mesh (USD) and merge
+        clean_bpy()
+        load(str(Path(mesh_path).resolve()))
+
+        # Remove any existing armatures
+        for c in bpy.data.armatures:
+            bpy.data.armatures.remove(c)
+
+        # Step 3: Pre-merge coordinate space check
+        # Get mesh bounds before merge to help with alignment
+        mesh_bounds_pre = []
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH' and obj.data.vertices:
+                world_coords = np.array([obj.matrix_world @ v.co for v in obj.data.vertices])
+                mesh_bounds_pre.append({
+                    'min': world_coords.min(axis=0),
+                    'max': world_coords.max(axis=0),
+                    'center': world_coords.mean(axis=0),
+                    'size': (world_coords.max(axis=0) - world_coords.min(axis=0)).max()
+                })
+
+        # Step 4: Merge with coordinate space fix
+        # The merge function uses get_correct_orientation_kdtree to align skeleton with mesh
+        # This should handle most coordinate space issues, but we'll verify after
+        merge_func(
+            path=str(Path(mesh_path).resolve()),
+            output_path=str(final_output),
+            vertices=vertices_skin,
+            joints=joints,
+            skin=skin,
+            parents=parents,
+            names=names,
+            tails=tails,
+            add_root=False,
         )
+
+        # Step 5: Post-merge verification and fix if needed
+        # Check if armature is properly aligned with mesh
+        armature_objs = [obj for obj in bpy.data.objects if obj.type == 'ARMATURE']
+        mesh_objs = [obj for obj in bpy.data.objects if obj.type == 'MESH']
+
+        if armature_objs and mesh_objs and mesh_bounds_pre:
+            armature_obj = armature_objs[0]
+            bpy.context.view_layer.objects.active = armature_obj
+
+            # Get bone positions in world space and find key bones (hip and head)
+            bpy.ops.object.mode_set(mode='EDIT')
+            bone_data = []
+            root_bone = None
+            for bone in armature_obj.data.edit_bones:
+                bone_world = armature_obj.matrix_world @ bone.head
+                bone_data.append({
+                    'bone': bone,
+                    'name': bone.name,
+                    'head': np.array(bone.head),
+                    'tail': np.array(bone.tail),
+                    'world_head': np.array(bone_world),
+                    'parent': bone.parent
+                })
+                # Find root bone (no parent)
+                if bone.parent is None:
+                    root_bone = bone
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+            if bone_data and root_bone:
+                # Find hip bone (root bone or bone closest to mesh bottom)
+                hip_bone = root_bone
+                hip_world = np.array(armature_obj.matrix_world @ hip_bone.head)
+
+                # Find chest bone (middle of spine, between hip and head)
+                # Traverse hierarchy to find a bone that's roughly in the middle vertically
+                chest_bone = None
+                chest_world = None
+
+                bpy.ops.object.mode_set(mode='EDIT')
+
+                # Initialize chest_world with a default value (hip position) in case no chest bone is found
+                chest_world = hip_world.copy()
+
+                # First, find the highest bone (head) to determine the vertical range
+                max_z = -float('inf')
+                min_z = float('inf')
+                hip_z = hip_world[2]
+
+                for bone in armature_obj.data.edit_bones:
+                    bone_world_pos = np.array(armature_obj.matrix_world @ bone.head)
+                    bone_z = bone_world_pos[2]
+                    if bone_z > max_z:
+                        max_z = bone_z
+                    if bone_z < min_z:
+                        min_z = bone_z
+
+                # Find chest bone: bone that's roughly in the middle third of the vertical range
+                # (between hip and head, but closer to hip than head)
+                target_z_range = (hip_z + max_z) / 2  # Middle between hip and top
+                chest_candidates = []
+
+                for bone in armature_obj.data.edit_bones:
+                    bone_world_pos = np.array(armature_obj.matrix_world @ bone.head)
+                    bone_z = bone_world_pos[2]
+
+                    # Prefer bones that are:
+                    # 1. Above the hip (bone_z > hip_z)
+                    # 2. In the middle-upper third of the vertical range
+                    # 3. Have a parent (not root)
+                    if bone.parent is not None and bone_z > hip_z:
+                        # Calculate how far up the spine this bone is
+                        vertical_position_ratio = (bone_z - hip_z) / (max_z - hip_z) if max_z > hip_z else 0
+
+                        # Chest should be in the middle-upper range (0.3 to 0.7 of the way up)
+                        if 0.3 <= vertical_position_ratio <= 0.7:
+                            chest_candidates.append({
+                                'bone': bone,
+                                'world_pos': bone_world_pos,
+                                'z': bone_z,
+                                'ratio': vertical_position_ratio,
+                                'distance_from_target': abs(bone_z - target_z_range)
+                            })
+
+                # Select the chest bone closest to the target middle position
+                if chest_candidates:
+                    chest_candidates.sort(key=lambda x: x['distance_from_target'])
+                    chest_bone = chest_candidates[0]['bone']
+                    chest_world = chest_candidates[0]['world_pos']
+                else:
+                    # Fallback: use the bone closest to the middle vertical position
+                    best_bone = None
+                    best_distance = float('inf')
+                    for bone in armature_obj.data.edit_bones:
+                        if bone.parent is not None:
+                            bone_world_pos = np.array(armature_obj.matrix_world @ bone.head)
+                            bone_z = bone_world_pos[2]
+                            distance = abs(bone_z - target_z_range)
+                            if distance < best_distance:
+                                best_distance = distance
+                                best_bone = bone
+                                chest_world = bone_world_pos
+                    if best_bone is not None:
+                        chest_bone = best_bone
+
+                bpy.ops.object.mode_set(mode='OBJECT')
+
+                # Check if hip and chest bones are inside mesh bounds
+                for bounds in mesh_bounds_pre:
+                    mesh_center = bounds['center']
+                    mesh_min = bounds['min']
+                    mesh_max = bounds['max']
+                    mesh_size = bounds['size']
+
+                    # Check if hip bone is inside mesh bounds
+                    hip_inside = np.all(hip_world >= mesh_min) and np.all(hip_world <= mesh_max)
+
+                    # Check if chest bone is inside mesh bounds
+                    chest_inside = np.all(chest_world >= mesh_min) and np.all(chest_world <= mesh_max) if chest_world is not None else False
+
+                    # Calculate distances from mesh center
+                    hip_dist_to_center = np.linalg.norm(hip_world - mesh_center)
+                    chest_dist_to_center = np.linalg.norm(chest_world - mesh_center) if chest_world is not None else float('inf')
+
+                    # Calculate the vector from hip to chest
+                    hip_to_chest = chest_world - hip_world if chest_world is not None else None
+
+                    # If either bone is significantly outside mesh, apply fix
+                    if not hip_inside or not chest_inside or hip_dist_to_center > mesh_size * 0.8 or chest_dist_to_center > mesh_size * 0.8:
+                        print(f"⚠ Skeleton misalignment detected - applying coordinate space correction...")
+                        print(f"  Hip bone position: {hip_world}")
+                        print(f"  Chest bone position: {chest_world}")
+                        print(f"  Mesh center: {mesh_center}")
+                        print(f"  Hip inside mesh: {hip_inside}, Chest inside mesh: {chest_inside}")
+                        if hip_to_chest is not None:
+                            print(f"  Hip-to-chest vector: {hip_to_chest}")
+
+                        # Get the primary mesh object
+                        primary_mesh = mesh_objs[0]
+
+                        # Calculate translation to align hip bone with mesh center
+                        # Use hip bone as the primary reference point
+                        hip_offset = Vector(mesh_center - hip_world)
+
+                        # Apply translation to move hip bone to mesh center
+                        armature_obj.location += hip_offset
+
+                        # Update bone positions after translation
+                        bpy.ops.object.mode_set(mode='EDIT')
+                        hip_world_new = np.array(armature_obj.matrix_world @ hip_bone.head)
+                        if chest_bone is not None:
+                            chest_world_new = np.array(armature_obj.matrix_world @ chest_bone.head)
+                        else:
+                            chest_world_new = None
+                        bpy.ops.object.mode_set(mode='OBJECT')
+
+                        # If chest is still outside, apply additional correction
+                        if chest_world_new is not None:
+                            chest_inside_new = np.all(chest_world_new >= mesh_min) and np.all(chest_world_new <= mesh_max)
+                            if not chest_inside_new:
+                                # Calculate additional offset to bring chest into bounds
+                                chest_offset = np.zeros(3)
+                                for i in range(3):
+                                    if chest_world_new[i] < mesh_min[i]:
+                                        chest_offset[i] = mesh_min[i] - chest_world_new[i]
+                                    elif chest_world_new[i] > mesh_max[i]:
+                                        chest_offset[i] = mesh_max[i] - chest_world_new[i]
+
+                                # Apply a fraction of the chest offset to avoid over-correction
+                                # (since we want to keep hip centered)
+                                armature_obj.location += Vector(chest_offset * 0.3)
+
+                        # Ensure XYZ rotation order (standard for USD/Blender)
+                        bpy.ops.object.mode_set(mode='POSE')
+                        for bone in armature_obj.pose.bones:
+                            bone.rotation_mode = 'XYZ'
+                        bpy.ops.object.mode_set(mode='OBJECT')
+
+                        print(f"  ✓ Applied coordinate space correction (translation + coordinate space matching)")
+
+                        # Re-export with corrected alignment
+                        bpy.ops.wm.usd_export(
+                            filepath=str(final_output),
+                            export_materials=True,
+                            export_textures=True,
+                            relative_paths=False,
+                            export_uvmaps=True,
+                            export_armatures=True,
+                            selected_objects_only=False,
+                            visible_objects_only=False,
+                            use_instancing=False,
+                            evaluation_mode='RENDER'
+                        )
+                        print(f"  ✓ Re-exported with corrected alignment")
+                        break
+
         print(f"✓ Rigged model saved: {final_output}")
     except Exception as e:
         print(f"✗ Error during merge: {e}")
@@ -764,8 +1067,8 @@ if skeleton_only:
 elif skin_only:
     print(f"  - {export_dir.name}/rigged.{output_format} (Rigged model)")
 else:
-    print(f"  - {export_dir.name}/skeleton.fbx (Skeleton)")
-    print(f"  - {export_dir.name}/skin.fbx (Skinning weights)")
+    print(f"  - {export_dir.name}/skeleton.usdc (Skeleton)")
+    print(f"  - {export_dir.name}/skin.usdc (Skinning weights)")
     print(f"  - {export_dir.name}/rigged.{output_format} (Final rigged model)")
     print(f"  - {export_dir.name}/intermediate/ (Intermediate NPZ files)")
 """, %{})
