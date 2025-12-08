@@ -12,11 +12,11 @@
 #   --output-format "glb"        Output format: glb (default: "glb")
 #   --num-parts <int>            Number of parts to generate (1-16, default: 6)
 #   --seed <int>                 Random seed for generation (default: 0)
-#   --num-tokens <int>           Number of tokens (256/512/1024/1536/2048, default: 1024)
+#   --num-tokens <int>           Number of tokens (256/512/1024/1536/2048/3072/4096, default: 1024)
 #   --num-steps <int>            Number of inference steps (default: 50)
 #   --guidance-scale <float>     Guidance scale (default: 7.0)
-#   --rmbg                       Remove background from input image (default: false)
 #   --use-flash-decoder          Use flash decoder for faster inference (default: true)
+#   --mask <path>                Path to mask image or video to focus generation on specific regions
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -90,8 +90,8 @@ defmodule ArgsParser do
         num_tokens: :integer,
         num_steps: :integer,
         guidance_scale: :float,
-        rmbg: :boolean,
-        use_flash_decoder: :boolean
+        use_flash_decoder: :boolean,
+        mask: :string
       ],
       aliases: [
         f: :output_format,
@@ -99,8 +99,7 @@ defmodule ArgsParser do
         s: :seed,
         t: :num_tokens,
         steps: :num_steps,
-        g: :guidance_scale,
-        r: :rmbg
+        g: :guidance_scale
       ]
     )
 
@@ -117,11 +116,11 @@ defmodule ArgsParser do
         --output-format, -f "glb"      Output format: glb (default: "glb")
         --num-parts, -n <int>           Number of parts to generate (1-16, default: 6)
         --seed, -s <int>                Random seed for generation (default: 0)
-        --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048 (default: 1024)
+        --num-tokens, -t <int>          Number of tokens: 256, 512, 1024, 1536, 2048, 3072, 4096 (default: 1024)
         --num-steps, --steps <int>      Number of inference steps (default: 50)
         --guidance-scale, -g <float>    Guidance scale (default: 7.0)
-        --rmbg, -r                      Remove background from input image (default: false)
         --use-flash-decoder             Use flash decoder for faster inference (default: true)
+        --mask <path>                   Path to mask image or video to focus generation on specific regions
       """)
       System.halt(1)
     end
@@ -133,9 +132,15 @@ defmodule ArgsParser do
     end
 
     num_tokens = Keyword.get(opts, :num_tokens, 1024)
-    valid_tokens = [256, 512, 1024, 1536, 2048]
+    valid_tokens = [256, 512, 1024, 1536, 2048, 3072, 4096]
     if num_tokens not in valid_tokens do
       IO.puts("Error: num_tokens must be one of: #{Enum.join(valid_tokens, ", ")}")
+      System.halt(1)
+    end
+
+    mask_path = Keyword.get(opts, :mask)
+    if mask_path && !File.exists?(mask_path) do
+      IO.puts("Error: Mask file not found: #{mask_path}")
       System.halt(1)
     end
 
@@ -147,8 +152,8 @@ defmodule ArgsParser do
       num_tokens: num_tokens,
       num_steps: Keyword.get(opts, :num_steps, 50),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.0),
-      rmbg: Keyword.get(opts, :rmbg, false),
-      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true)
+      use_flash_decoder: Keyword.get(opts, :use_flash_decoder, true),
+      mask_path: mask_path
     }
 
     # Validate output_format
@@ -180,15 +185,14 @@ Seed: #{config.seed}
 Number of Tokens: #{config.num_tokens}
 Inference Steps: #{config.num_steps}
 Guidance Scale: #{config.guidance_scale}
-Remove Background: #{config.rmbg}
 Use Flash Decoder: #{config.use_flash_decoder}
+Mask: #{if config.mask_path, do: config.mask_path, else: "none"}
 """)
 
 # Add weights directories to config for Python
 base_dir = Path.expand(".")
 config_with_paths = Map.merge(config, %{
-  partcrafter_weights_dir: Path.join([base_dir, "pretrained_weights", "PartCrafter"]),
-  rmbg_weights_dir: Path.join([base_dir, "pretrained_weights", "RMBG-1.4"])
+  partcrafter_weights_dir: Path.join([base_dir, "pretrained_weights", "PartCrafter"])
 })
 
 # Save config to JSON for Python to read
@@ -342,11 +346,10 @@ end
 
 # Download models using Elixir-native approach
 IO.puts("\n=== Step 2: Download Pretrained Weights ===")
-IO.puts("Downloading PartCrafter and RMBG models from Hugging Face...")
+IO.puts("Downloading PartCrafter models from Hugging Face...")
 
 base_dir = Path.expand(".")
 partcrafter_weights_dir = Path.join([base_dir, "pretrained_weights", "PartCrafter"])
-rmbg_weights_dir = Path.join([base_dir, "pretrained_weights", "RMBG-1.4"])
 
 IO.puts("Using weights directory: #{partcrafter_weights_dir}")
 
@@ -354,12 +357,6 @@ IO.puts("Using weights directory: #{partcrafter_weights_dir}")
 case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weights_dir, "PartCrafter") do
   {:ok, _} -> :ok
   {:error, _} -> IO.puts("[WARN] PartCrafter download had errors, but continuing...")
-end
-
-# Download RMBG weights
-case HuggingFaceDownloader.download_repo("briaai/RMBG-1.4", rmbg_weights_dir, "RMBG") do
-  {:ok, _} -> :ok
-  {:error, _} -> IO.puts("[WARN] RMBG download had errors, but continuing...")
 end
 
 # Import libraries and process using PartCrafter
@@ -401,24 +398,19 @@ seed = config.get('seed', 0)
 num_tokens = config.get('num_tokens', 1024)
 num_steps = config.get('num_steps', 50)
 guidance_scale = config.get('guidance_scale', 7.0)
-rmbg = config.get('rmbg', False)
 use_flash_decoder = config.get('use_flash_decoder', True)
+mask_path = config.get('mask_path')
 
 # Get weights directories from config
 partcrafter_weights_dir = config.get('partcrafter_weights_dir')
-rmbg_weights_dir = config.get('rmbg_weights_dir')
 
 # Fallback to default paths if not in config
 if not partcrafter_weights_dir:
     base_dir = Path.cwd()
     partcrafter_weights_dir = str(base_dir / "pretrained_weights" / "PartCrafter")
-if not rmbg_weights_dir:
-    base_dir = Path.cwd()
-    rmbg_weights_dir = str(base_dir / "pretrained_weights" / "RMBG-1.4")
 
 # Ensure paths are strings
 partcrafter_weights_dir = str(Path(partcrafter_weights_dir).resolve())
-rmbg_weights_dir = str(Path(rmbg_weights_dir).resolve())
 
 # Resolve paths to absolute
 input_image_path = str(Path(image_path).resolve())
@@ -457,7 +449,7 @@ else:
     print(f"[OK] Image file found: {input_image_path}")
 
 print("\\n=== Step 3 Initialize Models ===")
-print("Loading PartCrafter pipeline and RMBG model...")
+print("Loading PartCrafter pipeline...")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.float16 if device == "cuda" else torch.float32
@@ -465,27 +457,9 @@ dtype = torch.float16 if device == "cuda" else torch.float32
 try:
     # Import PartCrafter components first to ensure custom schedulers are available
     from src.pipelines.pipeline_partcrafter import PartCrafterPipeline
-    from src.utils.image_utils import prepare_image
     from src.utils.data_utils import get_colored_mesh_composition
-    from src.models.briarmbg import BriaRMBG
     # Import custom scheduler so it's registered with diffusers
     from src.schedulers import RectifiedFlowScheduler
-    
-    # Initialize RMBG model for background removal
-    # Load from local directory (matching PartCrafter's predict.py)
-    if rmbg:
-        try:
-            print("Loading RMBG model from local directory...")
-            rmbg_net = BriaRMBG.from_pretrained(rmbg_weights_dir).to(device)
-            rmbg_net.eval()
-            print("[OK] RMBG model loaded")
-        except Exception as e:
-            print(f"[WARN] Warning: Could not load RMBG model: {e}")
-            print("  Continuing without background removal")
-            rmbg_net = None
-            rmbg = False
-    else:
-        rmbg_net = None
     
     # Initialize PartCrafter pipeline
     # Load from local directory (matching PartCrafter's predict.py and app.py)
@@ -515,12 +489,59 @@ if seed == 0:
 set_seed(seed)
 
 try:
-    # Prepare image
-    if rmbg and rmbg_net is not None:
-        img_pil = prepare_image(input_image_path, bg_color=np.array([1.0, 1.0, 1.0]), rmbg_net=rmbg_net)
-        print("[OK] Background removed from image")
-    else:
-        img_pil = Image.open(input_image_path)
+    # Load image
+    img_pil = Image.open(input_image_path)
+    
+    # Apply mask if provided (can be image or video)
+    if mask_path:
+        mask_path_resolved = str(Path(mask_path).resolve())
+        if not Path(mask_path_resolved).exists():
+            raise FileNotFoundError(f"Mask file not found: {mask_path_resolved}")
+        
+        print(f"Applying mask from: {mask_path_resolved}")
+        
+        # Check if mask is a video and extract first frame
+        mask_path_str = str(mask_path_resolved)
+        if mask_path_str.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
+            print(f"Mask is a video, extracting first frame...")
+            cap = cv2.VideoCapture(mask_path_str)
+            if not cap.isOpened():
+                raise ValueError(f"Could not open mask video file: {mask_path_str}")
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if not ret:
+                raise ValueError(f"Could not read frame from mask video: {mask_path_str}")
+            
+            # Convert BGR to grayscale
+            mask_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            mask_img = Image.fromarray(mask_frame)
+            print(f"[OK] Extracted mask frame from video")
+        else:
+            mask_img = Image.open(mask_path_resolved).convert('L')
+        
+        # Resize mask to match image size if needed
+        if mask_img.size != img_pil.size:
+            mask_img = mask_img.resize(img_pil.size, Image.Resampling.LANCZOS)
+        
+        # Convert mask to numpy array
+        mask_array = np.array(mask_img)
+        # Normalize mask to 0-1 range if it's not already
+        if mask_array.max() > 1:
+            mask_array = mask_array.astype(np.float32) / 255.0
+        
+        # Convert image to numpy array
+        img_array = np.array(img_pil.convert('RGB'))
+        
+        # Apply mask: multiply image by mask (white areas keep image, black areas become white)
+        # For mask: 1 = keep, 0 = remove (make white)
+        mask_3d = np.stack([mask_array] * 3, axis=-1)
+        masked_img = img_array * mask_3d + (1 - mask_3d) * 255
+        
+        # Convert back to PIL Image
+        img_pil = Image.fromarray(masked_img.astype(np.uint8))
+        print("[OK] Mask applied to image")
     
     # Run inference
     generator = torch.Generator(device=pipe.device).manual_seed(seed)
