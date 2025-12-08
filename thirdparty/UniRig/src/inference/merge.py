@@ -366,7 +366,9 @@ def make_armature(
         )
         
         if not success:
-            raise RuntimeError(f"Robust skin weight transfer failed for {ob.name}")
+            # Inpainting failed, but we still have interpolated weights to use
+            # Continue with the interpolated weights as fallback
+            print(f"[Warning] Robust skin weight transfer inpainting failed for {ob.name}, using interpolated weights as fallback")
         
         # Recompute argsorted and vertex_group_reweight for transferred skin
         transferred_argsorted = np.argsort(-transferred_skin, axis=1)
