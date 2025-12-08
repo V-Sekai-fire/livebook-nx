@@ -168,7 +168,8 @@ def shoot_rays(mesh, origins, ray_dir, debug=False, model_id=None):
         colors = [[0.0, 0.0, 1.0] for i in range(len(all_hit_ori_id))]
         dlines.colors = o3d.utility.Vector3dVector(colors)
         vis = o3d.visualization.Visualizer()
-        vis.create_window()
+        # Create window but make it invisible (headless rendering)
+        vis.create_window(visible=False)
         vis.add_geometry(dlines)
         vis.add_geometry(mesh_ls)
         vis.add_geometry(line_set_skel)
@@ -179,7 +180,10 @@ def shoot_rays(mesh, origins, ray_dir, debug=False, model_id=None):
                 vis.add_geometry(drawSphere(p_node.pos, 0.007, color=[1.0, 0.0, 0.0]))  # [0.3, 0.1, 0.1]
                 next_level += p_node.children
             this_level = next_level
-        vis.run()
+        # Don't run interactive loop, just render once
+        vis.update_geometry()
+        vis.poll_events()
+        vis.update_renderer()
         vis.destroy_window()
 
     return all_hit_pos, all_hit_ori_id, all_hit_ori

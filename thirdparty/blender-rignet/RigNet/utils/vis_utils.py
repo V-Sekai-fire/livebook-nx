@@ -46,7 +46,8 @@ def drawCone(bottom_center, top_position, color=[0.6, 0.6, 0.9]):
 
 def show_obj_skel(mesh_name, root):
     vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # Create window but make it invisible (headless rendering)
+    vis.create_window(visible=False)
     ctr = vis.get_view_control()
 
     # draw mesh
@@ -68,10 +69,10 @@ def show_obj_skel(mesh_name, root):
     #param = o3d.io.read_pinhole_camera_parameters('sideview.json')
     #ctr.convert_from_pinhole_camera_parameters(param)
 
-    vis.run()
-    #vis.update_geometry()
-    #vis.poll_events()
-    #vis.update_renderer()
+    # Don't run interactive loop, just render once
+    vis.update_geometry()
+    vis.poll_events()
+    vis.update_renderer()
 
     #param = ctr.convert_to_pinhole_camera_parameters()
     #o3d.io.write_pinhole_camera_parameters('sideview.json', param)
@@ -101,7 +102,8 @@ def draw_shifted_pts(mesh_name, pts, weights=None):
     pred_joints.colors = o3d.utility.Vector3dVector(color_joints)
 
     vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # Create window but make it invisible (headless rendering)
+    vis.create_window(visible=False)
     ctr = vis.get_view_control()
     vis.add_geometry(mesh_ls)
     vis.add_geometry(pred_joints)
@@ -109,7 +111,7 @@ def draw_shifted_pts(mesh_name, pts, weights=None):
     param = o3d.io.read_pinhole_camera_parameters('sideview.json')
     ctr.convert_from_pinhole_camera_parameters(param)
 
-    #vis.run()
+    # Don't run interactive loop, just render once
     vis.update_geometry()
     vis.poll_events()
     vis.update_renderer()
@@ -129,7 +131,8 @@ def draw_joints(mesh_name, pts):
     mesh_ls = o3d.geometry.LineSet.create_from_triangle_mesh(mesh)
     mesh_ls.colors = o3d.utility.Vector3dVector([[0.8, 0.8, 0.8] for i in range(len(mesh_ls.lines))])
     vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # Create window but make it invisible (headless rendering)
+    vis.create_window(visible=False)
     ctr = vis.get_view_control()
     vis.add_geometry(mesh_ls)
     for joint_pos in pts:
@@ -138,7 +141,7 @@ def draw_joints(mesh_name, pts):
     param = o3d.io.read_pinhole_camera_parameters('sideview.json')
     ctr.convert_from_pinhole_camera_parameters(param)
 
-    #vis.run()
+    # Don't run interactive loop, just render once
     vis.update_geometry()
     vis.poll_events()
     vis.update_renderer()
@@ -199,7 +202,8 @@ def volume_to_cubes(volume, threshold=0, dim=[1., 1., 1.]):
 
 def show_mesh_vox(mesh_filename, vox):
     vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # Create window but make it invisible (headless rendering)
+    vis.create_window(visible=False)
 
     vox_pts, vox_lines = volume_to_cubes(vox.data)
     vox_pts = np.concatenate(vox_pts, axis=0)
@@ -215,7 +219,10 @@ def show_mesh_vox(mesh_filename, vox):
     mesh_ls.colors = o3d.utility.Vector3dVector([[1.0, 0.0, 0.0] for i in range(len(mesh_ls.lines))])
     vis.add_geometry(mesh_ls)
 
-    vis.run()
+    # Don't run interactive loop, just render once
+    vis.update_geometry()
+    vis.poll_events()
+    vis.update_renderer()
     vis.destroy_window()
 
     return

@@ -88,11 +88,15 @@ def show_visible_mat(mesh_filename, joint_pos, vis_mat, joint_id):
     pcd.points = o3d.utility.Vector3dVector(np.array(mesh_trimesh.vertices)[visible])
     pcd.colors = o3d.utility.Vector3dVector(np.repeat(np.array([[0.0, 0.0, 1.0]]), int(np.sum(visible)), axis=0))
     vis = o3d.visualization.Visualizer()
-    vis.create_window()
+    # Create window but make it invisible (headless rendering)
+    vis.create_window(visible=False)
     vis.add_geometry(mesh_ls)
     vis.add_geometry(drawSphere(joint_pos[joint_id], 0.005, color=[1.0, 0.0, 0.0]))
     vis.add_geometry(pcd)
-    vis.run()
+    # Don't run interactive loop, just render once
+    vis.update_geometry()
+    vis.poll_events()
+    vis.update_renderer()
     vis.destroy_window()
 
 
