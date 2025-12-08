@@ -7,7 +7,7 @@ from typing import Dict, List
 from transformers import AutoModelForCausalLM, AutoConfig
 import math
 import torch_scatter
-from flash_attn.modules.mha import MHA
+# Removed flash_attn dependency - using standard PyTorch attention instead
 
 from .spec import ModelSpec, ModelInput
 from .parse_encoder import MAP_MESH_ENCODER, get_mesh_encoder
@@ -107,6 +107,57 @@ class FrequencyPositionalEmbedding(nn.Module):
         else:
             return x
 
+# Compatible MHA replacement for flash_attn MHA (matches checkpoint structure)
+class CompatibleMHA(nn.Module):
+    """Replacement for flash_attn.modules.mha.MHA that matches checkpoint structure"""
+    def __init__(self, embed_dim: int, num_heads: int, cross_attn: bool = True):
+        super().__init__()
+        assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
+        self.embed_dim = embed_dim
+        self.num_heads = num_heads
+        self.head_dim = embed_dim // num_heads
+        self.cross_attn = cross_attn
+        
+        # Match flash_attn MHA structure: Wq for query, Wkv for key-value
+        self.Wq = nn.Linear(embed_dim, embed_dim, bias=True)
+        if cross_attn:
+            self.Wkv = nn.Linear(embed_dim, embed_dim * 2, bias=True)  # key + value
+        else:
+            self.Wk = nn.Linear(embed_dim, embed_dim, bias=True)
+            self.Wv = nn.Linear(embed_dim, embed_dim, bias=True)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=True)
+        
+    def forward(self, q, x_kv=None):
+        batch_size, seq_len_q, _ = q.shape
+        
+        # Project query
+        q_proj = self.Wq(q)
+        q_proj = q_proj.view(batch_size, seq_len_q, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Project key and value
+        if self.cross_attn and x_kv is not None:
+            kv_proj = self.Wkv(x_kv)
+            kv_proj = kv_proj.view(batch_size, -1, self.num_heads, self.head_dim * 2)
+            k_proj, v_proj = torch.chunk(kv_proj, 2, dim=-1)
+            k_proj = k_proj.transpose(1, 2)
+            v_proj = v_proj.transpose(1, 2)
+        else:
+            k_proj = self.Wk(q).view(batch_size, seq_len_q, self.num_heads, self.head_dim).transpose(1, 2)
+            v_proj = self.Wv(q).view(batch_size, seq_len_q, self.num_heads, self.head_dim).transpose(1, 2)
+        
+        # Scaled dot-product attention
+        scale = 1.0 / (self.head_dim ** 0.5)
+        attn_weights = torch.matmul(q_proj, k_proj.transpose(-2, -1)) * scale
+        attn_weights = torch.softmax(attn_weights, dim=-1)
+        attn_output = torch.matmul(attn_weights, v_proj)
+        
+        # Reshape and project output
+        attn_output = attn_output.transpose(1, 2).contiguous()
+        attn_output = attn_output.view(batch_size, seq_len_q, self.embed_dim)
+        attn_output = self.out_proj(attn_output)
+        
+        return attn_output
+
 class ResidualCrossAttn(nn.Module):
     def __init__(self, feat_dim: int, num_heads: int):
         super().__init__()
@@ -114,8 +165,8 @@ class ResidualCrossAttn(nn.Module):
 
         self.norm1 = nn.LayerNorm(feat_dim)
         self.norm2 = nn.LayerNorm(feat_dim)
-        # self.attention = nn.MultiheadAttention(embed_dim=feat_dim, num_heads=num_heads, batch_first=True)
-        self.attention = MHA(embed_dim=feat_dim, num_heads=num_heads, cross_attn=True)
+        # Use compatible MHA that matches checkpoint structure (Wq, Wkv)
+        self.attention = CompatibleMHA(embed_dim=feat_dim, num_heads=num_heads, cross_attn=True)
         self.ffn = nn.Sequential(
             nn.Linear(feat_dim, feat_dim * 4),
             nn.GELU(),

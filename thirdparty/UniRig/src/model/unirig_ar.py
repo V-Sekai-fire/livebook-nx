@@ -48,11 +48,17 @@ class UniRigAR(ModelSpec):
         
         _d = llm.copy()
         _d['vocab_size'] = self.tokenizer.vocab_size
+        # Remove flash_attention_2 if present - use default attention instead
+        if '_attn_implementation' in _d and _d['_attn_implementation'] == 'flash_attention_2':
+            del _d['_attn_implementation']
         llm_config = AutoConfig.from_pretrained(**_d)
         # Force float32 precision for the model
         llm_config.torch_dtype = torch.float32
         # Force enable pre_norm
         llm_config.pre_norm = True
+        # Explicitly set attention implementation to default (not flash_attention_2)
+        if hasattr(llm_config, '_attn_implementation'):
+            llm_config._attn_implementation = 'eager'  # Use default eager attention
         self.transformer = AutoModelForCausalLM.from_config(config=llm_config)
         
         self.hidden_size = llm.hidden_size

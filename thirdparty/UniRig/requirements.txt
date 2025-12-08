@@ -8,7 +8,7 @@ addict
 timm
 fast-simplification
 bpy==4.2
-flash_attn
+# flash_attn removed - using standard PyTorch attention instead
 trimesh
 open3d
 pyrender

@@ -9,10 +9,8 @@ from timm.models.layers import DropPath
 from typing import Union
 from einops import rearrange
 
-try:
-    import flash_attn
-except ImportError:
-    flash_attn = None
+# Removed flash_attn dependency - flash attention disabled
+flash_attn = None
 
 from .utils.misc import offset2bincount
 from .utils.structure import Point
@@ -92,26 +90,17 @@ class SerializedAttention(PointModule):
             self.qknorm = QueryKeyNorm(channels, num_heads)
         else:
             print("WARNING: enable_qknorm is False in PTv3Object and training may be fragile")
+        # Flash attention disabled - always use standard attention
         if enable_flash:
-            assert (
-                enable_rpe is False
-            ), "Set enable_rpe to False when enable Flash Attention"
-            assert (
-                upcast_attention is False
-            ), "Set upcast_attention to False when enable Flash Attention"
-            assert (
-                upcast_softmax is False
-            ), "Set upcast_softmax to False when enable Flash Attention"
-            assert flash_attn is not None, "Make sure flash_attn is installed."
-            self.patch_size = patch_size
-            self.attn_drop = attn_drop
-        else:
-            # when disable flash attention, we still don't want to use mask
-            # consequently, patch size will auto set to the
-            # min number of patch_size_max and number of points
-            self.patch_size_max = patch_size
-            self.patch_size = 0
-            self.attn_drop = torch.nn.Dropout(attn_drop)
+            print("Warning: flash_attn is disabled, using standard attention")
+        # Always use standard attention path
+        # when disable flash attention, we still don't want to use mask
+        # consequently, patch size will auto set to the
+        # min number of patch_size_max and number of points
+        self.enable_flash = False  # Force disable flash attention
+        self.patch_size_max = patch_size
+        self.patch_size = 0
+        self.attn_drop = torch.nn.Dropout(attn_drop)
 
         self.qkv = torch.nn.Linear(channels, channels * 3, bias=qkv_bias)
         self.proj = torch.nn.Linear(channels, channels)
@@ -141,16 +130,18 @@ class SerializedAttention(PointModule):
         ):
             offset = point.offset
             bincount = offset2bincount(offset)
+            # Ensure patch_size is at least 1 to avoid division by zero
+            patch_size = max(self.patch_size, 1) if self.patch_size == 0 else self.patch_size
             bincount_pad = (
                 torch.div(
-                    bincount + self.patch_size - 1,
-                    self.patch_size,
+                    bincount + patch_size - 1,
+                    patch_size,
                     rounding_mode="trunc",
                 )
-                * self.patch_size
+                * patch_size
             )
             # only pad point when num of points larger than patch_size
-            mask_pad = bincount > self.patch_size
+            mask_pad = bincount > patch_size
             bincount_pad = ~mask_pad * bincount + mask_pad * bincount_pad
             _offset = nn.functional.pad(offset, (1, 0))
             _offset_pad = nn.functional.pad(torch.cumsum(bincount_pad, dim=0), (1, 0))
@@ -162,24 +153,36 @@ class SerializedAttention(PointModule):
                 if bincount[i] != bincount_pad[i]:
                     pad[
                         _offset_pad[i + 1]
-                        - self.patch_size
-                        + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
+                        - patch_size
+                        + (bincount[i] % patch_size) : _offset_pad[i + 1]
                     ] = pad[
                         _offset_pad[i + 1]
-                        - 2 * self.patch_size
-                        + (bincount[i] % self.patch_size) : _offset_pad[i + 1]
-                        - self.patch_size
+                        - 2 * patch_size
+                        + (bincount[i] % patch_size) : _offset_pad[i + 1]
+                        - patch_size
                     ]
                 pad[_offset_pad[i] : _offset_pad[i + 1]] -= _offset_pad[i] - _offset[i]
-                cu_seqlens.append(
-                    torch.arange(
-                        _offset_pad[i],
-                        _offset_pad[i + 1],
-                        step=self.patch_size,
-                        dtype=torch.int32,
-                        device=offset.device,
+                # Only create cu_seqlens if patch_size > 0, otherwise use simple range
+                if patch_size > 0:
+                    cu_seqlens.append(
+                        torch.arange(
+                            _offset_pad[i],
+                            _offset_pad[i + 1],
+                            step=patch_size,
+                            dtype=torch.int32,
+                            device=offset.device,
+                        )
                     )
-                )
+                else:
+                    # Fallback: create a simple range when patch_size is 0
+                    cu_seqlens.append(
+                        torch.arange(
+                            _offset_pad[i],
+                            _offset_pad[i + 1],
+                            dtype=torch.int32,
+                            device=offset.device,
+                        )
+                    )
             point[pad_key] = pad
             point[unpad_key] = unpad
             point[cu_seqlens_key] = nn.functional.pad(
@@ -192,6 +195,9 @@ class SerializedAttention(PointModule):
             self.patch_size = min(
                 offset2bincount(point.offset).min().tolist(), self.patch_size_max
             )
+            # Ensure patch_size is at least 1 to avoid division by zero errors
+            if self.patch_size == 0:
+                self.patch_size = 1
 
         H = self.num_heads
         K = self.patch_size
@@ -207,32 +213,23 @@ class SerializedAttention(PointModule):
         if self.enable_qknorm:
             qkv = self.qknorm(qkv)
 
-        if not self.enable_flash:
-            # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
-            q, k, v = (
-                qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
-            )
-            # attn
-            if self.upcast_attention:
-                q = q.float()
-                k = k.float()
-            attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
-            if self.enable_rpe:
-                attn = attn + self.rpe(self.get_rel_pos(point, order))
-            if self.upcast_softmax:
-                attn = attn.float()
-            attn = self.softmax(attn)
-            attn = self.attn_drop(attn).to(qkv.dtype)
-            feat = (attn @ v).transpose(1, 2).reshape(-1, C)
-        else:
-            feat = flash_attn.flash_attn_varlen_qkvpacked_func(
-                qkv.half().reshape(-1, 3, H, C // H),
-                cu_seqlens,
-                max_seqlen=self.patch_size,
-                dropout_p=self.attn_drop if self.training else 0,
-                softmax_scale=self.scale,
-            ).reshape(-1, C)
-            feat = feat.to(qkv.dtype)
+        # Always use standard attention (flash attention disabled)
+        # encode and reshape qkv: (N', K, 3, H, C') => (3, N', H, K, C')
+        q, k, v = (
+            qkv.reshape(-1, K, 3, H, C // H).permute(2, 0, 3, 1, 4).unbind(dim=0)
+        )
+        # attn
+        if self.upcast_attention:
+            q = q.float()
+            k = k.float()
+        attn = (q * self.scale) @ k.transpose(-2, -1)  # (N', H, K, K)
+        if self.enable_rpe:
+            attn = attn + self.rpe(self.get_rel_pos(point, order))
+        if self.upcast_softmax:
+            attn = attn.float()
+        attn = self.softmax(attn)
+        attn = self.attn_drop(attn).to(qkv.dtype)
+        feat = (attn @ v).transpose(1, 2).reshape(-1, C)
         feat = feat[inverse]
 
         # ffn

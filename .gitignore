@@ -21,7 +21,7 @@ checkpoints/
 output/
 uploads/
 
-# Configuration files
+# Configuration files (generated)
 config.json
 
 # OS files
@@ -38,9 +38,44 @@ Thumbs.db
 
 # Logs
 *.log
+logs/
+lightning_logs/
 
 # Temporary files
 *.tmp
 *.temp
 
-pretrained_weights
+# Pretrained weights (large model files)
+pretrained_weights/
+
+# Erlang crash dumps
+*.dump
+erl_crash.dump
+
+# Intermediate processing files
+*.npz
+# But keep example/test npz files if needed
+!thirdparty/UniRig/examples/**/*.npz
+
+# Generated output files in examples directory (FBX, OBJ, etc.)
+# Keep GLB input files, but ignore generated outputs
+thirdparty/UniRig/examples/**/*.fbx
+thirdparty/UniRig/examples/**/*.obj
+# Allow GLB files (these are input examples)
+!thirdparty/UniRig/examples/**/*.glb
+
+# Blender cache
+*.blend1
+*.blend2
+
+# Jupyter/Notebook checkpoints
+.ipynb_checkpoints/
+
+# Hugging Face cache
+.cache/
+*.cache
+
+# UniRig intermediate files
+thirdparty/UniRig/logs/
+thirdparty/UniRig/lightning_logs/
+thirdparty/UniRig/erl_crash.dump
