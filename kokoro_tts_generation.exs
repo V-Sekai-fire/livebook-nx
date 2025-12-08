@@ -134,6 +134,7 @@ defmodule ArgsParser do
     end
 
     # Get text from various sources (priority: input_file > command-line arg > stdin)
+    # Note: stdin reading is attempted only if no other input is provided
     text = cond do
       input_file = Keyword.get(opts, :input_file) ->
         if File.exists?(input_file) do
@@ -145,11 +146,35 @@ defmodule ArgsParser do
       arg_text = List.first(args) ->
         arg_text
       true ->
-        # Try to read from stdin
-        case IO.binread(:stdio, :all) do
-          {:error, _} -> nil
-          :eof -> nil
-          data when is_binary(data) -> data
+        # No command-line input provided - try stdin only if it's piped (not a TTY)
+        # On Windows, reading from stdin when it's a TTY (console) will block indefinitely
+        # So we only read if stdin is not a TTY (meaning it's piped)
+        try do
+          # Check if stdin is a TTY - if it is, don't read (would block)
+          is_tty = case :io.getopts(:standard_io) do
+            {:ok, opts} -> Keyword.get(opts, :tty, true)
+            _ -> true  # Assume TTY if we can't determine
+          end
+
+          if is_tty do
+            # Stdin is a TTY (console), don't read to avoid blocking
+            nil
+          else
+            # Stdin is not a TTY (piped input), safe to read
+            case IO.binread(:stdio, :eof) do
+              {:error, _} -> nil
+              :eof -> nil
+              data when is_binary(data) and byte_size(data) > 0 -> data
+              _ -> nil
+            end
+          end
+        rescue
+          # If any error occurs, return nil (will show error message)
+          _ -> nil
+        catch
+          # Catch any errors from blocking reads
+          :error, _ -> nil
+          :exit, _ -> nil
         end
     end
 
