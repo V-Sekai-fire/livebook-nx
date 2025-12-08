@@ -185,25 +185,42 @@ def inpaint(V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray)
         success: True if inpainting succeeded, False otherwise
     """
     # Compute the laplacian
-    L = 2 * igl.cotmatrix(V2, F2)
+    try:
+        L = 2 * igl.cotmatrix(V2, F2)
+    except Exception as e:
+        # If Laplacian computation fails, return interpolated weights
+        return W2, False
+    
     # Use MASSMATRIX_TYPE_VORONOI if available, otherwise use numeric constant (1)
     try:
         mass_type = igl.MASSMATRIX_TYPE_VORONOI
     except AttributeError:
         mass_type = 1  # MASSMATRIX_TYPE_VORONOI = 1
-    M = igl.massmatrix(V2, F2, mass_type)
-    Minv = diags(1 / M.diagonal())
+    
+    try:
+        M = igl.massmatrix(V2, F2, mass_type)
+        Minv = diags(1 / M.diagonal())
+    except Exception as e:
+        # If mass matrix computation fails, return interpolated weights
+        return W2, False
     
     if not is_valid_array(L):
-        raise ValueError("[Error] Laplacian is invalid")
+        # Laplacian is invalid (contains NaN/Inf), return interpolated weights
+        return W2, False
     
     if not is_valid_array(Minv):
-        raise ValueError("[Error] Mass matrix inverse is invalid")
+        # Mass matrix inverse is invalid, return interpolated weights
+        return W2, False
     
-    Q = -L + L @ Minv @ L
+    try:
+        Q = -L + L @ Minv @ L
+    except Exception as e:
+        # If matrix multiplication fails, return interpolated weights
+        return W2, False
     
     if not is_valid_array(Q):
-        raise ValueError("[Error] System matrix is invalid")
+        # System matrix is invalid, return interpolated weights
+        return W2, False
     
     # Convert Q to csc_matrix format explicitly
     Q = csc_matrix(Q)
@@ -217,11 +234,20 @@ def inpaint(V2: np.ndarray, F2: np.ndarray, W2: np.ndarray, Matched: np.ndarray)
     b = b[Matched]
     bc = W2[Matched, :].astype(np.float64)
     
+    # Check if we have any matched vertices - if not, can't do inpainting
+    if len(b) == 0:
+        # No matched vertices, return interpolated weights
+        return W2, False
+    
     # Use keyword arguments to match the expected function signature
     # The Python bindings expect: A, B, known, Y, Aeq, Beq, pd
     # The function returns a single array, not a tuple
     try:
         W_inpainted = igl.min_quad_with_fixed(A=Q, B=B, known=b, Y=bc, Aeq=Aeq, Beq=Beq, pd=True)
+        # Verify the result is valid
+        if np.any(np.isnan(W_inpainted)) or np.any(np.isinf(W_inpainted)):
+            # Result contains invalid values, use interpolated weights
+            return W2, False
         success = True
     except Exception as e:
         # If inpainting fails, return interpolated weights
