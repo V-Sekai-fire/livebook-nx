@@ -1,0 +1,663 @@
+#!/usr/bin/env elixir
+
+# Kokoro TTS Generation Script
+# Generate speech from text using Kokoro-82M (Text-to-Speech)
+# Model: Kokoro-82M by hexgrad (82M parameters, Apache-2.0 License)
+# Repository: https://github.com/hexgrad/kokoro
+# Hugging Face: https://huggingface.co/hexgrad/Kokoro-82M
+#
+# Usage:
+#   elixir kokoro_tts_generation.exs "<text>" [options]
+#
+# Options:
+#   --lang-code "a"                  Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
+#   --voice "af_heart"               Voice to use (default: "af_heart")
+#   --voice-file <path>               Path to voice tensor file (.pt) - overrides --voice if provided
+#   --speed <float>                  Speech speed multiplier (default: 1.0)
+#   --split-pattern <regex>           Pattern to split text into segments (default: "\\n+")
+#   --output-format "wav"             Output format: wav, mp3, flac (default: "wav")
+#   --sample-rate <int>               Audio sample rate in Hz (default: 24000)
+
+Mix.install([
+  {:pythonx, "~> 0.4.7"},
+  {:jason, "~> 1.4.4"},
+  {:req, "~> 0.5.0"}
+])
+
+# Suppress debug logs from Req to avoid showing long URLs
+Logger.configure(level: :info)
+
+# Initialize Python environment with required dependencies
+# Kokoro uses kokoro package and misaki for G2P
+# All dependencies managed by uv (no pip)
+Pythonx.uv_init("""
+[project]
+name = "kokoro-tts-generation"
+version = "0.0.0"
+requires-python = "==3.10.*"
+dependencies = [
+  "kokoro>=0.9.4",
+  "soundfile",
+  "torch",
+  "torchaudio",
+  "numpy<2.0",  # Pin to <2.0 for compatibility with thinc (spaCy dependency)
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl",
+  "huggingface-hub",
+  # Use newer tokenizers with pre-built wheels to avoid Rust compilation on Windows
+  # This may require updating transformers to a compatible version
+  "tokenizers>=0.20.0",
+  "transformers>=4.30.0",
+  # misaki for G2P - install based on language
+  # For English: misaki[en]
+  # For Japanese: misaki[ja]
+  # For Chinese: misaki[zh]
+  # For all: misaki[all]
+  "misaki[en]",
+]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+torchaudio = { index = "pytorch-cu118" }
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+""")
+
+# Parse command-line arguments
+defmodule ArgsParser do
+  def parse(args) do
+    {opts, args, _} = OptionParser.parse(args,
+      switches: [
+        lang_code: :string,
+        voice: :string,
+        voice_file: :string,
+        speed: :float,
+        split_pattern: :string,
+        output_format: :string,
+        sample_rate: :integer
+      ],
+      aliases: [
+        l: :lang_code,
+        v: :voice,
+        s: :speed,
+        f: :output_format,
+        r: :sample_rate
+      ]
+    )
+
+    text = List.first(args)
+
+    if !text do
+      IO.puts("""
+      Error: Text input is required.
+
+      Usage:
+        elixir kokoro_tts_generation.exs "<text>" [options]
+
+      Options:
+        --lang-code, -l "a"              Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
+        --voice, -v "af_heart"          Voice to use (default: "af_heart")
+        --voice-file <path>              Path to voice tensor file (.pt) - overrides --voice if provided
+        --speed, -s <float>              Speech speed multiplier (default: 1.0)
+        --split-pattern <regex>          Pattern to split text into segments (default: "\\n+")
+        --output-format, -f "wav"        Output format: wav, mp3, flac (default: "wav")
+        --sample-rate, -r <int>          Audio sample rate in Hz (default: 24000)
+      """)
+      System.halt(1)
+    end
+
+    lang_code = Keyword.get(opts, :lang_code, "a")
+    valid_lang_codes = ["a", "b", "e", "f", "h", "i", "j", "p", "z"]
+    if lang_code not in valid_lang_codes do
+      IO.puts("Error: Invalid lang_code '#{lang_code}'. Valid codes: #{Enum.join(valid_lang_codes, ", ")}")
+      System.halt(1)
+    end
+
+    voice_file = Keyword.get(opts, :voice_file)
+    if voice_file && !File.exists?(voice_file) do
+      IO.puts("Error: Voice file not found: #{voice_file}")
+      System.halt(1)
+    end
+
+    output_format = Keyword.get(opts, :output_format, "wav")
+    valid_formats = ["wav", "mp3", "flac"]
+    if output_format not in valid_formats do
+      IO.puts("Error: Invalid output format. Must be one of: #{Enum.join(valid_formats, ", ")}")
+      System.halt(1)
+    end
+
+    sample_rate = Keyword.get(opts, :sample_rate, 24000)
+    if sample_rate < 8000 or sample_rate > 48000 do
+      IO.puts("Error: Sample rate must be between 8000 and 48000 Hz")
+      System.halt(1)
+    end
+
+    speed = Keyword.get(opts, :speed, 1.0)
+    if speed < 0.5 or speed > 2.0 do
+      IO.puts("Error: Speed must be between 0.5 and 2.0")
+      System.halt(1)
+    end
+
+    config = %{
+      text: text,
+      lang_code: lang_code,
+      voice: Keyword.get(opts, :voice, "af_heart"),
+      voice_file: voice_file,
+      speed: speed,
+      split_pattern: Keyword.get(opts, :split_pattern, "\\n+"),
+      output_format: output_format,
+      sample_rate: sample_rate
+    }
+
+    config
+  end
+end
+
+# Get configuration
+config = ArgsParser.parse(System.argv())
+
+IO.puts("""
+=== Kokoro TTS Generation ===
+Text: #{String.slice(config.text, 0, 100)}#{if String.length(config.text) > 100, do: "...", else: ""}
+Language Code: #{config.lang_code}
+Voice: #{config.voice}
+Voice File: #{config.voice_file || "N/A"}
+Speed: #{config.speed}
+Split Pattern: #{config.split_pattern}
+Output Format: #{config.output_format}
+Sample Rate: #{config.sample_rate} Hz
+""")
+
+# Add weights directory to config for Python
+base_dir = Path.expand(".")
+config_with_paths = Map.merge(config, %{
+  kokoro_weights_dir: Path.join([base_dir, "pretrained_weights", "Kokoro-82M"])
+})
+
+# Save config to JSON for Python to read
+config_json = Jason.encode!(config_with_paths)
+File.write!("config.json", config_json)
+
+# Elixir-native Hugging Face download function
+defmodule HuggingFaceDownloader do
+  @base_url "https://huggingface.co"
+  @api_base "https://huggingface.co/api"
+
+  def download_repo(repo_id, local_dir, repo_name \\ "model") do
+    IO.puts("Downloading #{repo_name}...")
+
+    # Create directory
+    File.mkdir_p!(local_dir)
+
+    # Get file tree from Hugging Face API
+    case get_file_tree(repo_id) do
+      {:ok, files} ->
+        # files is a map, convert to list for counting and iteration
+        files_list = Map.to_list(files)
+        total = length(files_list)
+        IO.puts("Found #{total} files to download")
+
+        files_list
+        |> Enum.with_index(1)
+        |> Enum.each(fn {{path, info}, index} ->
+          download_file(repo_id, path, local_dir, info, index, total)
+        end)
+
+        IO.puts("\n[OK] #{repo_name} downloaded")
+        {:ok, local_dir}
+
+      {:error, reason} ->
+        IO.puts("[ERROR] #{repo_name} download failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  defp get_file_tree(repo_id, revision \\ "main") do
+    # Recursively get all files
+    case get_files_recursive(repo_id, revision, "") do
+      {:ok, files} ->
+        file_map =
+          files
+          |> Enum.map(fn file ->
+            {file["path"], file}
+          end)
+          |> Map.new()
+
+        {:ok, file_map}
+
+      error ->
+        error
+    end
+  end
+
+  defp get_files_recursive(repo_id, revision, path) do
+    # Build URL - handle empty path correctly
+    url = if path == "" do
+      "#{@api_base}/models/#{repo_id}/tree/#{revision}"
+    else
+      "#{@api_base}/models/#{repo_id}/tree/#{revision}/#{path}"
+    end
+
+    try do
+      response = Req.get(url)
+
+      # Req.get returns response directly or wrapped in tuple
+      items = case response do
+        {:ok, %{status: 200, body: body}} when is_list(body) -> body
+        %{status: 200, body: body} when is_list(body) -> body
+        {:ok, %{status: status}} ->
+          raise "API returned status #{status}"
+        %{status: status} ->
+          raise "API returned status #{status}"
+        {:error, reason} ->
+          raise inspect(reason)
+        other ->
+          raise "Unexpected response: #{inspect(other)}"
+      end
+
+      files = Enum.filter(items, &(&1["type"] == "file"))
+      dirs = Enum.filter(items, &(&1["type"] == "directory"))
+
+      # Recursively get files from subdirectories
+      subdir_files =
+        dirs
+        |> Enum.flat_map(fn dir ->
+          case get_files_recursive(repo_id, revision, dir["path"]) do
+            {:ok, subfiles} -> subfiles
+            _ -> []
+          end
+        end)
+
+      {:ok, files ++ subdir_files}
+    rescue
+      e -> {:error, Exception.message(e)}
+    end
+  end
+
+  defp download_file(repo_id, path, local_dir, info, current, total) do
+    # Construct download URL (using resolve endpoint for LFS files)
+    url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
+    local_path = Path.join(local_dir, path)
+
+    # Get file size for progress display
+    file_size = info["size"] || 0
+    size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
+
+    # Show current file being downloaded
+    filename = Path.basename(path)
+    IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
+
+    # Skip if file already exists
+    if File.exists?(local_path) do
+      IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
+    else
+      # Create parent directories
+      local_path
+      |> Path.dirname()
+      |> File.mkdir_p!()
+
+      # Download file with streaming, suppress debug logs
+      result = Req.get(url,
+        into: File.stream!(local_path, [], 65536),
+        retry: :transient,
+        max_redirects: 10
+      )
+
+      case result do
+        {:ok, %{status: 200}} ->
+          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
+
+        %{status: 200} ->
+          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
+
+        {:ok, %{status: status}} ->
+          IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
+
+        %{status: status} ->
+          IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
+
+        {:error, reason} ->
+          IO.puts("\n[WARN] Failed to download #{path}: #{inspect(reason)}")
+      end
+    end
+  end
+end
+
+# Download models using Elixir-native approach
+IO.puts("\n=== Step 2: Download Pretrained Weights ===")
+IO.puts("Downloading Kokoro-82M models from Hugging Face...")
+
+base_dir = Path.expand(".")
+kokoro_weights_dir = Path.join([base_dir, "pretrained_weights", "Kokoro-82M"])
+
+IO.puts("Using weights directory: #{kokoro_weights_dir}")
+
+# Kokoro-82M repository on Hugging Face
+repo_id = "hexgrad/Kokoro-82M"
+
+# Download Kokoro-82M weights
+case HuggingFaceDownloader.download_repo(repo_id, kokoro_weights_dir, "Kokoro-82M") do
+  {:ok, _} -> :ok
+  {:error, _} ->
+    IO.puts("[WARN] Kokoro-82M download had errors, but continuing...")
+    IO.puts("[INFO] If the model is not on Hugging Face, you may need to download it manually")
+end
+
+# spaCy model is installed via dependencies (line 44-45), no need to download separately
+IO.puts("\n=== spaCy Model ===")
+IO.puts("spaCy model 'en_core_web_sm' will be installed automatically via uv dependencies")
+
+# Import libraries and process using Kokoro
+{_, _python_globals} = Pythonx.eval("""
+import json
+import sys
+import os
+import re
+import time
+import warnings
+import subprocess
+from pathlib import Path
+
+# CRITICAL: Patch subprocess.run FIRST, before any imports that might use it
+# This prevents misaki/spacy from hanging when they spawn subprocesses
+_original_subprocess_run = subprocess.run
+def _patched_subprocess_run(*args, **kwargs):
+    # Always redirect stdin to prevent hanging
+    if 'stdin' not in kwargs:
+        kwargs['stdin'] = subprocess.DEVNULL
+    # Also redirect stdout/stderr if not specified to avoid blocking
+    if 'stdout' not in kwargs:
+        kwargs['stdout'] = subprocess.PIPE
+    if 'stderr' not in kwargs:
+        kwargs['stderr'] = subprocess.PIPE
+    return _original_subprocess_run(*args, **kwargs)
+subprocess.run = _patched_subprocess_run
+
+# Suppress warnings to prevent StopIteration issues with warning system
+warnings.filterwarnings('ignore')
+
+# Set environment variables to make HuggingFace non-interactive
+os.environ['HF_HUB_DISABLE_PROGRESS_BARS'] = '1'
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+
+# Ensure stdin is not blocking - redirect to devnull
+# This must be done BEFORE any imports that might spawn subprocesses
+if hasattr(os, 'devnull'):
+    try:
+        devnull = open(os.devnull, 'r')
+        sys.stdin = devnull
+    except:
+        pass
+
+# Now import libraries - subprocess.run is already patched
+import torch
+import soundfile as sf
+import numpy as np
+
+# spaCy model is installed via uv dependencies, just verify it's available
+# Import spacy first to get access to cli module
+import spacy
+
+# Check if model exists (it should be installed via dependencies)
+try:
+    nlp = spacy.load('en_core_web_sm')
+    print("[OK] spaCy model 'en_core_web_sm' is available")
+    sys.stdout.flush()
+except OSError:
+    # Model not found - this shouldn't happen if dependencies installed correctly
+    print("[WARN] spaCy model 'en_core_web_sm' not found")
+    print("[INFO] It should have been installed via uv dependencies")
+    print("[INFO] Will use patched download as fallback")
+    sys.stdout.flush()
+
+# Patch spacy.cli.download to handle misaki's download attempts
+_original_spacy_download = spacy.cli.download
+def _patched_spacy_download(name, **kwargs):
+    # Check if model already exists
+    try:
+        spacy.load(name)
+        print(f"[OK] spaCy model '{name}' already available, skipping download")
+        sys.stdout.flush()
+        return 0  # Success
+    except OSError:
+        # Model doesn't exist - try to download using patched subprocess
+        print(f"[INFO] spaCy model '{name}' not found, attempting download...")
+        sys.stdout.flush()
+        result = subprocess.run(
+            [sys.executable, '-m', 'spacy', 'download', name],
+            check=False,
+            timeout=600,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        if result.returncode == 0:
+            print(f"[OK] spaCy model '{name}' downloaded successfully")
+            sys.stdout.flush()
+            return 0
+        else:
+            print(f"[WARN] spaCy model '{name}' download failed (code {result.returncode})")
+            sys.stdout.flush()
+            return 1  # Indicate failure, but don't crash
+spacy.cli.download = _patched_spacy_download
+
+# Also patch sys.exit to prevent it from killing the process
+_original_sys_exit = sys.exit
+def _patched_sys_exit(code=0):
+    # Don't actually exit, just log it
+    if code != 0:
+        print(f"[WARN] sys.exit({code}) called, but continuing...")
+        sys.stdout.flush()
+    # Don't call original sys.exit - just return
+    return
+sys.exit = _patched_sys_exit
+
+# Now import kokoro - spacy.cli.download is patched so misaki won't try to download
+from kokoro import KPipeline
+
+# Get configuration from JSON file
+with open("config.json", 'r') as f:
+    config = json.load(f)
+
+text = config.get('text')
+lang_code = config.get('lang_code', 'a')
+voice = config.get('voice', 'af_heart')
+voice_file = config.get('voice_file')
+speed = config.get('speed', 1.0)
+split_pattern = config.get('split_pattern', '\\\\n+')
+output_format = config.get('output_format', 'wav')
+sample_rate = config.get('sample_rate', 24000)
+
+# Get weights directory from config
+kokoro_weights_dir = config.get('kokoro_weights_dir')
+
+# Fallback to default path if not in config
+if not kokoro_weights_dir:
+    base_dir = Path.cwd()
+    kokoro_weights_dir = str(base_dir / "pretrained_weights" / "Kokoro-82M")
+
+# Ensure path is string
+kokoro_weights_dir = str(Path(kokoro_weights_dir).resolve())
+
+# Create output directory
+output_dir = Path("output")
+output_dir.mkdir(exist_ok=True)
+
+print("\\n=== Step 3: Initialize Kokoro Pipeline ===")
+sys.stdout.flush()
+print(f"Loading Kokoro pipeline for language code: {lang_code}")
+sys.stdout.flush()
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"Device: {device}")
+sys.stdout.flush()
+
+# Force flush all streams before initialization
+sys.stdout.flush()
+sys.stderr.flush()
+
+try:
+    # Initialize Kokoro pipeline
+    # Kokoro automatically downloads weights from Hugging Face if not found locally
+    # Pass repo_id explicitly to suppress warning and ensure non-interactive mode
+    # Suppress warnings during initialization
+    # Note: subprocess.run is already patched above, so misaki won't hang
+    print("Initializing pipeline (this may take a moment)...")
+    sys.stdout.flush()
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        # Use explicit repo_id to avoid warning and ensure non-interactive
+        pipeline = KPipeline(lang_code=lang_code, repo_id='hexgrad/Kokoro-82M')
+
+    print(f"[OK] Kokoro pipeline initialized for language code '{lang_code}'")
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+except Exception as e:
+    print(f"[ERROR] Error initializing pipeline: {e}")
+    import traceback
+    traceback.print_exc()
+    print("\\nMake sure you have")
+    print("  1. All dependencies installed via uv (including kokoro>=0.9.4)")
+    print("  2. misaki[en] or appropriate language support installed")
+    print("  3. espeak-ng installed (system dependency)")
+    raise
+
+print("\\n=== Step 4: Load Voice ===")
+sys.stdout.flush()
+
+# Load voice (either from file or use default)
+voice_tensor = None
+if voice_file:
+    print(f"Loading voice from file: {voice_file}")
+    sys.stdout.flush()
+    try:
+        voice_tensor = torch.load(voice_file, weights_only=True)
+        print(f"[OK] Voice tensor loaded from {voice_file}")
+        sys.stdout.flush()
+    except Exception as e:
+        print(f"[WARN] Could not load voice file: {e}")
+        print(f"Falling back to default voice: {voice}")
+        sys.stdout.flush()
+        voice_tensor = None
+else:
+    print(f"Using default voice: {voice}")
+    sys.stdout.flush()
+
+print("\\n=== Step 5: Generate Speech ===")
+print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}")
+print(f"Speed: {speed}x")
+print(f"Split pattern: {split_pattern}")
+sys.stdout.flush()
+
+# Split text by pattern if provided
+if split_pattern:
+    segments = re.split(split_pattern, text)
+    segments = [s.strip() for s in segments if s.strip()]
+    print(f"Split into {len(segments)} segment(s)")
+else:
+    segments = [text]
+
+# Generate audio for each segment
+all_audio_segments = []
+all_graphemes = []
+all_phonemes = []
+
+try:
+    # Use voice tensor if provided, otherwise use voice string
+    voice_input = voice_tensor if voice_tensor is not None else voice
+
+    # Suppress warnings during generation
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        generator = pipeline(
+            text,
+            voice=voice_input,
+            speed=speed,
+            split_pattern=split_pattern if split_pattern else None
+        )
+
+    # Process generator output
+    # Convert generator to list to avoid blocking issues
+    generator_items = list(generator)
+
+    for i, (gs, ps, audio) in enumerate(generator_items):
+        print(f"\\nSegment {i+1}/{len(generator_items)}:")
+        print(f"  Graphemes: {gs[:100]}{'...' if len(gs) > 100 else ''}")
+        print(f"  Phonemes: {ps[:100]}{'...' if len(ps) > 100 else ''}")
+        print(f"  Audio length: {len(audio) / sample_rate:.2f}s")
+        sys.stdout.flush()
+
+        all_audio_segments.append(audio)
+        all_graphemes.append(gs)
+        all_phonemes.append(ps)
+
+    print(f"\\n[OK] Generated {len(all_audio_segments)} audio segment(s)")
+    sys.stdout.flush()
+
+except Exception as e:
+    print(f"[ERROR] Error during generation: {e}")
+    import traceback
+    traceback.print_exc()
+    raise
+
+print("\\n=== Step 6: Save Audio ===")
+
+# Create output directory with timestamp
+tag = time.strftime("%Y%m%d_%H_%M_%S")
+export_dir = output_dir / tag
+export_dir.mkdir(exist_ok=True)
+
+# Concatenate all audio segments
+if all_audio_segments:
+    # Concatenate audio arrays
+    full_audio = np.concatenate(all_audio_segments)
+
+    # Save main audio file
+    output_filename = f"kokoro_{tag}.{output_format}"
+    output_path = export_dir / output_filename
+
+    # Save audio using soundfile
+    sf.write(str(output_path), full_audio, sample_rate, format=output_format.upper())
+    print(f"[OK] Saved audio to {output_path}")
+    print(f"  Duration: {len(full_audio) / sample_rate:.2f}s")
+    print(f"  Sample rate: {sample_rate} Hz")
+    print(f"  Format: {output_format.upper()}")
+
+    # Also save individual segments if multiple
+    if len(all_audio_segments) > 1:
+        for i, (audio_seg, gs, ps) in enumerate(zip(all_audio_segments, all_graphemes, all_phonemes)):
+            segment_filename = f"kokoro_{tag}_segment_{i:02d}.{output_format}"
+            segment_path = export_dir / segment_filename
+            sf.write(str(segment_path), audio_seg, sample_rate, format=output_format.upper())
+            print(f"[OK] Saved segment {i+1} to {segment_path}")
+
+            # Save text metadata for each segment
+            metadata_filename = f"kokoro_{tag}_segment_{i:02d}.txt"
+            metadata_path = export_dir / metadata_filename
+            with open(metadata_path, 'w', encoding='utf-8') as f:
+                f.write(f"Graphemes: {gs}\\n")
+                f.write(f"Phonemes: {ps}\\n")
+            print(f"[OK] Saved metadata to {metadata_path}")
+else:
+    print("[ERROR] No audio segments generated")
+    raise ValueError("No audio segments generated")
+
+print("\\n=== Complete ===")
+print(f"Generated speech saved to: {output_path}")
+print(f"\\nOutput files")
+print(f"  - {output_path} (Main audio file)")
+if len(all_audio_segments) > 1:
+    print(f"  - {len(all_audio_segments)} segment files")
+    print(f"  - {len(all_audio_segments)} metadata files")
+sys.stdout.flush()
+sys.stderr.flush()
+""", %{})
+
+IO.puts("\n=== Complete ===")
+IO.puts("TTS generation completed successfully!")
