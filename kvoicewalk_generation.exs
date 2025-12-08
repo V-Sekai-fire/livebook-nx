@@ -32,26 +32,49 @@ Mix.install([
 # Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
 
-# Initialize Python environment with KVoiceWalk dependencies
+# Initialize Python environment with required dependencies
 # KVoiceWalk uses Kokoro, Resemblyzer, and various audio processing libraries
+# All dependencies managed by uv (no pip)
 Pythonx.uv_init("""
 [project]
 name = "kvoicewalk-generation"
 version = "0.0.0"
-requires-python = ">=3.10,<3.13"
+requires-python = "==3.10.*"
 dependencies = [
   "kokoro>=0.9.4",
-  "numpy>=2.2.6",
-  "resemblyzer>=0.1.4",
-  "soundfile>=0.13.1",
-  "torch>=2.7.0",
-  "tqdm>=4.67.1",
-  "librosa",
+  "resemblyzer",
+  "soundfile",
+  "torch",
+  "torchaudio",
+  "numpy<2.0",  # Pin to <2.0 for compatibility with thinc (spaCy dependency)
+  "en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl",
+  "huggingface-hub",
+  # Use newer tokenizers with pre-built wheels to avoid Rust compilation on Windows
+  # This may require updating transformers to a compatible version
+  "tokenizers>=0.20.0",
+  "transformers>=4.30.0",
+  # misaki for G2P - install based on language
+  # For English: misaki[en]
+  # For Japanese: misaki[ja]
+  # For Chinese: misaki[zh]
+  # For all: misaki[all]
+  "misaki[en]",
   "scipy",
+  "librosa",
   "faster-whisper",
-  "pip",
+  "tqdm",
+  "pillow",
   "spacy",
 ]
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu118" }
+torchaudio = { index = "pytorch-cu118" }
+
+[[tool.uv.index]]
+name = "pytorch-cu118"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
 """)
 
 # Parse command-line arguments
@@ -278,42 +301,7 @@ print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''
 print(f"Output Directory: {export_dir}")
 print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
 
-# Pre-download spacy model if needed (before importing KVoiceWalk)
-# This avoids the pip dependency issue when misaki tries to download it
-print("\\nChecking spacy model...")
-try:
-    import spacy
-    try:
-        # Try to load the model - if it fails, download it
-        nlp = spacy.load("en_core_web_sm")
-        print("Spacy model 'en_core_web_sm' already available.")
-    except OSError:
-        print("Downloading spacy model 'en_core_web_sm'...")
-        import subprocess
-        import sys
-        # Use python -m spacy download - this works without pip
-        result = subprocess.run([sys.executable, "-m", "spacy", "download", "en_core_web_sm"], 
-                              capture_output=True, text=True)
-        if result.returncode == 0:
-            print("Spacy model downloaded successfully.")
-        else:
-            print(f"\\n[WARN] Spacy download output: {result.stdout}")
-            print(f"[WARN] Spacy download error: {result.stderr}")
-            # Try alternative: download via direct URL
-            print("Attempting alternative download method...")
-            import urllib.request
-            import tarfile
-            import tempfile
-            model_url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl"
-            with tempfile.NamedTemporaryFile(suffix=".whl", delete=False) as tmp:
-                urllib.request.urlretrieve(model_url, tmp.name)
-                subprocess.run([sys.executable, "-m", "pip", "install", tmp.name], 
-                             check=False, capture_output=True)
-except Exception as e:
-    print(f"\\n[WARN] Could not pre-download spacy model: {e}")
-    print("KVoiceWalk will attempt to download it automatically, but may fail without pip.")
-
-# Import KVoiceWalk modules (after spacy model is ready)
+# Import KVoiceWalk modules
 from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
 from utilities.kvoicewalk import KVoiceWalk
 
@@ -355,10 +343,10 @@ try:
         starting_voice=starting_voice if starting_voice else None,
         output_name=output_name
     )
-    
+
     print(f"\\nStarting random walk with {step_limit} steps...")
     kvoicewalk.random_walk(step_limit)
-    
+
     print("\\n[OK] KVoiceWalk completed successfully")
 
     # Find the generated voice file
@@ -367,18 +355,18 @@ try:
     from utilities.path_router import OUT_DIR
     out_dir = Path(OUT_DIR)
     generated_voice = None
-    
+
     if out_dir.exists():
         # Find the most recent results directory matching the output_name pattern
         # Directories are named: {output_name}_{target_audio_stem}_{timestamp}
         result_dirs = [d for d in out_dir.iterdir() if d.is_dir() and d.name.startswith(f"{output_name}_")]
-        
+
         if result_dirs:
             # Get the most recent results directory (by modification time)
             latest_result_dir = max(result_dirs, key=lambda x: x.stat().st_mtime)
             # Find all .pt files in this directory
             pt_files = list(latest_result_dir.glob("*.pt"))
-            
+
             if pt_files:
                 # Get the file with the highest step number
                 # Files are named: {output_name}_{step}_{score}_{similarity}_{audio_stem}.pt
@@ -397,7 +385,7 @@ try:
                     except (ValueError, IndexError):
                         pass
                     return -1
-                
+
                 # Sort by step number and get the highest (most recent step)
                 pt_files.sort(key=get_step_number, reverse=True)
                 generated_voice = pt_files[0]
