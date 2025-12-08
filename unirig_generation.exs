@@ -177,12 +177,83 @@ File.write!("config.json", config_json)
 import json
 import sys
 import os
+import warnings
 from pathlib import Path
 import torch
 import yaml
 from box import Box
 import lightning as L
 from math import ceil
+
+# Suppress verbose warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*flash_attn.*')
+warnings.filterwarnings('ignore', message='.*flash-attn.*')
+warnings.filterwarnings('ignore', message='.*flash attention.*')
+warnings.filterwarnings('ignore', message='.*BatchNorm.*')
+# Suppress warnings from transformers and other libraries
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
+os.environ['TOKENIZERS_PARALLELISM'] = 'false'
+
+# Create filtered stdout/stderr wrapper to suppress specific warning messages
+class FilteredOutput:
+    def __init__(self, original_stream):
+        self.original_stream = original_stream
+        self.filtered_patterns = [
+            'flash_attn is disabled',
+            'flash-attn is disabled',
+            'flash attention is disabled',
+            'use BatchNorm in ptv3obj',
+            'WARNING: use BatchNorm',
+            'Warning: flash_attn is disabled',
+        ]
+        self.buffer = ''
+
+    def write(self, text):
+        if not text:
+            return
+
+        # Handle partial lines (text might not end with newline)
+        self.buffer += text
+        if '\\n' in self.buffer:
+            lines = self.buffer.split('\\n')
+            # Keep the last incomplete line in buffer
+            self.buffer = lines[-1]
+            complete_lines = lines[:-1]
+
+            # Filter complete lines
+            filtered_lines = []
+            for line in complete_lines:
+                should_filter = False
+                line_lower = line.lower()
+                for pattern in self.filtered_patterns:
+                    if pattern.lower() in line_lower:
+                        should_filter = True
+                        break
+                if not should_filter:
+                    filtered_lines.append(line)
+
+            # Write filtered lines
+            if filtered_lines:
+                self.original_stream.write('\\n'.join(filtered_lines) + '\\n')
+
+    def flush(self):
+        # Flush any remaining buffer content (if it doesn't match filter)
+        if self.buffer:
+            should_filter = False
+            buffer_lower = self.buffer.lower()
+            for pattern in self.filtered_patterns:
+                if pattern.lower() in buffer_lower:
+                    should_filter = True
+                    break
+            if not should_filter:
+                self.original_stream.write(self.buffer)
+            self.buffer = ''
+        self.original_stream.flush()
+
+# Replace stdout and stderr with filtered versions
+sys.stdout = FilteredOutput(sys.stdout)
+sys.stderr = FilteredOutput(sys.stderr)
 
 # Fix for PyTorch 2.7+ weights_only loading - allow Box objects in checkpoints
 torch.serialization.add_safe_globals([Box])
@@ -214,17 +285,20 @@ def run_unirig_inference(
     mode = task.mode
     assert mode in ['train', 'predict', 'validate']
 
-    # Import UniRig modules
-    from src.data.extract import get_files
-    from src.data.datapath import Datapath
-    from src.data.dataset import UniRigDatasetModule, DatasetConfig
-    from src.data.transform import TransformConfig
-    from src.tokenizer.spec import TokenizerConfig
-    from src.tokenizer.parse import get_tokenizer
-    from src.model.parse import get_model
-    from src.system.parse import get_system, get_writer
-    from src.inference.download import download
-    from lightning.pytorch.callbacks import ModelCheckpoint
+    # Import UniRig modules (suppress warnings during import)
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        from src.data.extract import get_files
+        from src.data.datapath import Datapath
+        from src.data.dataset import UniRigDatasetModule, DatasetConfig
+        from src.data.transform import TransformConfig
+        from src.tokenizer.spec import TokenizerConfig
+        from src.tokenizer.parse import get_tokenizer
+        from src.model.parse import get_model
+        from src.system.parse import get_system, get_writer
+        from src.inference.download import download
+        from lightning.pytorch.callbacks import ModelCheckpoint
 
     # Load configs first (needed for extraction)
     data_config = load_config('data', os.path.join('configs/data', task.components.data))
@@ -338,7 +412,7 @@ def run_unirig_inference(
     if predict_transform_config is not None:
         predict_transform_config = TransformConfig.parse(config=predict_transform_config)
 
-    # Get model
+    # Get model (suppress verbose warnings during loading)
     model_config = task.components.get('model', None)
     if model_config is not None:
         model_config = load_config('model', os.path.join('configs/model', model_config))
@@ -346,7 +420,10 @@ def run_unirig_inference(
             tokenizer = get_tokenizer(config=tokenizer_config)
         else:
             tokenizer = None
-        model = get_model(tokenizer=tokenizer, **model_config)
+        # Model loading will use filtered stdout/stderr automatically
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            model = get_model(tokenizer=tokenizer, **model_config)
     else:
         model = None
 
