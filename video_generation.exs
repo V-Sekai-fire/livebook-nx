@@ -546,6 +546,13 @@ end
   device = "cuda" if torch.cuda.is_available() else "cpu"
   print(f"Device: {device}")
 
+  # Clear CUDA cache if using GPU to free up memory
+  if device == "cuda":
+      torch.cuda.empty_cache()
+      import gc
+      gc.collect()
+      print("Cleared CUDA cache")
+
   # Import Wan2.2 modules
   try:
       import wan
@@ -609,49 +616,71 @@ end
   try:
       if "animate" in task:
           print("Initializing WanAnimate model...")
+          # Use memory-saving options
           model = wan.WanAnimate(
               config=cfg,
               checkpoint_dir=ckpt_dir,
               device_id=0 if device == "cuda" else -1,
               rank=0,
-              t5_cpu=(device == "cpu"),
-              init_on_cpu=(device == "cpu"),
-              convert_model_dtype=(device == "cpu"),
+              t5_cpu=True,  # Always use CPU for T5 to save GPU memory
+              init_on_cpu=True,  # Initialize on CPU to save GPU memory
+              convert_model_dtype=True,  # Convert dtype to save memory
           )
       elif "i2v" in task:
           print("Initializing WanI2V model...")
+          # Use memory-saving options: T5 on CPU, init on CPU, convert dtype
+          # This helps reduce GPU memory usage
           model = wan.WanI2V(
               config=cfg,
               checkpoint_dir=ckpt_dir,
               device_id=0 if device == "cuda" else -1,
               rank=0,
-              t5_cpu=(device == "cpu"),
-              init_on_cpu=(device == "cpu"),
-              convert_model_dtype=(device == "cpu"),
+              t5_cpu=True,  # Always use CPU for T5 to save GPU memory
+              init_on_cpu=True,  # Initialize on CPU to save GPU memory
+              convert_model_dtype=True,  # Convert dtype to save memory
           )
       elif "ti2v" in task:
           print("Initializing WanTI2V model...")
+          # Use memory-saving options
           model = wan.WanTI2V(
               config=cfg,
               checkpoint_dir=ckpt_dir,
               device_id=0 if device == "cuda" else -1,
               rank=0,
-              t5_cpu=(device == "cpu"),
-              init_on_cpu=(device == "cpu"),
-              convert_model_dtype=(device == "cpu"),
+              t5_cpu=True,  # Always use CPU for T5 to save GPU memory
+              init_on_cpu=True,  # Initialize on CPU to save GPU memory
+              convert_model_dtype=True,  # Convert dtype to save memory
           )
       else:
           print("Initializing WanT2V model...")
+          # Use memory-saving options
           model = wan.WanT2V(
               config=cfg,
               checkpoint_dir=ckpt_dir,
               device_id=0 if device == "cuda" else -1,
               rank=0,
-              t5_cpu=(device == "cpu"),
-              init_on_cpu=(device == "cpu"),
-              convert_model_dtype=(device == "cpu"),
+              t5_cpu=True,  # Always use CPU for T5 to save GPU memory
+              init_on_cpu=True,  # Initialize on CPU to save GPU memory
+              convert_model_dtype=True,  # Convert dtype to save memory
           )
       print("✓ Model initialized")
+
+      # Clear cache again after model initialization
+      if device == "cuda":
+          torch.cuda.empty_cache()
+          import gc
+          gc.collect()
+  except torch.cuda.OutOfMemoryError as e:
+      print(f"\\n❌ CUDA Out of Memory Error: {e}")
+      print("\\nTry the following:")
+      print("  1. Close other applications using GPU memory")
+      print("  2. Restart the script to clear GPU memory")
+      print("  3. Use a smaller resolution (e.g., 480p instead of 720p)")
+      print("  4. Reduce the number of steps")
+      print("  5. Set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
+      import traceback
+      traceback.print_exc()
+      raise
   except Exception as e:
       print(f"Error initializing model: {e}")
       import traceback

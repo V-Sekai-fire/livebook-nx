@@ -8,8 +8,11 @@
 #
 # Usage:
 #   elixir kokoro_tts_generation.exs "<text>" [options]
+#   elixir kokoro_tts_generation.exs --input-file <file> [options]
+#   echo "<text>" | elixir kokoro_tts_generation.exs [options]
 #
 # Options:
+#   --input-file, -i <path>         Read text from file (alternative to command-line text)
 #   --lang-code "a"                  Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
 #   --voice "af_heart"               Voice to use (default: "af_heart")
 #   --voice-file <path>               Path to voice tensor file (.pt) - overrides --voice if provided
@@ -76,27 +79,50 @@ defmodule ArgsParser do
         speed: :float,
         split_pattern: :string,
         output_format: :string,
-        sample_rate: :integer
+        sample_rate: :integer,
+        input_file: :string
       ],
       aliases: [
         l: :lang_code,
         v: :voice,
         s: :speed,
         f: :output_format,
-        r: :sample_rate
+        r: :sample_rate,
+        i: :input_file
       ]
     )
 
-    text = List.first(args)
+    # Get text from various sources (priority: input_file > command-line arg > stdin)
+    text = cond do
+      input_file = Keyword.get(opts, :input_file) ->
+        if File.exists?(input_file) do
+          File.read!(input_file)
+        else
+          IO.puts("Error: Input file not found: #{input_file}")
+          System.halt(1)
+        end
+      arg_text = List.first(args) ->
+        arg_text
+      true ->
+        # Try to read from stdin
+        case IO.binread(:stdio, :all) do
+          {:error, _} -> nil
+          :eof -> nil
+          data when is_binary(data) -> data
+        end
+    end
 
-    if !text do
+    if !text || String.trim(text) == "" do
       IO.puts("""
       Error: Text input is required.
 
       Usage:
         elixir kokoro_tts_generation.exs "<text>" [options]
+        elixir kokoro_tts_generation.exs --input-file <file> [options]
+        echo "<text>" | elixir kokoro_tts_generation.exs [options]
 
       Options:
+        --input-file, -i <path>         Read text from file (alternative to command-line text)
         --lang-code, -l "a"              Language code: a (American English), b (British English), e (Spanish), f (French), h (Hindi), i (Italian), j (Japanese), p (Portuguese), z (Chinese) (default: "a")
         --voice, -v "af_heart"          Voice to use (default: "af_heart")
         --voice-file <path>              Path to voice tensor file (.pt) - overrides --voice if provided
@@ -107,6 +133,9 @@ defmodule ArgsParser do
       """)
       System.halt(1)
     end
+
+    # Trim the text
+    text = String.trim(text)
 
     lang_code = Keyword.get(opts, :lang_code, "a")
     valid_lang_codes = ["a", "b", "e", "f", "h", "i", "j", "p", "z"]
