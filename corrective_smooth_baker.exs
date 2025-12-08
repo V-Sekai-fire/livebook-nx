@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # Corrective Smooth Baker Script
 # Improves deformation quality by baking Corrective Smooth modifier effects into vertex weights
 # Based on: https://superhivemarket.com/products/corrective-smooth-baker

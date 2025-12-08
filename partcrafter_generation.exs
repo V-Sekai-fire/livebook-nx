@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # PartCrafter Generation Script
 # Generate structured 3D mesh parts using PartCrafter
 # Repository: https://github.com/wgsxm/PartCrafter
@@ -64,7 +67,7 @@ dependencies = [
   # torch-cluster: platform-specific wheel URLs using environment markers
   # Windows: win_amd64 wheel
   "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
-  # Linux: linux_x86_64 wheel  
+  # Linux: linux_x86_64 wheel
   "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
 ]
 
@@ -195,10 +198,10 @@ defmodule HuggingFaceDownloader do
 
   def download_repo(repo_id, local_dir, repo_name \\ "model") do
     IO.puts("Downloading #{repo_name}...")
-    
+
     # Create directory
     File.mkdir_p!(local_dir)
-    
+
     # Get file tree from Hugging Face API
     case get_file_tree(repo_id) do
       {:ok, files} ->
@@ -206,16 +209,16 @@ defmodule HuggingFaceDownloader do
         files_list = Map.to_list(files)
         total = length(files_list)
         IO.puts("Found #{total} files to download")
-        
+
         files_list
         |> Enum.with_index(1)
         |> Enum.each(fn {{path, info}, index} ->
           download_file(repo_id, path, local_dir, info, index, total)
         end)
-        
+
         IO.puts("\n[OK] #{repo_name} downloaded")
         {:ok, local_dir}
-      
+
       {:error, reason} ->
         IO.puts("[ERROR] #{repo_name} download failed: #{inspect(reason)}")
         {:error, reason}
@@ -226,15 +229,15 @@ defmodule HuggingFaceDownloader do
     # Recursively get all files
     case get_files_recursive(repo_id, revision, "") do
       {:ok, files} ->
-        file_map = 
+        file_map =
           files
           |> Enum.map(fn file ->
             {file["path"], file}
           end)
           |> Map.new()
-        
+
         {:ok, file_map}
-      
+
       error ->
         error
     end
@@ -247,29 +250,29 @@ defmodule HuggingFaceDownloader do
     else
       "#{@api_base}/models/#{repo_id}/tree/#{revision}/#{path}"
     end
-    
+
     try do
       response = Req.get(url)
-      
+
       # Req.get returns response directly or wrapped in tuple
       items = case response do
         {:ok, %{status: 200, body: body}} when is_list(body) -> body
         %{status: 200, body: body} when is_list(body) -> body
-        {:ok, %{status: status}} -> 
+        {:ok, %{status: status}} ->
           raise "API returned status #{status}"
-        %{status: status} -> 
+        %{status: status} ->
           raise "API returned status #{status}"
-        {:error, reason} -> 
+        {:error, reason} ->
           raise inspect(reason)
-        other -> 
+        other ->
           raise "Unexpected response: #{inspect(other)}"
       end
-      
+
       files = Enum.filter(items, &(&1["type"] == "file"))
       dirs = Enum.filter(items, &(&1["type"] == "directory"))
-      
+
       # Recursively get files from subdirectories
-      subdir_files = 
+      subdir_files =
         dirs
         |> Enum.flat_map(fn dir ->
           case get_files_recursive(repo_id, revision, dir["path"]) do
@@ -277,7 +280,7 @@ defmodule HuggingFaceDownloader do
             _ -> []
           end
         end)
-      
+
       {:ok, files ++ subdir_files}
     rescue
       e -> {:error, Exception.message(e)}
@@ -288,15 +291,15 @@ defmodule HuggingFaceDownloader do
     # Construct download URL (using resolve endpoint for LFS files)
     url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
     local_path = Path.join(local_dir, path)
-    
+
     # Get file size for progress display
     file_size = info["size"] || 0
     size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
-    
+
     # Show current file being downloaded
     filename = Path.basename(path)
     IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
-    
+
     # Skip if file already exists
     if File.exists?(local_path) do
       IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
@@ -305,27 +308,27 @@ defmodule HuggingFaceDownloader do
       local_path
       |> Path.dirname()
       |> File.mkdir_p!()
-      
+
       # Download file with streaming, suppress debug logs
-      result = Req.get(url, 
+      result = Req.get(url,
         into: File.stream!(local_path, [], 65536),
         retry: :transient,
         max_redirects: 10
       )
-      
+
       case result do
         {:ok, %{status: 200}} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         %{status: 200} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         {:ok, %{status: status}} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         %{status: status} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         {:error, reason} ->
           IO.puts("\n[WARN] Failed to download #{path}: #{inspect(reason)}")
       end
@@ -416,13 +419,13 @@ if image_path_str.lower().endswith(('.mp4', '.avi', '.mov', '.mkv', '.webm')):
     cap = cv2.VideoCapture(image_path_str)
     if not cap.isOpened():
         raise ValueError(f"Could not open video file: {image_path_str}")
-    
+
     ret, frame = cap.read()
     cap.release()
-    
+
     if not ret:
         raise ValueError(f"Could not read frame from video: {image_path_str}")
-    
+
     # Convert BGR to RGB and save as temporary image file
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     temp_image_path = str(output_dir / "temp_extracted_frame.png")
@@ -448,13 +451,13 @@ try:
     from src.utils.data_utils import get_colored_mesh_composition
     # Import custom scheduler so it's registered with diffusers
     from src.schedulers import RectifiedFlowScheduler
-    
+
     # Initialize PartCrafter pipeline
     # Load from local directory (matching PartCrafter's predict.py and app.py)
     print("Loading PartCrafter pipeline from local directory...")
     pipe = PartCrafterPipeline.from_pretrained(partcrafter_weights_dir).to(device, dtype)
     print(f"[OK] PartCrafter pipeline loaded on {device}")
-    
+
 except Exception as e:
     print(f"[ERROR] Error loading models: {e}")
     import traceback
@@ -479,7 +482,7 @@ set_seed(seed)
 try:
     # Load image
     img_pil = Image.open(input_image_path)
-    
+
     # Run inference
     generator = torch.Generator(device=pipe.device).manual_seed(seed)
     outputs = pipe(
@@ -492,14 +495,14 @@ try:
         max_num_expanded_coords=int(1e9),
         use_flash_decoder=use_flash_decoder,
     ).meshes
-    
+
     # Handle None outputs (decoding errors)
     for i in range(len(outputs)):
         if outputs[i] is None:
             outputs[i] = trimesh.Trimesh(vertices=[[0, 0, 0]], faces=[[0, 0, 0]])
-    
+
     print(f"[OK] Generated {len(outputs)} parts successfully")
-    
+
 except Exception as e:
     print(f"[ERROR] Error during generation: {e}")
     import traceback
@@ -544,4 +547,3 @@ for i in range(len(outputs)):
 
 IO.puts("\n=== Complete ===")
 IO.puts("3D parts generation completed successfully!")
-

@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # Tris-to-Quads Converter Script
 # Converts triangles to quads in 3D model files using Optimized-Tris-to-Quads-Converter
 # Based on: https://github.com/Rulesobeyer/Tris-Quads-Ex

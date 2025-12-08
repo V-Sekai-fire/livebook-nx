@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # Qwen3-VL Vision-Language Inference Script
 # Generate text responses from images using Huihui-Qwen3-VL-8B-Instruct-abliterated
 # Model: Huihui-Qwen3-VL-8B-Instruct-abliterated (uncensored version)
@@ -157,39 +160,39 @@ defmodule HuggingFaceDownloader do
 
   def download_repo(repo_id, local_dir, repo_name \\ "model") do
     IO.puts("Downloading #{repo_name}...")
-    
+
     # Create directory
     File.mkdir_p!(local_dir)
-    
+
     # Get file tree from Hugging Face API
     case get_file_tree(repo_id) do
       {:ok, files} ->
         # files is a map, convert to list for counting and iteration
         files_list = Map.to_list(files)
-        
+
         # Filter out GGUF files (not needed for transformers library)
         # We only need safetensors, config files, tokenizer files, etc.
-        filtered_files = 
+        filtered_files =
           files_list
           |> Enum.reject(fn {path, _info} ->
-            String.ends_with?(path, ".gguf") or 
+            String.ends_with?(path, ".gguf") or
             String.contains?(path, "/GGUF/") or
             String.contains?(path, "\\GGUF\\")
           end)
-        
+
         total = length(filtered_files)
         skipped = length(files_list) - total
         IO.puts("Found #{length(files_list)} files (#{skipped} GGUF files skipped, #{total} files to download)")
-        
+
         filtered_files
         |> Enum.with_index(1)
         |> Enum.each(fn {{path, info}, index} ->
           download_file(repo_id, path, local_dir, info, index, total)
         end)
-        
+
         IO.puts("\n[OK] #{repo_name} downloaded")
         {:ok, local_dir}
-      
+
       {:error, reason} ->
         IO.puts("[ERROR] #{repo_name} download failed: #{inspect(reason)}")
         {:error, reason}
@@ -200,15 +203,15 @@ defmodule HuggingFaceDownloader do
     # Recursively get all files
     case get_files_recursive(repo_id, revision, "") do
       {:ok, files} ->
-        file_map = 
+        file_map =
           files
           |> Enum.map(fn file ->
             {file["path"], file}
           end)
           |> Map.new()
-        
+
         {:ok, file_map}
-      
+
       error ->
         error
     end
@@ -221,29 +224,29 @@ defmodule HuggingFaceDownloader do
     else
       "#{@api_base}/models/#{repo_id}/tree/#{revision}/#{path}"
     end
-    
+
     try do
       response = Req.get(url)
-      
+
       # Req.get returns response directly or wrapped in tuple
       items = case response do
         {:ok, %{status: 200, body: body}} when is_list(body) -> body
         %{status: 200, body: body} when is_list(body) -> body
-        {:ok, %{status: status}} -> 
+        {:ok, %{status: status}} ->
           raise "API returned status #{status}"
-        %{status: status} -> 
+        %{status: status} ->
           raise "API returned status #{status}"
-        {:error, reason} -> 
+        {:error, reason} ->
           raise inspect(reason)
-        other -> 
+        other ->
           raise "Unexpected response: #{inspect(other)}"
       end
-      
+
       files = Enum.filter(items, &(&1["type"] == "file"))
       dirs = Enum.filter(items, &(&1["type"] == "directory"))
-      
+
       # Recursively get files from subdirectories
-      subdir_files = 
+      subdir_files =
         dirs
         |> Enum.flat_map(fn dir ->
           case get_files_recursive(repo_id, revision, dir["path"]) do
@@ -251,7 +254,7 @@ defmodule HuggingFaceDownloader do
             _ -> []
           end
         end)
-      
+
       {:ok, files ++ subdir_files}
     rescue
       e -> {:error, Exception.message(e)}
@@ -262,15 +265,15 @@ defmodule HuggingFaceDownloader do
     # Construct download URL (using resolve endpoint for LFS files)
     url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
     local_path = Path.join(local_dir, path)
-    
+
     # Get file size for progress display
     file_size = info["size"] || 0
     size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
-    
+
     # Show current file being downloaded
     filename = Path.basename(path)
     IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
-    
+
     # Skip if file already exists
     if File.exists?(local_path) do
       IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
@@ -279,27 +282,27 @@ defmodule HuggingFaceDownloader do
       local_path
       |> Path.dirname()
       |> File.mkdir_p!()
-      
+
       # Download file with streaming, suppress debug logs
-      result = Req.get(url, 
+      result = Req.get(url,
         into: File.stream!(local_path, [], 65536),
         retry: :transient,
         max_redirects: 10
       )
-      
+
       case result do
         {:ok, %{status: 200}} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         %{status: 200} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         {:ok, %{status: status}} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         %{status: status} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         {:error, reason} ->
           IO.puts("\n[WARN] Failed to download #{path}: #{inspect(reason)}")
       end
@@ -322,7 +325,7 @@ repo_id = "huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated"
 # Download model weights
 case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
   {:ok, _} -> :ok
-  {:error, _} -> 
+  {:error, _} ->
     IO.puts("[WARN] Qwen3-VL download had errors, but continuing...")
     IO.puts("[INFO] Model will be loaded from Hugging Face Hub if local files are incomplete")
 end
@@ -405,12 +408,12 @@ try:
         "low_cpu_mem_usage": True,
         "attn_implementation": "flash_attention_2" if use_flash_attention else "sdpa",
     }
-    
+
     if quantization_config:
         load_kwargs["quantization_config"] = quantization_config
     else:
         load_kwargs["dtype"] = dtype
-    
+
     if Path(model_weights_dir).exists() and (Path(model_weights_dir) / "config.json").exists():
         print(f"Loading from local directory: {model_weights_dir}")
         model = Qwen3VLForConditionalGeneration.from_pretrained(
@@ -423,18 +426,18 @@ try:
             MODEL_ID,
             **load_kwargs
         )
-    
+
     if use_4bit:
         print(f"[OK] Model loaded on {device} with 4-bit quantization")
     else:
         print(f"[OK] Model loaded on {device} with dtype {dtype}")
     if use_flash_attention:
         print("[OK] Flash Attention 2 enabled")
-    
+
     # Load processor
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
     print("[OK] Processor loaded")
-    
+
 except Exception as e:
     print(f"[ERROR] Error loading model: {e}")
     import traceback
@@ -521,10 +524,10 @@ print("\\n=== End Response ===")
 if output_path:
     output_path_resolved = Path(output_path).resolve()
     output_path_resolved.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_path_resolved, 'w', encoding='utf-8') as f:
         f.write(response)
-    
+
     print(f"\\n[OK] Response saved to: {output_path_resolved}")
 else:
     # Save to default output directory with timestamp
@@ -532,13 +535,13 @@ else:
     tag = time.strftime("%Y%m%d_%H_%M_%S")
     export_dir = output_dir / tag
     export_dir.mkdir(exist_ok=True)
-    
+
     output_filename = f"qwen3vl_response_{tag}.txt"
     output_path_default = export_dir / output_filename
-    
+
     with open(output_path_default, 'w', encoding='utf-8') as f:
         f.write(response)
-    
+
     print(f"\\n[OK] Response saved to: {output_path_default}")
 
 print("\\n=== Complete ===")
@@ -546,4 +549,3 @@ print("\\n=== Complete ===")
 
 IO.puts("\n=== Complete ===")
 IO.puts("Vision-language inference completed successfully!")
-

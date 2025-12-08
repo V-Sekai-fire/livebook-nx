@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # Z-Image-Turbo Generation Script
 # Generate photorealistic images from text prompts using Z-Image-Turbo
 # Model: Z-Image-Turbo by Tongyi-MAI (6B parameters)
@@ -102,7 +105,7 @@ defmodule ArgsParser do
 
     width = Keyword.get(opts, :width, 1024)
     height = Keyword.get(opts, :height, 1024)
-    
+
     if width < 64 or width > 2048 or height < 64 or height > 2048 do
       IO.puts("Error: Width and height must be between 64 and 2048 pixels")
       System.halt(1)
@@ -160,10 +163,10 @@ defmodule HuggingFaceDownloader do
 
   def download_repo(repo_id, local_dir, repo_name \\ "model") do
     IO.puts("Downloading #{repo_name}...")
-    
+
     # Create directory
     File.mkdir_p!(local_dir)
-    
+
     # Get file tree from Hugging Face API
     case get_file_tree(repo_id) do
       {:ok, files} ->
@@ -171,16 +174,16 @@ defmodule HuggingFaceDownloader do
         files_list = Map.to_list(files)
         total = length(files_list)
         IO.puts("Found #{total} files to download")
-        
+
         files_list
         |> Enum.with_index(1)
         |> Enum.each(fn {{path, info}, index} ->
           download_file(repo_id, path, local_dir, info, index, total)
         end)
-        
+
         IO.puts("\n[OK] #{repo_name} downloaded")
         {:ok, local_dir}
-      
+
       {:error, reason} ->
         IO.puts("[ERROR] #{repo_name} download failed: #{inspect(reason)}")
         {:error, reason}
@@ -191,15 +194,15 @@ defmodule HuggingFaceDownloader do
     # Recursively get all files
     case get_files_recursive(repo_id, revision, "") do
       {:ok, files} ->
-        file_map = 
+        file_map =
           files
           |> Enum.map(fn file ->
             {file["path"], file}
           end)
           |> Map.new()
-        
+
         {:ok, file_map}
-      
+
       error ->
         error
     end
@@ -212,29 +215,29 @@ defmodule HuggingFaceDownloader do
     else
       "#{@api_base}/models/#{repo_id}/tree/#{revision}/#{path}"
     end
-    
+
     try do
       response = Req.get(url)
-      
+
       # Req.get returns response directly or wrapped in tuple
       items = case response do
         {:ok, %{status: 200, body: body}} when is_list(body) -> body
         %{status: 200, body: body} when is_list(body) -> body
-        {:ok, %{status: status}} -> 
+        {:ok, %{status: status}} ->
           raise "API returned status #{status}"
-        %{status: status} -> 
+        %{status: status} ->
           raise "API returned status #{status}"
-        {:error, reason} -> 
+        {:error, reason} ->
           raise inspect(reason)
-        other -> 
+        other ->
           raise "Unexpected response: #{inspect(other)}"
       end
-      
+
       files = Enum.filter(items, &(&1["type"] == "file"))
       dirs = Enum.filter(items, &(&1["type"] == "directory"))
-      
+
       # Recursively get files from subdirectories
-      subdir_files = 
+      subdir_files =
         dirs
         |> Enum.flat_map(fn dir ->
           case get_files_recursive(repo_id, revision, dir["path"]) do
@@ -242,7 +245,7 @@ defmodule HuggingFaceDownloader do
             _ -> []
           end
         end)
-      
+
       {:ok, files ++ subdir_files}
     rescue
       e -> {:error, Exception.message(e)}
@@ -253,15 +256,15 @@ defmodule HuggingFaceDownloader do
     # Construct download URL (using resolve endpoint for LFS files)
     url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
     local_path = Path.join(local_dir, path)
-    
+
     # Get file size for progress display
     file_size = info["size"] || 0
     size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
-    
+
     # Show current file being downloaded
     filename = Path.basename(path)
     IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
-    
+
     # Skip if file already exists
     if File.exists?(local_path) do
       IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
@@ -270,27 +273,27 @@ defmodule HuggingFaceDownloader do
       local_path
       |> Path.dirname()
       |> File.mkdir_p!()
-      
+
       # Download file with streaming, suppress debug logs
-      result = Req.get(url, 
+      result = Req.get(url,
         into: File.stream!(local_path, [], 65536),
         retry: :transient,
         max_redirects: 10
       )
-      
+
       case result do
         {:ok, %{status: 200}} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         %{status: 200} ->
           IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-        
+
         {:ok, %{status: status}} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         %{status: status} ->
           IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-        
+
         {:error, reason} ->
           IO.puts("\n[WARN] Failed to download #{path}: #{inspect(reason)}")
       end
@@ -313,7 +316,7 @@ repo_id = "Tongyi-MAI/Z-Image-Turbo"
 # Download Z-Image-Turbo weights
 case HuggingFaceDownloader.download_repo(repo_id, zimage_weights_dir, "Z-Image-Turbo") do
   {:ok, _} -> :ok
-  {:error, _} -> 
+  {:error, _} ->
     IO.puts("[WARN] Z-Image-Turbo download had errors, but continuing...")
     IO.puts("[INFO] If the model is not on Hugging Face, you may need to download it manually")
 end
@@ -371,7 +374,7 @@ else:
 try:
     # Load Z-Image-Turbo pipeline
     model_id = "Tongyi-MAI/Z-Image-Turbo"
-    
+
     # Try loading from local directory first, then from Hugging Face
     if Path(zimage_weights_dir).exists() and (Path(zimage_weights_dir) / "model_index.json").exists():
         print(f"Loading from local directory: {zimage_weights_dir}")
@@ -387,10 +390,10 @@ try:
             torch_dtype=dtype,
             low_cpu_mem_usage=False,
         )
-    
+
     pipe = pipe.to(device)
     print(f"[OK] Z-Image-Turbo pipeline loaded on {device} with dtype {dtype}")
-    
+
     # [Optional] Attention Backend
     # Diffusers uses SDPA by default. Switch to Flash Attention for better efficiency if supported:
     try:
@@ -404,19 +407,19 @@ try:
             print("[OK] Enabled Flash-Attention-2")
         except:
             print("[INFO] Using default SDPA attention backend")
-    
+
     # [Optional] Model Compilation
     # Compiling the DiT model accelerates inference, but the first run will take longer to compile.
     # Uncomment the following line to enable compilation:
     # pipe.transformer.compile()
     # print("[OK] Model compilation enabled (first run will be slower)")
-    
+
     # [Optional] CPU Offloading
     # Enable CPU offloading for memory-constrained devices.
     # Uncomment the following line to enable CPU offloading:
     # pipe.enable_model_cpu_offload()
     # print("[OK] CPU offloading enabled")
-    
+
 except Exception as e:
     print(f"[ERROR] Error loading model: {e}")
     import traceback
@@ -442,7 +445,7 @@ set_seed(seed)
 try:
     # Generate image
     generator = torch.Generator(device=device).manual_seed(seed)
-    
+
     # Run inference (text-to-image only - Z-Image-Turbo doesn't support image editing)
     output = pipe(
         prompt=prompt,
@@ -452,12 +455,12 @@ try:
         guidance_scale=guidance_scale,
         generator=generator,
     )
-    
+
     # Get the generated image
     image = output.images[0]
-    
+
     print("[OK] Image generated successfully")
-    
+
 except Exception as e:
     print(f"[ERROR] Error during generation: {e}")
     import traceback
@@ -498,4 +501,3 @@ print(f"  - {output_path}")
 
 IO.puts("\n=== Complete ===")
 IO.puts("Image generation completed successfully!")
-

@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # SAM 3 Video Segmentation Script
 # Segment objects in videos using SAM 3 (Segment Anything Model 3) from Meta Research
 #
@@ -116,7 +119,7 @@ defmodule ArgsParser do
     end
 
     mask_color_name = Keyword.get(opts, :mask_color, "green")
-    
+
     # Validate mask_color using the enum
     if !MaskColors.valid?(mask_color_name) do
       valid_colors_str = Enum.join(MaskColors.valid_colors(), ", ")
@@ -124,7 +127,7 @@ defmodule ArgsParser do
       IO.puts("       Valid colors are: #{valid_colors_str}")
       System.halt(1)
     end
-    
+
     # Get RGB values from the enum
     mask_color_rgb = MaskColors.get_rgb(mask_color_name)
 
@@ -213,10 +216,10 @@ print("Pre-installing cv_utils kernel (if available)...")
 try:
     from kernels import get_kernel
     import os
-    
+
     # Set environment variable to allow kernel installation
     os.environ.setdefault("KERNELS_CACHE_DIR", os.path.expanduser("~/.cache/kernels"))
-    
+
     try:
         # Try to get/install the kernel with explicit revision
         print("  Attempting to install kernels-community/cv_utils...")
@@ -242,10 +245,10 @@ def download_weights(url, dest):
     start = time.time()
     print(f"Downloading model weights from: {url}")
     print(f"Destination: {dest}")
-    
+
     os.makedirs(dest, exist_ok=True)
     temp_file = os.path.join(dest, "model.tar")
-    
+
     # Download using requests or urllib
     if HAS_REQUESTS:
         response = requests.get(url, stream=True)
@@ -255,15 +258,15 @@ def download_weights(url, dest):
                 f.write(chunk)
     else:
         urllib.request.urlretrieve(url, temp_file)
-    
+
     # Extract tar file
     with tarfile.open(temp_file, 'r:*') as tar:
         tar.extractall(dest)
-    
+
     # Clean up
     if os.path.exists(temp_file):
         os.remove(temp_file)
-    
+
     print(f"✓ Download and extraction completed in {time.time() - start:.2f} seconds")
 """, %{})
 
@@ -453,18 +456,18 @@ writer = imageio.get_writer(str(output_video_path), fps=original_fps, codec='lib
 
 for idx, frame_pil in enumerate(frames):
     frame_np = np.array(frame_pil)
-    
+
     # Start with white background for clean mask visualization
     output_frame = np.ones_like(frame_np) * 255
 
     if idx in output_frames_data:
         results = output_frames_data[idx]
         masks = results.get('masks', None)
-        
+
         if masks is not None:
             if isinstance(masks, torch.Tensor):
                 masks = masks.cpu().numpy()
-            
+
             if len(masks) > 0:
                 combined_mask = np.zeros((height, width), dtype=bool)
                 for mask in masks:
@@ -474,14 +477,14 @@ for idx, frame_pil in enumerate(frames):
                         pass
                     else:
                         mask = mask.squeeze()
-                    
+
                     if mask.shape != (height, width):
                         mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
-                    
+
                     combined_mask = np.logical_or(combined_mask, mask > 0.0)
-                
+
                 mask_indices = combined_mask
-                
+
                 if mask_only:
                     # Show original video only in masked regions, rest is white
                     output_frame[mask_indices] = frame_np[mask_indices]
@@ -499,7 +502,7 @@ for idx, frame_pil in enumerate(frames):
     else:
         # If no mask data for this frame, keep it white
         pass
-    
+
     writer.append_data(output_frame)
 
 writer.close()
@@ -509,21 +512,21 @@ print(f"✓ Video saved: {output_video_path}")
 if mask_video:
     mask_video_path = output_dir / "output_mask.mp4"
     print(f"\\nGenerating mask video: {mask_video_path}...")
-    
+
     mask_writer = imageio.get_writer(str(mask_video_path), fps=original_fps, codec='libx264', quality=None, pixelformat='yuv420p')
-    
+
     for idx, frame_pil in enumerate(frames):
         # Create black background
         mask_frame = np.zeros((height, width, 3), dtype=np.uint8)
-        
+
         if idx in output_frames_data:
             results = output_frames_data[idx]
             masks = results.get('masks', None)
-            
+
             if masks is not None:
                 if isinstance(masks, torch.Tensor):
                     masks = masks.cpu().numpy()
-                
+
                 if len(masks) > 0:
                     combined_mask = np.zeros((height, width), dtype=bool)
                     for mask in masks:
@@ -533,17 +536,17 @@ if mask_video:
                             pass
                         else:
                             mask = mask.squeeze()
-                        
+
                         if mask.shape != (height, width):
                             mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
-                        
+
                         combined_mask = np.logical_or(combined_mask, mask > 0.0)
-                    
+
                     # Set mask areas to white (255)
                     mask_frame[combined_mask] = [255, 255, 255]
-        
+
         mask_writer.append_data(mask_frame)
-    
+
     mask_writer.close()
     print(f"✓ Mask video saved: {mask_video_path}")
 """, python_globals)
@@ -566,33 +569,33 @@ if config.return_zip do
   if return_zip:
       masks_dir = output_dir / "masks"
       masks_dir.mkdir(exist_ok=True)
-      
+
       print("Saving individual frame masks...")
       for frame_idx, results in output_frames_data.items():
           masks = results.get('masks', None)
           if masks is not None:
               if isinstance(masks, torch.Tensor):
                   masks = masks.cpu().numpy()
-              
+
               if len(masks) > 0:
                   height, width = np.array(frames[0]).shape[:2]
                   combined_mask = np.zeros((height, width), dtype=np.uint8)
-                  
+
                   for mask in masks:
                       if mask.ndim == 3 and mask.shape[0] == 1:
                           mask = mask.squeeze(0)
                       elif mask.ndim > 2:
                           mask = mask.squeeze()
-                      
+
                       if mask.shape != (height, width):
                           mask = cv2.resize(mask.astype(np.uint8), (width, height), interpolation=cv2.INTER_NEAREST)
-                      
+
                       mask_bool = mask > 0.0
                       combined_mask = np.logical_or(combined_mask, mask_bool)
-                  
+
                   mask_img = Image.fromarray((combined_mask * 255).astype(np.uint8))
                   mask_img.save(masks_dir / f"mask_{frame_idx:05d}.png")
-      
+
       print(f"✓ Saved {len(list(masks_dir.glob('*.png')))} mask images")
   """, python_globals)
 
@@ -617,24 +620,24 @@ if return_zip:
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         # Add video
         zipf.write(output_video_path, "output.mp4")
-        
+
         # Add mask video if it exists
         mask_video_path = output_dir / "output_mask.mp4"
         if mask_video_path.exists():
             zipf.write(mask_video_path, "output_mask.mp4")
-        
+
         # Add masks
         masks_dir = output_dir / "masks"
         if masks_dir.exists():
             for mask_file in masks_dir.glob("*.png"):
                 zipf.write(mask_file, f"masks/{mask_file.name}")
-    
+
     print(f"✓ Created ZIP: {zip_path}")
     print(f"📥 File location: {zip_path.absolute()}")
 else:
     print(f"✓ Video saved: {output_video_path}")
     print(f"📥 File location: {output_video_path.absolute()}")
-    
+
     # Show mask video location if it was created
     mask_video_path = output_dir / "output_mask.mp4"
     if mask_video_path.exists():

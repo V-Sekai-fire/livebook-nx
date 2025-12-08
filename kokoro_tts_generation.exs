@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # Kokoro TTS Generation Script
 # Generate speech from text using Kokoro-82M (Text-to-Speech)
 # Model: Kokoro-82M by hexgrad (82M parameters, Apache-2.0 License)

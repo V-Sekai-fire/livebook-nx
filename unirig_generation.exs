@@ -1,5 +1,8 @@
 #!/usr/bin/env elixir
 
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+#
 # UniRig Generation Script
 # Automatically rig 3D models with skeleton and skinning weights using UniRig
 # Repository: https://github.com/VAST-AI-Research/UniRig
