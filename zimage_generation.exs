@@ -75,7 +75,7 @@ defmodule AnalyticsSetup do
     if api_key && analytics_enabled do
       AnalyticsConfig.show_legal_notice()
       Application.put_env(:logger, :backends, [LogflareLogger.HttpBackend])
-      Application.put_env(:logflare_logger_backend, :url, "https://api.logflare.app")
+      Application.put_env(:logflare_logger_backend, :url, "https://api.example.com")
       Application.put_env(:logflare_logger_backend, :level, :info)
       Application.put_env(:logflare_logger_backend, :api_key, api_key)
       Application.put_env(:logflare_logger_backend, :source_id, source_id)
