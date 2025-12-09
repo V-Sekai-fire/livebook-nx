@@ -4,9 +4,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
 #
 # Qwen3-VL Vision-Language Inference Script
-# Generate text responses from images using Huihui-Qwen3-VL-8B-Instruct-abliterated
-# Model: Huihui-Qwen3-VL-8B-Instruct-abliterated (uncensored version)
-# Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated
+# Generate text responses from images using Huihui-Qwen3-VL-4B-Thinking-abliterated
+# Model: Huihui-Qwen3-VL-4B-Thinking-abliterated (uncensored version)
+# Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated
 #
 # Usage:
 #   elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
@@ -61,9 +61,9 @@ defmodule ArgsParser do
   def show_help do
     IO.puts("""
     Qwen3-VL Vision-Language Inference Script
-    Generate text responses from images using Huihui-Qwen3-VL-8B-Instruct-abliterated
-    Model: Huihui-Qwen3-VL-8B-Instruct-abliterated (uncensored version)
-    Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated
+    Generate text responses from images using Huihui-Qwen3-VL-4B-Thinking-abliterated
+    Model: Huihui-Qwen3-VL-4B-Thinking-abliterated (uncensored version)
+    Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated
 
     Usage:
       elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
@@ -74,8 +74,8 @@ defmodule ArgsParser do
       --top-p <float>                Top-p (nucleus) sampling (default: 1.0)
       --output, -o <path>            Output file path for text response (optional)
       --use-flash-attention          Use Flash Attention 2 for better performance (default: false)
-      --use-4bit                     Use 4-bit quantization (default: true, recommended for 8B model, ~4-5GB VRAM)
-      --full-precision                Use full precision instead of 4-bit quantization (requires 16GB+ VRAM)
+      --use-4bit                     Use 4-bit quantization (default: true, recommended for 4B model, ~2-3GB VRAM)
+      --full-precision                Use full precision instead of 4-bit quantization (requires 8GB+ VRAM)
       --help, -h                      Show this help message
 
     Example:
@@ -211,7 +211,7 @@ Use 4-bit Quantization: #{config.use_4bit}
 # Add weights directory to config for Python
 base_dir = Path.expand(".")
 config_with_paths = Map.merge(config, %{
-  model_weights_dir: Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-8B-Instruct-abliterated"])
+  model_weights_dir: Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Thinking-abliterated"])
 })
 
 # Save config to JSON for Python to read
@@ -380,12 +380,12 @@ IO.puts("\n=== Step 2: Download Pretrained Weights ===")
 IO.puts("Downloading Qwen3-VL models from Hugging Face...")
 
 base_dir = Path.expand(".")
-model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-8B-Instruct-abliterated"])
+model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Thinking-abliterated"])
 
 IO.puts("Using weights directory: #{model_weights_dir}")
 
 # Qwen3-VL repository on Hugging Face
-repo_id = "huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated"
+repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
 
 # Download model weights
 case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
@@ -435,8 +435,16 @@ os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
 # Get configuration from JSON file
-with open("config.json", 'r', encoding='utf-8') as f:
+config_file = Path("config.json")
+if not config_file.exists():
+    raise FileNotFoundError("config.json not found. This should be created by the Elixir script.")
+
+with open(config_file, 'r', encoding='utf-8') as f:
     config = json.load(f)
+
+# Validate config is a dictionary
+if not isinstance(config, dict):
+    raise ValueError(f"config.json must contain a JSON object, got {type(config)}")
 
 image_path = config.get('image_path')
 prompt = config.get('prompt')
@@ -447,13 +455,19 @@ output_path = config.get('output_path')
 use_flash_attention = config.get('use_flash_attention', False)
 use_4bit = config.get('use_4bit', True)
 
+# Validate required fields
+if not image_path:
+    raise ValueError(f"image_path is required but was not found in config.json. Config keys: {list(config.keys())}")
+if not prompt:
+    raise ValueError(f"prompt is required but was not found in config.json. Config keys: {list(config.keys())}")
+
 # Get weights directory from config
 model_weights_dir = config.get('model_weights_dir')
 
 # Fallback to default path if not in config
 if not model_weights_dir:
     base_dir = Path.cwd()
-    model_weights_dir = str(base_dir / "pretrained_weights" / "Huihui-Qwen3-VL-8B-Instruct-abliterated")
+    model_weights_dir = str(base_dir / "pretrained_weights" / "Huihui-Qwen3-VL-4B-Thinking-abliterated")
 
 # Ensure path is string
 model_weights_dir = str(Path(model_weights_dir).resolve())
@@ -468,7 +482,7 @@ output_dir.mkdir(exist_ok=True)
 print("\\n=== Step 3: Initialize Model ===")
 print("Loading Qwen3-VL model...")
 
-MODEL_ID = "huihui-ai/Huihui-Qwen3-VL-8B-Instruct-abliterated"
+MODEL_ID = "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
@@ -531,8 +545,8 @@ except Exception as e:
     print("\\nMake sure you have")
     print("  1. All dependencies installed via uv")
     print("  2. Sufficient GPU memory:")
-    print("     - 16GB+ VRAM for 8B model at full precision")
-    print("     - 4-5GB VRAM for 8B model with --use-4bit (recommended)")
+    print("     - 8GB+ VRAM for 4B model at full precision")
+    print("     - 2-3GB VRAM for 4B model with --use-4bit (recommended)")
     print("  3. Flash Attention 2 installed if using --use-flash-attention")
     raise
 

@@ -524,8 +524,8 @@ defmodule ZImageGenerator.Server do
     # Timeout: 10 minutes (600,000 ms) - image generation can take time, especially on first run
     timeout_ms = 600_000
     case GenServer.call(server, {:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, timeout_ms) do
-      {:error, reason} = error -> error
-      {:ok, path} = ok -> ok
+      {:error, _reason} = error -> error
+      {:ok, _path} = ok -> ok
       other -> {:error, "Unexpected response: #{inspect(other)}"}
     end
   end
