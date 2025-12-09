@@ -39,8 +39,8 @@ dependencies = [
   "transformers",
   "accelerate",
   "pillow",
-  "torch",
-  "torchvision",
+  "torch>=2.0.0,<2.5.0",  # Pin to stable version range for Windows compatibility
+  "torchvision>=0.15.0,<0.20.0",  # Pin torchvision to compatible version
   "numpy",
   "huggingface-hub",
   "bitsandbytes",
@@ -401,8 +401,29 @@ import json
 import sys
 import os
 from pathlib import Path
+
+# Verify PyTorch installation before importing transformers
+print("\\nVerifying PyTorch installation...")
+try:
+    import torch
+    print(f"PyTorch version: {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+    # Verify torch.serialization exists
+    from torch import serialization
+    print("[OK] PyTorch installation verified")
+except ImportError as e:
+    print(f"\\n[ERROR] Failed to import PyTorch: {e}")
+    print("This may be due to missing DLLs or an incomplete installation.")
+    print("Please ensure Visual C++ Redistributables are installed.")
+    raise
+except Exception as e:
+    print(f"\\n[ERROR] PyTorch import error: {e}")
+    print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
+    raise
+
 from PIL import Image
-import torch
 from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
 
 # Set CPU thread optimization
