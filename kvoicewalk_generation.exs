@@ -9,10 +9,12 @@
 #
 # Usage:
 #   elixir kvoicewalk_generation.exs --target-audio <audio.wav> --target-text "<text>" [options]
+#   elixir kvoicewalk_generation.exs --target-folder <folder> [options]
 #
 # Options:
 #   --target-audio <path>          Target audio file (must be 24000 Hz mono WAV)
 #   --target-text <text>           Text spoken in the target audio (or path to .txt file)
+#   --target-folder <path>         Folder containing audio/text pairs (processes all pairs in folder/subfolders)
 #   --other-text <text>            Text for self-similarity comparison (default: provided default)
 #   --starting-voice <path>        Path to starting voice tensor (.pt file)
 #   --voice-folder <path>          Path to folder containing voice tensors (default: ./voices)
@@ -87,10 +89,12 @@ defmodule ArgsParser do
 
     Usage:
       elixir kvoicewalk_generation.exs --target-audio <audio.wav> --target-text "<text>" [options]
+      elixir kvoicewalk_generation.exs --target-folder <folder> [options]
 
     Options:
       --target-audio <path>          Target audio file (must be 24000 Hz mono WAV)
       --target-text <text>           Text spoken in the target audio (or path to .txt file)
+      --target-folder <path>         Folder containing audio/text pairs (processes all pairs recursively)
       --other-text <text>            Text for self-similarity comparison (default: provided default)
       --starting-voice <path>        Path to starting voice tensor (.pt file)
       --voice-folder <path>          Path to folder containing voice tensors (default: ./voices)
@@ -113,6 +117,7 @@ defmodule ArgsParser do
       switches: [
         target_audio: :string,
         target_text: :string,
+        target_folder: :string,
         other_text: :string,
         starting_voice: :string,
         voice_folder: :string,
@@ -135,13 +140,36 @@ defmodule ArgsParser do
 
     target_audio = Keyword.get(opts, :target_audio)
     target_text = Keyword.get(opts, :target_text)
+    target_folder = Keyword.get(opts, :target_folder)
 
-    if !target_audio do
+    # Check if using folder mode
+    if target_folder do
+      if !File.exists?(target_folder) or !File.dir?(target_folder) do
+        IO.puts("Error: Target folder not found or is not a directory: #{target_folder}")
+        System.halt(1)
+      end
+
+      # Folder mode - will process all audio/text pairs
+      %{
+        target_folder: target_folder,
+        other_text: Keyword.get(opts, :other_text),
+        starting_voice: Keyword.get(opts, :starting_voice),
+        voice_folder: Keyword.get(opts, :voice_folder, "./voices"),
+        interpolate_start: Keyword.get(opts, :interpolate_start, false),
+        transcribe_start: Keyword.get(opts, :transcribe_start, false),
+        population_limit: Keyword.get(opts, :population_limit, 10),
+        step_limit: Keyword.get(opts, :step_limit, 10000),
+        output_name: Keyword.get(opts, :output_name, "generated_voice") |> String.replace_suffix(".pt", "")
+      }
+    else
+      # Single file mode
+      if !target_audio do
       IO.puts("""
-      Error: Target audio file is required.
+      Error: Either --target-audio or --target-folder is required.
 
       Usage:
         elixir kvoicewalk_generation.exs --target-audio <audio.wav> --target-text "<text>" [options]
+        elixir kvoicewalk_generation.exs --target-folder <folder> [options]
 
       Use --help or -h for more information.
       """)
@@ -150,7 +178,7 @@ defmodule ArgsParser do
 
     if !target_text do
       IO.puts("""
-      Error: Target text is required.
+      Error: Target text is required when using --target-audio.
 
       Usage:
         elixir kvoicewalk_generation.exs --target-audio <audio.wav> --target-text "<text>" [options]
@@ -200,25 +228,38 @@ defmodule ArgsParser do
       step_limit: step_limit,
       output_name: Keyword.get(opts, :output_name, "generated_voice") |> String.replace_suffix(".pt", "")
     }
-
-    config
+    end
   end
 end
 
 # Get configuration
 config = ArgsParser.parse(System.argv())
 
-IO.puts("""
-=== KVoiceWalk Voice Cloning ===
-Target Audio: #{config.target_audio}
-Target Text: #{String.slice(config.target_text, 0, 100)}#{if String.length(config.target_text) > 100, do: "...", else: ""}
-Voice Folder: #{config.voice_folder}
-Interpolate Start: #{config.interpolate_start}
-Transcribe Start: #{config.transcribe_start}
-Population Limit: #{config.population_limit}
-Step Limit: #{config.step_limit}
-Output Name: #{config.output_name}
-""")
+# Check if folder mode
+if Map.has_key?(config, :target_folder) do
+  IO.puts("""
+  === KVoiceWalk Voice Cloning (Folder Mode) ===
+  Target Folder: #{config.target_folder}
+  Voice Folder: #{config.voice_folder}
+  Interpolate Start: #{config.interpolate_start}
+  Transcribe Start: #{config.transcribe_start}
+  Population Limit: #{config.population_limit}
+  Step Limit: #{config.step_limit}
+  Output Name: #{config.output_name}
+  """)
+else
+  IO.puts("""
+  === KVoiceWalk Voice Cloning ===
+  Target Audio: #{config.target_audio}
+  Target Text: #{String.slice(config.target_text, 0, 100)}#{if String.length(config.target_text) > 100, do: "...", else: ""}
+  Voice Folder: #{config.voice_folder}
+  Interpolate Start: #{config.interpolate_start}
+  Transcribe Start: #{config.transcribe_start}
+  Population Limit: #{config.population_limit}
+  Step Limit: #{config.step_limit}
+  Output Name: #{config.output_name}
+  """)
+end
 
 # Add paths to config for Python
 base_dir = Path.expand(".")
@@ -257,6 +298,7 @@ with open("config.json", 'r', encoding='utf-8') as f:
 
 target_audio = config.get('target_audio')
 target_text = config.get('target_text')
+target_folder = config.get('target_folder')
 other_text = config.get('other_text')
 starting_voice = config.get('starting_voice')
 voice_folder = config.get('voice_folder', './voices')
@@ -269,7 +311,8 @@ kvoicewalk_path = config.get('kvoicewalk_path')
 workspace_root = config.get('workspace_root')
 
 # Resolve paths
-target_audio = Path(target_audio).resolve()
+if target_audio:
+    target_audio = Path(target_audio).resolve()
 kvoicewalk_path = Path(kvoicewalk_path).resolve()
 workspace_root = Path(workspace_root).resolve()
 
@@ -295,88 +338,216 @@ tag = time.strftime("%Y%m%d_%H_%M_%S")
 export_dir = output_dir / tag
 export_dir.mkdir(exist_ok=True, parents=True)
 
-print(f"\\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
-print(f"Target Audio: {target_audio}")
-if target_text:
-    print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
-else:
-    print(f"Target Text: (not provided)")
-print(f"Output Directory: {export_dir}")
-print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
+# Define function to process a single audio/text pair
+def process_single_pair(target_audio, target_text, other_text, starting_voice, voice_folder,
+                       interpolate_start, transcribe_start, population_limit, step_limit,
+                       output_name, export_dir, kvoicewalk_path):
+    # Process a single audio/text pair through KVoiceWalk
+    # Verify PyTorch can be imported before proceeding (only once)
+    if not hasattr(process_single_pair, '_pytorch_verified'):
+        print("\\nVerifying PyTorch installation...")
+        try:
+            import torch
+            print(f"PyTorch version: {torch.__version__}")
+            print(f"CUDA available: {torch.cuda.is_available()}")
+            if torch.cuda.is_available():
+                print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+            process_single_pair._pytorch_verified = True
+        except ImportError as e:
+            print(f"\\n[ERROR] Failed to import PyTorch: {e}")
+            print("This may be due to missing DLLs or an incomplete installation.")
+            print("Please ensure Visual C++ Redistributables are installed.")
+            raise
+        except Exception as e:
+            print(f"\\n[ERROR] PyTorch import error: {e}")
+            print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
+            raise
 
-# Verify PyTorch can be imported before proceeding
-print("\\nVerifying PyTorch installation...")
-try:
-    import torch
-    print(f"PyTorch version: {torch.__version__}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"CUDA device: {torch.cuda.get_device_name(0)}")
-except ImportError as e:
-    print(f"\\n[ERROR] Failed to import PyTorch: {e}")
-    print("This may be due to missing DLLs or an incomplete installation.")
-    print("Please ensure Visual C++ Redistributables are installed.")
-    raise
-except Exception as e:
-    print(f"\\n[ERROR] PyTorch import error: {e}")
-    print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
-    raise
+    # Import KVoiceWalk modules
+    from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
+    from utilities.kvoicewalk import KVoiceWalk
 
-# Import KVoiceWalk modules
-print("\\nImporting KVoiceWalk modules...")
-from utilities.audio_processor import Transcriber, convert_to_wav_mono_24k
-from utilities.kvoicewalk import KVoiceWalk
-
-# Handle target_audio - convert to mono wav 24K if needed
-if target_audio.exists() and target_audio.is_file():
-    target_audio = Path(convert_to_wav_mono_24k(target_audio))
-else:
-    raise FileNotFoundError(f"Target audio file not found: {target_audio}")
-
-# Handle transcription if requested
-if transcribe_start:
-    print(f"\\nTranscribing target audio...")
-    transcriber = Transcriber()
-    target_text = transcriber.transcribe(audio_path=target_audio)
-    print(f"Transcribed text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
-
-# Handle text input - read from file if it's a .txt file path
-# Ensure target_text is a string before processing
-if not target_text:
-    raise ValueError("target_text is required but was not provided")
-
-if isinstance(target_text, str) and target_text.endswith('.txt'):
-    text_path = Path(target_text)
-    if text_path.exists() and text_path.is_file():
-        target_text = text_path.read_text(encoding='utf-8')
+    # Handle target_audio - convert to mono wav 24K if needed
+    if target_audio.exists() and target_audio.is_file():
+        target_audio = Path(convert_to_wav_mono_24k(target_audio))
     else:
-        print(f"Warning: Text file not found: {text_path}, using as literal text")
-elif not isinstance(target_text, str):
-    # Convert to string if it's not already
-    target_text = str(target_text)
+        raise FileNotFoundError(f"Target audio file not found: {target_audio}")
 
-# Set default other_text if not provided
-if not other_text:
-    other_text = "If you mix vinegar, baking soda, and a bit of dish soap in a tall cylinder, the resulting eruption is both a visual and tactile delight, often used in classrooms to simulate volcanic activity on a miniature scale."
+    # Handle transcription if requested
+    if transcribe_start:
+        print(f"\\nTranscribing target audio...")
+        transcriber = Transcriber()
+        target_text = transcriber.transcribe(audio_path=target_audio)
+        print(f"Transcribed text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
 
-# Initialize and run KVoiceWalk
-print(f"\\nInitializing KVoiceWalk...")
-try:
-    kvoicewalk = KVoiceWalk(
-        target_audio=target_audio,
-        target_text=target_text,
-        other_text=other_text,
-        voice_folder=voice_folder,
-        interpolate_start=interpolate_start,
-        population_limit=population_limit,
-        starting_voice=starting_voice if starting_voice else None,
-        output_name=output_name
+    # Handle text input - read from file if it's a .txt file path
+    # Ensure target_text is a string before processing
+    if not target_text:
+        raise ValueError("target_text is required but was not provided")
+
+    if isinstance(target_text, str) and target_text.endswith('.txt'):
+        text_path = Path(target_text)
+        if text_path.exists() and text_path.is_file():
+            target_text = text_path.read_text(encoding='utf-8')
+        else:
+            print(f"Warning: Text file not found: {text_path}, using as literal text")
+    elif not isinstance(target_text, str):
+        # Convert to string if it's not already
+        target_text = str(target_text)
+
+    # Set default other_text if not provided
+    if not other_text:
+        other_text = "If you mix vinegar, baking soda, and a bit of dish soap in a tall cylinder, the resulting eruption is both a visual and tactile delight, often used in classrooms to simulate volcanic activity on a miniature scale."
+
+    # Initialize and run KVoiceWalk
+    print(f"\\nInitializing KVoiceWalk...")
+    try:
+        kvoicewalk = KVoiceWalk(
+            target_audio=target_audio,
+            target_text=target_text,
+            other_text=other_text,
+            voice_folder=voice_folder,
+            interpolate_start=interpolate_start,
+            population_limit=population_limit,
+            starting_voice=starting_voice if starting_voice else None,
+            output_name=output_name
+        )
+
+        print(f"\\nStarting random walk with {step_limit} steps...")
+        kvoicewalk.random_walk(step_limit)
+
+        print("\\n[OK] KVoiceWalk completed successfully")
+
+        # Find the generated voice file
+        from utilities.path_router import OUT_DIR
+        out_dir = Path(OUT_DIR)
+        generated_voice = None
+
+        if out_dir.exists():
+            result_dirs = [d for d in out_dir.iterdir() if d.is_dir() and d.name.startswith(f"{output_name}_")]
+
+            if result_dirs:
+                latest_result_dir = max(result_dirs, key=lambda x: x.stat().st_mtime)
+                pt_files = list(latest_result_dir.glob("*.pt"))
+
+                if pt_files:
+                    def get_step_number(pt_file):
+                        try:
+                            parts = pt_file.stem.split('_')
+                            output_name_parts = output_name.split('_')
+                            for i in range(len(parts) - len(output_name_parts) + 1):
+                                if parts[i:i+len(output_name_parts)] == output_name_parts:
+                                    if i + len(output_name_parts) < len(parts):
+                                        return int(parts[i + len(output_name_parts)])
+                        except (ValueError, IndexError):
+                            pass
+                        return -1
+
+                    pt_files.sort(key=get_step_number, reverse=True)
+                    generated_voice = pt_files[0]
+                    print(f"\\nFound generated voice tensor: {generated_voice.name}")
+                else:
+                    print(f"\\n[WARN] No .pt files found in {latest_result_dir}")
+            else:
+                print(f"\\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
+        else:
+            print(f"\\n[WARN] Output directory not found: {out_dir}")
+
+        if generated_voice:
+            output_voice = export_dir / generated_voice.name
+            shutil.copy2(generated_voice, output_voice)
+            print(f"\\n[OK] Generated voice tensor saved to: {output_voice}")
+            print(f"\\nYou can use this voice tensor with kokoro_tts_generation.exs:")
+            print(f"  elixir kokoro_tts_generation.exs \"<text>\" --voice-file {output_voice}")
+            return output_voice
+        else:
+            print(f"\\n[WARN] Could not find generated voice tensor")
+            print(f"  Check the KVoiceWalk output directory manually: {out_dir}")
+            return None
+
+    except Exception as e:
+        print(f"\\n[ERROR] Error running KVoiceWalk: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+# Handle folder mode
+if target_folder:
+    # Resolve target_folder before changing directories
+    target_folder = Path(target_folder)
+    if not target_folder.is_absolute():
+        # Make it relative to workspace_root
+        target_folder = workspace_root / target_folder
+    target_folder = target_folder.resolve()
+    print(f"\\n=== Step 2: Processing Folder Mode ===")
+    print(f"Target Folder: {target_folder}")
+    print(f"Output Directory: {export_dir}")
+
+    # Find all audio/text pairs recursively
+    audio_extensions = {'.mp3', '.wav', '.flac', '.m4a', '.ogg'}
+    audio_files = []
+
+    # Scan for audio files
+    for audio_file in target_folder.rglob('*'):
+        if audio_file.is_file() and audio_file.suffix.lower() in audio_extensions:
+            # Look for corresponding text file
+            text_file = audio_file.with_suffix('.txt')
+            if text_file.exists():
+                audio_files.append((audio_file, text_file))
+
+    print(f"\\nFound {len(audio_files)} audio/text pairs to process")
+
+    if len(audio_files) == 0:
+        print(f"\\n[ERROR] No audio/text pairs found in {target_folder}")
+        print("Expected: audio files (.mp3, .wav, etc.) with corresponding .txt files")
+        raise ValueError("No audio/text pairs found")
+
+    # Process each pair
+    processed_count = 0
+    for idx, (audio_file, text_file) in enumerate(audio_files, 1):
+        print(f"\\n--- Processing {idx}/{len(audio_files)}: {audio_file.name} ---")
+
+        # Read text
+        target_text = text_file.read_text(encoding='utf-8').strip()
+
+        # Create output name based on audio file stem
+        audio_stem = audio_file.stem
+        pair_output_name = f"{output_name}_{audio_stem}"
+
+        # Process this pair
+        try:
+            process_single_pair(
+                audio_file, target_text, other_text, starting_voice, voice_folder,
+                interpolate_start, transcribe_start, population_limit, step_limit,
+                pair_output_name, export_dir, kvoicewalk_path
+            )
+            processed_count += 1
+        except Exception as e:
+            print(f"\\n[ERROR] Failed to process {audio_file.name}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+
+    print(f"\\n=== Folder Processing Complete ===")
+    print(f"Successfully processed: {processed_count}/{len(audio_files)} pairs")
+    print(f"Output directory: {export_dir}")
+
+else:
+    # Single file mode
+    print(f"\\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
+    print(f"Target Audio: {target_audio}")
+    if target_text:
+        print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
+    else:
+        print(f"Target Text: (not provided)")
+    print(f"Output Directory: {export_dir}")
+    print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
+
+    process_single_pair(
+        Path(target_audio).resolve(), target_text, other_text, starting_voice, voice_folder,
+        interpolate_start, transcribe_start, population_limit, step_limit,
+        output_name, export_dir, kvoicewalk_path
     )
-
-    print(f"\\nStarting random walk with {step_limit} steps...")
-    kvoicewalk.random_walk(step_limit)
-
-    print("\\n[OK] KVoiceWalk completed successfully")
 
     # Find the generated voice file
     # KVoiceWalk saves to 'out' directory with pattern:
@@ -437,20 +608,11 @@ try:
         print(f"\\n[WARN] Could not find generated voice tensor")
         print(f"  Check the KVoiceWalk output directory manually: {out_dir}")
 
-except Exception as e:
-    print(f"\\n[ERROR] Error running KVoiceWalk: {e}")
-    import traceback
-    traceback.print_exc()
-    raise
-finally:
-    # Restore original working directory
-    os.chdir(original_cwd)
+# Restore original working directory
+os.chdir(original_cwd)
 
 print("\\n=== Complete ===")
 print(f"Voice cloning completed!")
-if 'generated_voice' in locals() and generated_voice:
-    print(f"\\nOutput files in {export_dir.name}/:")
-    print(f"  - {generated_voice.name if generated_voice else output_name} (Generated voice tensor)")
 """, %{})
 
 IO.puts("\n=== Complete ===")

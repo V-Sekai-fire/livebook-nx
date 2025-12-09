@@ -1,0 +1,1 @@
+Hamming weight is used in several disciplines including information theory, coding theory, and cryptography.
