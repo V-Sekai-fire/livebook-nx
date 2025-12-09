@@ -119,8 +119,8 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ## 5. 3D Model Processing
 
 ### 5.1 tris_to_quads_converter.exs
-- [ ] Test basic conversion: `elixir tris_to_quads_converter.exs "model.glb"`
-- [ ] Test with custom output: `--output "output.usdc"`
+- [x] Test basic conversion: `elixir tris_to_quads_converter.exs "thirdparty/monkey.usdc"`
+- [x] Test with custom output: `--output "output.usdc"`
 - [ ] Test with GLB input
 - [ ] Test with GLTF input
 - [ ] Test with USD input
@@ -132,7 +132,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Test help message: `--help`
 
 ### 5.2 unirig_generation.exs
-- [ ] Test basic rigging: `elixir unirig_generation.exs "model.glb"`
+- [x] Test basic rigging: `elixir unirig_generation.exs "thirdparty/monkey.usdc"`
 - [ ] Test skeleton-only: `--skeleton-only`
 - [ ] Test skin-only: `--skin-only`
 - [ ] Test with custom seed: `--seed 123`
@@ -143,7 +143,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Test help message: `--help`
 
 ### 5.3 corrective_smooth_baker.exs
-- [ ] Test basic baking: `elixir corrective_smooth_baker.exs "rigged_model.glb"`
+- [x] Test basic baking: `elixir corrective_smooth_baker.exs "output\20251209_16_34_24\rigged.usdc"`
 - [ ] Test with custom output: `--output "baked.usdc"`
 - [ ] Test with custom bake range: `--bake-range "Selected"`
 - [ ] Test with custom deviation threshold: `--deviation-threshold 0.05`
