@@ -9,12 +9,10 @@
 # Repository: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
 #
 # Architecture:
-#   Tier 1: Native CLI API using GenServer, Behaviours, :gen_statem, Task/AsyncStream
-#   Tier 2: ExMCP API that wraps Tier 1
+#   Native CLI API using GenServer, Behaviours, :gen_statem, Task/AsyncStream
 #
 # Usage:
 #   elixir zimage_generation.exs "<prompt>" [options]
-#   elixir zimage_generation.exs --mcp-server [options]  # Start as MCP HTTP server
 
 # Configure Logflare OpenTelemetry BEFORE Mix.install starts applications
 logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
@@ -31,9 +29,6 @@ Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
   {:req, "~> 0.5.0"},
-  {:ex_mcp, git: "https://github.com/fire/ex-mcp.git"},
-  {:plug, "~> 1.15"},
-  {:plug_cowboy, "~> 2.7"},
   {:opentelemetry_api, "~> 1.3"},
   {:opentelemetry, "~> 1.3"},
   {:opentelemetry_exporter, "~> 1.0"},
@@ -176,29 +171,42 @@ defmodule ArgsParser do
     IO.puts("""
     Z-Image-Turbo Generation Script
     Generate photorealistic images from text prompts using Z-Image-Turbo
+
     Model: Z-Image-Turbo by Tongyi-MAI (6B parameters)
-    Repository: https://replicate.com/prunaai/z-image-turbo
+    Repository: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
+
+    Architecture:
+      - Single Program Multiple Data (SPMD): Pipeline loads once, reused for all generations
+      - Lazy loading: Model weights downloaded and pipeline loaded on first generation
+      - Efficient: Subsequent generations reuse the loaded pipeline
 
     Usage:
       elixir zimage_generation.exs "<prompt>" [options]
 
     Options:
-      --width, -w <int>               Image width in pixels (default: 1024)
-      --height <int>                  Image height in pixels (default: 1024)
-      --seed, -s <int>                 Random seed for generation (default: 0)
-      --num-steps, --steps <int>      Number of inference steps (default: 9, results in 8 DiT forwards)
+      --width, -w <int>               Image width in pixels (default: 1024, range: 64-2048)
+      --height <int>                  Image height in pixels (default: 1024, range: 64-2048)
+      --seed, -s <int>                 Random seed for generation (default: 0 = random)
+      --num-steps, --steps <int>      Number of inference steps (default: 9)
       --guidance-scale, -g <float>     Guidance scale (default: 0.0 for turbo models)
-      --output-format, -f "png"        Output format: png, jpg, jpeg (default: "png")
-      --mcp-server                     Start as MCP HTTP server instead of running generation
-      --mcp-port <int>                 Port for MCP HTTP server (default: 4000)
-      --mock                           Use mock implementation (skip expensive operations for testing)
+      --output-format, -f <format>    Output format: png, jpg, jpeg (default: "png")
       --no-analytics                   Disable analytics and telemetry collection
       --help, -h                       Show this help message
 
-    Example:
+    Examples:
       elixir zimage_generation.exs "a beautiful sunset over mountains" --width 1024 --height 1024
       elixir zimage_generation.exs "a cat wearing a hat" -w 512 -h 512 -s 42
-      elixir zimage_generation.exs --mcp-server --mcp-port 4000
+      elixir zimage_generation.exs "futuristic cityscape" --steps 12 -f jpg
+
+      # SPMD: Multiple prompts with same pipeline
+      elixir zimage_generation.exs "prompt 1" "prompt 2" "prompt 3"
+      elixir zimage_generation.exs "cat" "dog" "bird" --width 512
+
+    Notes:
+      - First generation will download model weights (~6GB) if not present
+      - Pipeline loads once (SPMD) and is reused for all prompts efficiently
+      - Multiple prompts processed with the same loaded pipeline
+      - Output saved to output/<timestamp>/zimage_<timestamp>.<format>
     """)
     System.halt(0)
   end
@@ -212,10 +220,7 @@ defmodule ArgsParser do
         num_steps: :integer,
         guidance_scale: :float,
         output_format: :string,
-        mcp_server: :boolean,
-        mcp_port: :integer,
         no_analytics: :boolean,
-        mock: :boolean,
         help: :boolean
       ],
       aliases: [
@@ -232,73 +237,66 @@ defmodule ArgsParser do
       show_help()
     end
 
-    mcp_server = Keyword.get(opts, :mcp_server, false)
     no_analytics = Keyword.get(opts, :no_analytics, false)
-    mock_mode = Keyword.get(opts, :mock, false)
     analytics_enabled = !no_analytics
-    prompt = List.first(args)
+    prompts = args
 
-    if !mcp_server and !prompt do
-      OtelLogger.error("Text prompt is required", [
+    if prompts == [] do
+      OtelLogger.error("At least one text prompt is required", [
         {"error.type", "missing_argument"},
         {"error.argument", "prompt"}
       ])
       System.halt(1)
     end
 
-    if !mcp_server do
-      width = Keyword.get(opts, :width, 1024)
-      height = Keyword.get(opts, :height, 1024)
+    width = Keyword.get(opts, :width, 1024)
+    height = Keyword.get(opts, :height, 1024)
 
-      if width < 64 or width > 2048 or height < 64 or height > 2048 do
-        OtelLogger.error("Width and height must be between 64 and 2048 pixels", [
-          {"error.type", "validation_error"},
-          {"error.field", "width/height"}
-        ])
-        System.halt(1)
-      end
+    if width < 64 or width > 2048 or height < 64 or height > 2048 do
+      OtelLogger.error("Width and height must be between 64 and 2048 pixels", [
+        {"error.type", "validation_error"},
+        {"error.field", "width/height"}
+      ])
+      System.halt(1)
+    end
 
-      output_format = Keyword.get(opts, :output_format, "png")
-      valid_formats = ["png", "jpg", "jpeg"]
-      if output_format not in valid_formats do
-        OtelLogger.error("Invalid output format", [
-          {"error.type", "validation_error"},
-          {"error.field", "output_format"},
-          {"error.valid_values", Enum.join(valid_formats, ", ")}
-        ])
-        System.halt(1)
-      end
+    output_format = Keyword.get(opts, :output_format, "png")
+    valid_formats = ["png", "jpg", "jpeg"]
+    if output_format not in valid_formats do
+      OtelLogger.error("Invalid output format", [
+        {"error.type", "validation_error"},
+        {"error.field", "output_format"},
+        {"error.valid_values", Enum.join(valid_formats, ", ")}
+      ])
+      System.halt(1)
+    end
 
-      num_steps = Keyword.get(opts, :num_steps, 9)
-      if num_steps < 1 do
-        OtelLogger.error("num_steps must be at least 1", [
-          {"error.type", "validation_error"},
-          {"error.field", "num_steps"}
-        ])
-        System.halt(1)
-      end
+    num_steps = Keyword.get(opts, :num_steps, 9)
+    if num_steps < 1 do
+      OtelLogger.error("num_steps must be at least 1", [
+        {"error.type", "validation_error"},
+        {"error.field", "num_steps"}
+      ])
+      System.halt(1)
+    end
 
-      guidance_scale = Keyword.get(opts, :guidance_scale, 0.0)
-      if guidance_scale < 0.0 do
-        OtelLogger.error("guidance_scale must be non-negative", [
-          {"error.type", "validation_error"},
-          {"error.field", "guidance_scale"}
-        ])
-        System.halt(1)
-      end
+    guidance_scale = Keyword.get(opts, :guidance_scale, 0.0)
+    if guidance_scale < 0.0 do
+      OtelLogger.error("guidance_scale must be non-negative", [
+        {"error.type", "validation_error"},
+        {"error.field", "guidance_scale"}
+      ])
+      System.halt(1)
     end
 
     %{
-      prompt: prompt,
+      prompts: prompts,
       width: Keyword.get(opts, :width, 1024),
       height: Keyword.get(opts, :height, 1024),
       seed: Keyword.get(opts, :seed, 0),
       num_steps: Keyword.get(opts, :num_steps, 9),
       guidance_scale: Keyword.get(opts, :guidance_scale, 0.0),
       output_format: Keyword.get(opts, :output_format, "png"),
-      mcp_server: mcp_server,
-      mcp_port: Keyword.get(opts, :mcp_port, 4000),
-      mock_mode: mock_mode,
       analytics_enabled: analytics_enabled
     }
   end
@@ -446,7 +444,6 @@ end
 defmodule ZImageGenerator.Behaviour do
   @moduledoc """
   Behaviour for Z-Image-Turbo model operations.
-  Allows mocking expensive operations for testing.
   """
   @callback setup() :: :ok | {:error, term()}
   @callback generate(String.t(), integer(), integer(), integer(), integer(), float(), String.t()) :: {:ok, Path.t()} | {:error, term()}
@@ -570,7 +567,8 @@ defmodule ZImageGenerator.Server do
     :generator_impl,
     :state_machine,
     :setup_complete,
-    :current_generation
+    :current_generation,
+    :pipeline_loaded
   ]
 
   # Client API
@@ -599,7 +597,8 @@ defmodule ZImageGenerator.Server do
       generator_impl: generator_impl,
       state_machine: state_machine,
       setup_complete: false,
-      current_generation: nil
+      current_generation: nil,
+      pipeline_loaded: false
     }
     {:ok, state}
   end
@@ -620,51 +619,36 @@ defmodule ZImageGenerator.Server do
 
   @impl true
   def handle_call({:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, from, state) do
-    # Ensure setup is complete
-    setup_result = if !state.setup_complete do
-      case state.generator_impl.setup() do
-        :ok -> :ok
-        {:error, reason} -> {:error, reason}
+    # SPMD: Start generation in a Task, reuse pipeline if already loaded
+    task = Task.async(fn ->
+      # Transition to loading state
+      ZImageGeneration.StateMachine.call(state.state_machine, {:start_generation, %{
+        prompt: prompt,
+        width: width,
+        height: height,
+        seed: seed,
+        num_steps: num_steps,
+        guidance_scale: guidance_scale,
+        output_format: output_format
+      }})
+
+      # Model will be loaded/reused during generation (SPMD)
+      ZImageGeneration.StateMachine.call(state.state_machine, {:model_loaded})
+
+      # Perform generation with SPMD (reuse pipeline if loaded)
+      case ZImageGenerator.Impl.generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format, state.pipeline_loaded) do
+        {:ok, output_path} ->
+          ZImageGeneration.StateMachine.call(state.state_machine, {:complete, output_path})
+          {:ok, output_path}
+        {:error, reason} ->
+          ZImageGeneration.StateMachine.call(state.state_machine, {:error, reason})
+          {:error, reason}
       end
-    else
-      :ok
-    end
+    end)
 
-    case setup_result do
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-      :ok ->
-        # Start generation in a Task
-        task = Task.async(fn ->
-          # Transition to loading state
-          ZImageGeneration.StateMachine.call(state.state_machine, {:start_generation, %{
-            prompt: prompt,
-            width: width,
-            height: height,
-            seed: seed,
-            num_steps: num_steps,
-            guidance_scale: guidance_scale,
-            output_format: output_format
-          }})
-
-          # Model is already loaded (setup completed), transition to generating
-          ZImageGeneration.StateMachine.call(state.state_machine, {:model_loaded})
-
-          # Perform generation
-          case state.generator_impl.generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-            {:ok, output_path} ->
-              ZImageGeneration.StateMachine.call(state.state_machine, {:complete, output_path})
-              {:ok, output_path}
-            {:error, reason} ->
-              ZImageGeneration.StateMachine.call(state.state_machine, {:error, reason})
-              {:error, reason}
-          end
-        end)
-
-        # Monitor the task and reply when done
-        new_state = %{state | current_generation: {from, task}, setup_complete: true}
-        {:noreply, new_state}
-    end
+    # Monitor the task and reply when done, mark pipeline as loaded
+    new_state = %{state | current_generation: {from, task}, setup_complete: true, pipeline_loaded: true}
+    {:noreply, new_state}
   end
 
   @impl true
@@ -706,18 +690,33 @@ defmodule ZImageGenerator.Impl do
 
   @impl ZImageGenerator.Behaviour
   def setup do
-    OpenTelemetry.Tracer.with_span "zimage.setup" do
-      OtelLogger.info("Setting up Z-Image-Turbo Model", [
-        {"setup.phase", "start"}
-      ])
+    # Setup is now handled lazily during first generation
+    :ok
+  end
+
+  @impl ZImageGenerator.Behaviour
+  def generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
+    # This is called from the GenServer, which manages pipeline state
+    # The actual generation happens in the GenServer to maintain SPMD
+    {:error, "generate should be called through ZImageGenerator.Server"}
+  end
+
+  # Internal function that uses the shared pipeline
+  def generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format, pipeline_loaded) do
+    OpenTelemetry.Tracer.with_span "zimage.generate" do
+      OpenTelemetry.Tracer.set_attribute("image.width", width)
+      OpenTelemetry.Tracer.set_attribute("image.height", height)
+      OpenTelemetry.Tracer.set_attribute("image.seed", seed)
+      OpenTelemetry.Tracer.set_attribute("image.num_steps", num_steps)
+      OpenTelemetry.Tracer.set_attribute("image.guidance_scale", guidance_scale)
+      OpenTelemetry.Tracer.set_attribute("image.output_format", output_format)
+      OpenTelemetry.Tracer.set_attribute("prompt.length", String.length(prompt))
 
       base_dir = Path.expand(".")
       zimage_weights_dir = Path.join([base_dir, "pretrained_weights", "Z-Image-Turbo"])
-      OpenTelemetry.Tracer.set_attribute("model.weights_dir", zimage_weights_dir)
-
       repo_id = "Tongyi-MAI/Z-Image-Turbo"
-      OpenTelemetry.Tracer.set_attribute("model.repo_id", repo_id)
 
+      # Download weights if needed (only once)
       if !File.exists?(zimage_weights_dir) or !File.exists?(Path.join(zimage_weights_dir, "config.json")) do
         OpenTelemetry.Tracer.with_span "zimage.download_weights" do
           OtelLogger.info("Downloading Z-Image-Turbo models from Hugging Face", [
@@ -740,19 +739,38 @@ defmodule ZImageGenerator.Impl do
           end
         end
       else
-        OtelLogger.ok("Model weights already present", [
-          {"model.weights_dir", zimage_weights_dir},
-          {"model.weights_cached", true}
-        ])
+        if !pipeline_loaded do
+          OtelLogger.ok("Model weights already present", [
+            {"model.weights_dir", zimage_weights_dir},
+            {"model.weights_cached", true}
+          ])
+        end
         OpenTelemetry.Tracer.set_attribute("model.weights_cached", true)
       end
 
-      OtelLogger.info("Loading pipeline and performing test generation", [
-        {"setup.phase", "load_pipeline"}
-      ])
-      OpenTelemetry.Tracer.with_span "zimage.load_pipeline" do
+      config = %{
+        prompt: prompt,
+        width: width,
+        height: height,
+        seed: seed,
+        num_steps: num_steps,
+        guidance_scale: guidance_scale,
+        output_format: output_format,
+        zimage_weights_dir: zimage_weights_dir
+      }
+
+      config_json = Jason.encode!(config)
+      File.write!("config.json", config_json)
+
+      OpenTelemetry.Tracer.with_span "zimage.python_generation" do
         try do
-          {_, _python_globals} = Pythonx.eval("""
+          # SPMD: Load pipeline once, reuse for multiple data
+          load_code = if !pipeline_loaded do
+            OtelLogger.info("Loading pipeline (SPMD: will be reused for future generations)", [
+              {"spmd.pipeline_load", "first_time"}
+            ])
+            """
+# Load pipeline once (SPMD: single program)
 import json
 import os
 import sys
@@ -778,9 +796,6 @@ def _silent_tqdm_init(self, *args, **kwargs):
     return _original_tqdm_init(self, *args, **kwargs)
 tqdm.__init__ = _silent_tqdm_init
 
-base_dir = Path(".").resolve()
-zimage_weights_dir = base_dir / "pretrained_weights" / "Z-Image-Turbo"
-
 cpu_count = os.cpu_count()
 half_cpu_count = cpu_count // 2
 os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
@@ -790,6 +805,8 @@ torch.set_num_threads(half_cpu_count)
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
+zimage_weights_dir = Path(r"#{zimage_weights_dir}").resolve()
 
 if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
     print(f"Loading from local directory: {zimage_weights_dir}")
@@ -806,85 +823,82 @@ else:
     )
 
 pipe = pipe.to(device)
-print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
-
-print("Performing test generation...")
-test_prompt = "a simple red circle"
-generator = torch.Generator(device=device)
-generator.manual_seed(42)
-
-test_output = pipe(
-    prompt=test_prompt,
-    width=512,
-    height=512,
-    num_inference_steps=4,
-    guidance_scale=0.0,
-    generator=generator,
-)
-
-test_image = test_output.images[0]
-print(f"[OK] Test generation successful (image size: {test_image.size})")
-print("[OK] Setup complete - model ready for generation")
-""", %{})
-
-          OtelLogger.ok("Model setup complete with test generation", [
-            {"setup.phase", "complete"},
-            {"setup.status", "success"}
-          ])
-          OpenTelemetry.Tracer.set_status(:ok)
-          :ok
-        rescue
-          e ->
-            OpenTelemetry.Tracer.record_exception(e, [])
-            OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
-            OtelLogger.error("Setup failed", [
-              {"setup.phase", "failed"},
-              {"setup.status", "error"},
-              {"error.message", Exception.message(e)}
+print(f"[OK] Pipeline loaded on {device} with dtype {dtype} (SPMD: will be reused)")
+"""
+          else
+            OtelLogger.info("Reusing loaded pipeline (SPMD: single program, multiple data)", [
+              {"spmd.pipeline_reuse", true}
             ])
-            OtelLogger.error("Server cannot start without successful setup")
-            raise e
-        end
-      end
-    end
-  end
+            """
+# SPMD: Check if pipeline exists, if not load it
+try:
+    _ = pipe
+    print("[INFO] Reusing existing pipeline (SPMD)")
+except NameError:
+    # Pipeline not in scope, need to reload
+    print("[WARN] Pipeline not found, reloading...")
+    import json
+    import os
+    import sys
+    import logging
+    from pathlib import Path
+    from PIL import Image
+    import torch
+    from diffusers import DiffusionPipeline
 
-  @impl ZImageGenerator.Behaviour
-  def generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-    OpenTelemetry.Tracer.with_span "zimage.generate" do
-      OpenTelemetry.Tracer.set_attribute("image.width", width)
-      OpenTelemetry.Tracer.set_attribute("image.height", height)
-      OpenTelemetry.Tracer.set_attribute("image.seed", seed)
-      OpenTelemetry.Tracer.set_attribute("image.num_steps", num_steps)
-      OpenTelemetry.Tracer.set_attribute("image.guidance_scale", guidance_scale)
-      OpenTelemetry.Tracer.set_attribute("image.output_format", output_format)
-      OpenTelemetry.Tracer.set_attribute("prompt.length", String.length(prompt))
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("transformers").setLevel(logging.ERROR)
+    logging.getLogger("diffusers").setLevel(logging.ERROR)
+    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
+    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-      base_dir = Path.expand(".")
-      config = %{
-        prompt: prompt,
-        width: width,
-        height: height,
-        seed: seed,
-        num_steps: num_steps,
-        guidance_scale: guidance_scale,
-        output_format: output_format,
-        zimage_weights_dir: Path.join([base_dir, "pretrained_weights", "Z-Image-Turbo"])
-      }
+    from tqdm import tqdm
+    import warnings
+    warnings.filterwarnings("ignore")
 
-      config_json = Jason.encode!(config)
-      File.write!("config.json", config_json)
+    _original_tqdm_init = tqdm.__init__
+    def _silent_tqdm_init(self, *args, **kwargs):
+        kwargs['disable'] = True
+        return _original_tqdm_init(self, *args, **kwargs)
+    tqdm.__init__ = _silent_tqdm_init
 
-      OpenTelemetry.Tracer.with_span "zimage.python_generation" do
-        try do
-          {_, _python_globals} = Pythonx.eval("""
+    cpu_count = os.cpu_count()
+    half_cpu_count = cpu_count // 2
+    os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
+    os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
+    torch.set_num_threads(half_cpu_count)
+
+    MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+
+    zimage_weights_dir = Path(r"#{zimage_weights_dir}").resolve()
+
+    if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
+        print(f"Loading from local directory: {zimage_weights_dir}")
+        pipe = DiffusionPipeline.from_pretrained(
+            str(zimage_weights_dir),
+            torch_dtype=dtype,
+            local_files_only=False
+        )
+    else:
+        print(f"Loading from Hugging Face Hub: {MODEL_ID}")
+        pipe = DiffusionPipeline.from_pretrained(
+            MODEL_ID,
+            torch_dtype=dtype
+        )
+
+    pipe = pipe.to(device)
+    print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
+"""
+          end
+
+          # Generate with loaded/reused pipeline (SPMD: multiple data)
+          {_, _python_globals} = Pythonx.eval(load_code <> """
+# SPMD: Process different data with same program
 import json
-import sys
-import os
+import time
 from pathlib import Path
-from PIL import Image
-import torch
-from diffusers import DiffusionPipeline
 
 with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
@@ -896,43 +910,22 @@ seed = config.get('seed', 0)
 num_steps = config.get('num_steps', 9)
 guidance_scale = config.get('guidance_scale', 0.0)
 output_format = config.get('output_format', 'png')
-zimage_weights_dir = config.get('zimage_weights_dir')
 
-cpu_count = os.cpu_count()
-half_cpu_count = cpu_count // 2
-os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
-os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
-torch.set_num_threads(half_cpu_count)
-
-zimage_weights_dir = Path(zimage_weights_dir).resolve()
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
-
-MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
-device = "cuda" if torch.cuda.is_available() else "cpu"
-dtype = torch.bfloat16 if device == "cuda" else torch.float32
-
-if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
-    print(f"Loading from local directory: {zimage_weights_dir}")
-    pipe = DiffusionPipeline.from_pretrained(
-        str(zimage_weights_dir),
-        torch_dtype=dtype
-    )
-else:
-    print(f"Loading from Hugging Face Hub: {MODEL_ID}")
-    pipe = DiffusionPipeline.from_pretrained(
-        MODEL_ID,
-        torch_dtype=dtype
-    )
-
-pipe = pipe.to(device)
-print(f"[OK] Pipeline loaded on {device}")
 
 generator = torch.Generator(device=device)
 if seed == 0:
     seed = generator.seed()
 else:
     generator.manual_seed(seed)
+
+# SPMD: Same pipeline (program), different data (prompt/params)
+print(f"[INFO] Starting generation: {prompt[:50]}...")
+print(f"[INFO] Parameters: {width}x{height}, {num_steps} steps, seed={seed}")
+print("[INFO] Generating (this may take 1-3 minutes)...")
+import sys
+sys.stdout.flush()
 
 output = pipe(
     prompt=prompt,
@@ -943,9 +936,11 @@ output = pipe(
     generator=generator,
 )
 
+print("[INFO] Generation complete, processing image...")
+sys.stdout.flush()
+
 image = output.images[0]
 
-import time
 tag = time.strftime("%Y%m%d_%H_%M_%S")
 export_dir = output_dir / tag
 export_dir.mkdir(exist_ok=True)
@@ -1005,169 +1000,6 @@ print(f"OUTPUT_PATH:{output_path}")
   end
 end
 
-# Mock implementation
-defmodule ZImageGenerator.Mock do
-  @moduledoc """
-  Mock implementation for testing.
-  """
-  @behaviour ZImageGenerator.Behaviour
-
-  @impl ZImageGenerator.Behaviour
-  def setup do
-    OtelLogger.info("Mock setup - skipping model download and loading", [
-      {"test.mode", "mock"},
-      {"setup.status", "mocked"}
-    ])
-    :ok
-  end
-
-  @impl ZImageGenerator.Behaviour
-  def generate(prompt, width, height, _seed, _num_steps, _guidance_scale, output_format) do
-    OtelLogger.info("Mock generation - creating solid color image", [
-      {"test.mode", "mock"},
-      {"prompt", prompt},
-      {"width", width},
-      {"height", height},
-      {"output_format", output_format}
-    ])
-
-    base_dir = Path.expand(".")
-    output_base = Path.join([base_dir, "output"])
-    File.mkdir_p!(output_base)
-
-    timestamp = DateTime.utc_now() |> DateTime.to_string() |> String.replace(~r/[^\d]/, "") |> String.slice(0..13)
-    export_dir = Path.join([output_base, timestamp])
-    File.mkdir_p!(export_dir)
-
-    output_filename = "zimage_#{timestamp}.#{output_format}"
-    output_path = Path.join([export_dir, output_filename])
-
-    {_, _python_globals} = Pythonx.eval("""
-from PIL import Image
-import os
-from pathlib import Path
-
-width = #{width}
-height = #{height}
-output_format = "#{output_format}".lower()
-
-color = (100, 150, 200)
-img = Image.new('RGB', (width, height), color=color)
-
-output_path = Path(r"#{output_path}")
-output_path.parent.mkdir(parents=True, exist_ok=True)
-
-if output_format in ['jpg', 'jpeg']:
-    if img.mode == 'RGBA':
-        background = Image.new('RGB', img.size, (255, 255, 255))
-        background.paste(img, mask=img.split()[3] if img.mode == 'RGBA' else None)
-        img = background
-    img.save(str(output_path), "JPEG", quality=95)
-else:
-    img.save(str(output_path), "PNG")
-
-print(f"OUTPUT_PATH:{output_path}")
-""", %{})
-
-    output_path_actual = output_path
-
-    OtelLogger.ok("Mock image generated successfully", [
-      {"test.mode", "mock"},
-      {"output_path", output_path_actual},
-      {"image.width", width},
-      {"image.height", height},
-      {"image.format", output_format}
-    ])
-
-    {:ok, output_path_actual}
-  end
-end
-
-# ============================================================================
-# TIER 2: EXMCP API (using generic wrapper)
-# ============================================================================
-
-# Load the generic MCP wrapper
-Code.require_file("mcp_generation_wrapper.ex", __DIR__)
-
-# MCP Server Handler that uses Tier 1 via generic wrapper
-defmodule ZImageMCPHandler do
-  use MCPGenerationWrapper,
-    generator_server: ZImageGenerator.Server,
-    server_name: "zimage-generation",
-    server_version: "1.0.0",
-    tool_definitions: [
-      %{
-        "name" => "generate_image",
-        "description" => "Generate photorealistic images from text prompts using Z-Image-Turbo",
-        "inputSchema" => %{
-          "type" => "object",
-          "properties" => %{
-            "prompt" => %{"type" => "string", "description" => "Text prompt describing the image to generate"},
-            "width" => %{"type" => "integer", "description" => "Image width in pixels (default: 1024, range: 64-2048)", "default" => 1024},
-            "height" => %{"type" => "integer", "description" => "Image height in pixels (default: 1024, range: 64-2048)", "default" => 1024},
-            "seed" => %{"type" => "integer", "description" => "Random seed for generation (default: 0)", "default" => 0},
-            "num_steps" => %{"type" => "integer", "description" => "Number of inference steps (default: 9)", "default" => 9},
-            "guidance_scale" => %{"type" => "number", "description" => "Guidance scale (default: 0.0 for turbo models)", "default" => 0.0},
-            "output_format" => %{"type" => "string", "description" => "Output format: png, jpg, jpeg (default: png)", "enum" => ["png", "jpg", "jpeg"], "default" => "png"}
-          },
-          "required" => ["prompt"]
-        }
-      }
-    ],
-    response_formatter: &ZImageMCPHandler.format_response/2,
-    mcp_port: 4000,
-    static_files_path: "output",
-    static_files_at: "/images"
-
-  # Custom tool handler for generate_image - override the default from wrapper
-  def handle_tool("generate_image", args, state) do
-    prompt = Map.get(args, "prompt")
-    if !prompt do
-      {:error, "prompt is required", state}
-    else
-      try do
-        width = Map.get(args, "width", 1024)
-        height = Map.get(args, "height", 1024)
-        seed = Map.get(args, "seed", 0)
-        num_steps = Map.get(args, "num_steps", 9)
-        guidance_scale = Map.get(args, "guidance_scale", 0.0)
-        output_format = Map.get(args, "output_format", "png")
-
-        # Use Tier 1 GenServer
-        case ZImageGenerator.Server.generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-          {:ok, output_path} -> {:ok, {:ok, output_path}, state}
-          {:error, reason} -> {:error, reason, state}
-        end
-      rescue
-        e -> {:error, Exception.message(e), state}
-      end
-    end
-  end
-
-  # Custom response formatter for image generation
-  def format_response({:ok, output_path}, args) do
-    output_format = Map.get(args, "output_format", "png")
-    output_dir = Path.expand("output")
-    abs_output_path = Path.expand(output_path)
-    relative_path = Path.relative_to(abs_output_path, output_dir) |> String.replace("\\", "/")
-    mcp_port = Application.get_env(:zimage_generation, :mcp_port, 4000)
-    image_url = "http://localhost:#{mcp_port}/images/#{relative_path}"
-
-    [
-      %{"type" => "text", "text" => "Image generated successfully. View at: #{image_url}"},
-      %{"type" => "image", "data" => image_url, "mimeType" => "image/#{output_format}"},
-      %{"type" => "resource", "uri" => image_url, "mimeType" => "image/#{output_format}"}
-    ]
-  end
-
-  def format_response({:error, reason}, _args) do
-    [
-      %{"type" => "text", "text" => "Generation failed: #{inspect(reason)}"}
-    ]
-  end
-end
-
 # ============================================================================
 # MAIN ENTRY POINT
 # ============================================================================
@@ -1178,103 +1010,102 @@ config = ArgsParser.parse(System.argv())
 # Configure analytics
 AnalyticsSetup.configure(config.analytics_enabled, logflare_api_key, logflare_source_id)
 
-# Setup mocking if --mock flag is set
-generator_impl = if config.mock_mode do
-  OtelLogger.info("Mock mode enabled - using ZImageGenerator.Mock", [
-    {"test.mode", "mock"},
-    {"test.generator", "ZImageGenerator.Mock"}
-  ])
-  ZImageGenerator.Mock
-else
-  ZImageGenerator.Impl
-end
+# Start GenServer
+{:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: ZImageGenerator.Impl)
 
-# Start Tier 1 GenServer
-{:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: generator_impl)
+# CLI mode - SPMD: generate multiple images with same pipeline
+IO.puts("""
+  ╔═══════════════════════════════════════════════════════════════════════════╗
+  ║              Z-Image-Turbo Generation (SPMD Mode)                          ║
+  ╚═══════════════════════════════════════════════════════════════════════════╝
+  """)
 
-# Check if MCP server mode
-if config.mcp_server do
-  OtelLogger.info("Starting Z-Image-Turbo MCP Server", [
-    {"server.port", config.mcp_port},
-    {"server.endpoint", "http://localhost:#{config.mcp_port}/mcp"},
-    {"server.mode", "mcp"},
-    {"server.transport", "http"}
-  ])
+prompt_count = length(config.prompts)
+IO.puts("SPMD: Processing #{prompt_count} prompt(s) with single pipeline")
+IO.puts("Dimensions: #{config.width}x#{config.height}px")
+IO.puts("Steps: #{config.num_steps}, Seed: #{if config.seed == 0, do: "random", else: config.seed}")
+IO.puts("Format: #{String.upcase(config.output_format)}")
+IO.puts("")
 
-  # Call setup once when server starts
-  case ZImageGenerator.Server.setup() do
-    :ok ->
-      OtelLogger.ok("Setup completed successfully", [
-        {"setup.status", "success"}
-      ])
-    {:error, reason} ->
-      OtelLogger.error("Setup failed", [
-        {"setup.status", "failed"},
-        {"error.reason", inspect(reason)}
-      ])
-      System.halt(1)
-  end
-
-  # Create Plug router with static file serving
-  defmodule ZImageMCPRouter do
-    use Plug.Router
-
-    plug Plug.Static,
-      at: "/images",
-      from: Path.expand("output"),
-      gzip: false,
-      content_types: %{"png" => "image/png", "jpg" => "image/jpeg", "jpeg" => "image/jpeg"}
-
-    plug :match
-    plug :dispatch
-
-    forward "/mcp", to: ExMCP.HttpPlug,
-      handler: ZImageMCPHandler,
-      server_info: %{name: "zimage-generation", version: "1.0.0"},
-      sse_enabled: true,
-      cors_enabled: true
-
-    match _ do
-      send_resp(conn, 404, "Not Found")
-    end
-  end
-
-  Application.put_env(:zimage_generation, :mcp_port, config.mcp_port)
-
-  {:ok, _} = Plug.Cowboy.http(ZImageMCPRouter, [], port: config.mcp_port)
-
-  OtelLogger.info("Image server started", [
-    {"server.images_endpoint", "http://localhost:#{config.mcp_port}/images"},
-    {"server.mcp_endpoint", "http://localhost:#{config.mcp_port}/mcp"}
-  ])
-
-  Process.sleep(:infinity)
-else
-  # Normal CLI mode - use Tier 1 GenServer
-  OtelLogger.info("Starting Z-Image-Turbo Generation", [
-    {"generation.prompt_length", String.length(config.prompt)},
+# Process all prompts with the same pipeline (SPMD)
+results = config.prompts
+|> Enum.with_index(1)
+|> Enum.map(fn {prompt, index} ->
+  OtelLogger.info("Starting generation #{index}/#{prompt_count}", [
+    {"generation.index", index},
+    {"generation.total", prompt_count},
+    {"generation.prompt", prompt},
+    {"generation.prompt_length", String.length(prompt)},
     {"generation.width", config.width},
     {"generation.height", config.height},
     {"generation.seed", config.seed},
     {"generation.num_steps", config.num_steps},
     {"generation.guidance_scale", config.guidance_scale},
-    {"generation.output_format", config.output_format}
+    {"generation.output_format", config.output_format},
+    {"spmd.pipeline_reuse", index > 1}
   ])
 
-  case ZImageGenerator.Server.generate(config.prompt, config.width, config.height, config.seed, config.num_steps, config.guidance_scale, config.output_format) do
+  IO.puts("[#{index}/#{prompt_count}] Generating: #{prompt}")
+
+  result = ZImageGenerator.Server.generate(prompt, config.width, config.height, config.seed, config.num_steps, config.guidance_scale, config.output_format)
+
+  case result do
     {:ok, output_path} ->
-      OtelLogger.ok("Image generation completed successfully", [
+      OtelLogger.ok("Generation #{index}/#{prompt_count} completed", [
+        {"generation.index", index},
         {"generation.status", "complete"},
         {"generation.output_path", output_path}
       ])
-      IO.puts("\n[OK] Image generated successfully!")
-      IO.puts("Output: #{output_path}")
+      IO.puts("  ✓ Success: #{output_path}")
+      {:ok, output_path}
     {:error, reason} ->
-      OtelLogger.error("Generation failed", [
+      OtelLogger.error("Generation #{index}/#{prompt_count} failed", [
+        {"generation.index", index},
         {"generation.status", "failed"},
         {"error.reason", inspect(reason)}
       ])
-      IO.puts("\n[ERROR] Generation failed: #{inspect(reason)}")
-      System.halt(1)
+      IO.puts("  ✗ Failed: #{inspect(reason)}")
+      {:error, reason}
   end
+end)
+
+IO.puts("")
+
+# Summary
+success_count = Enum.count(results, fn r -> match?({:ok, _}, r) end)
+failed_count = prompt_count - success_count
+
+if failed_count == 0 do
+  IO.puts("""
+      ╔═══════════════════════════════════════════════════════════════════════════╗
+      ║                    ✓ ALL SUCCESSFUL (#{success_count}/#{prompt_count})                        ║
+      ╚═══════════════════════════════════════════════════════════════════════════╝
+      """)
+  IO.puts("All #{success_count} image(s) generated successfully using SPMD!")
+  IO.puts("")
+  results
+  |> Enum.filter(fn r -> match?({:ok, _}, r) end)
+  |> Enum.each(fn {:ok, path} -> IO.puts("  • #{path}") end)
+else
+  IO.puts("""
+      ╔═══════════════════════════════════════════════════════════════════════════╗
+      ║              ⚠ PARTIAL SUCCESS (#{success_count}/#{prompt_count} succeeded)                    ║
+      ╚═══════════════════════════════════════════════════════════════════════════╝
+      """)
+  if success_count > 0 do
+    IO.puts("Successful generations:")
+    results
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {r, _} -> match?({:ok, _}, r) end)
+    |> Enum.each(fn {{:ok, path}, idx} -> IO.puts("  [#{idx}] #{path}") end)
+    IO.puts("")
+  end
+  if failed_count > 0 do
+    IO.puts("Failed generations:")
+    results
+    |> Enum.with_index(1)
+    |> Enum.filter(fn {r, _} -> match?({:error, _}, r) end)
+    |> Enum.each(fn {{:error, reason}, idx} -> IO.puts("  [#{idx}] #{inspect(reason)}") end)
+  end
+  System.halt(1)
 end
