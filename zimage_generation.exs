@@ -14,16 +14,11 @@
 # Usage:
 #   elixir zimage_generation.exs "<prompt>" [options]
 
-# Configure Logflare OpenTelemetry BEFORE Mix.install starts applications
-logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
-logflare_api_key = System.get_env("LOGFLARE_API_KEY") || "00b958d441b10b33026109732c60f9b7378c374c0c9908993e473b98b6d992ae"
-
-if logflare_api_key do
-  Application.put_env(:opentelemetry, :span_processor, :batch)
-  Application.put_env(:opentelemetry, :traces_exporter, :none)
-  Application.put_env(:opentelemetry, :metrics_exporter, :none)
-  Application.put_env(:opentelemetry, :logs_exporter, :none)
-end
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
 
 Mix.install([
   {:pythonx, "~> 0.4.7"},
@@ -32,7 +27,6 @@ Mix.install([
   {:opentelemetry_api, "~> 1.3"},
   {:opentelemetry, "~> 1.3"},
   {:opentelemetry_exporter, "~> 1.0"},
-  {:logflare_logger_backend, "~> 0.11.4"},
 ])
 
 Logger.configure(level: :info)
@@ -41,67 +35,20 @@ Logger.configure(level: :info)
 # SHARED UTILITIES
 # ============================================================================
 
-defmodule AnalyticsConfig do
-  def show_legal_notice do
-    IO.puts("""
-    ════════════════════════════════════════════════════════════════════════════
-    ANALYTICS AND DATA COLLECTION NOTICE
-    ════════════════════════════════════════════════════════════════════════════
-
-    This software collects anonymous usage analytics and telemetry data to help
-    improve the service. The following data may be collected:
-
-    • Application logs (info, warnings, errors)
-    • Performance metrics (generation time, resource usage)
-    • Trace data (operation spans and events)
-    • Error reports and stack traces
-
-    Data is sent to Logflare (https://logflare.app) for analysis.
-
-    You can opt out at any time by using the --no-analytics flag:
-      elixir zimage_generation.exs --no-analytics "<prompt>"
-
-    For more information about data collection and privacy, please refer to:
-    https://logflare.app/privacy
-
-    By continuing, you acknowledge that you have read and understood this notice.
-    ════════════════════════════════════════════════════════════════════════════
-    """)
-  end
-end
-
-defmodule AnalyticsSetup do
-  def configure(analytics_enabled, api_key, source_id) do
-    if api_key && analytics_enabled do
-      AnalyticsConfig.show_legal_notice()
-      Application.put_env(:logger, :backends, [LogflareLogger.HttpBackend])
-      Application.put_env(:logflare_logger_backend, :url, "https://api.example.com")
-      Application.put_env(:logflare_logger_backend, :level, :info)
-      Application.put_env(:logflare_logger_backend, :api_key, api_key)
-      Application.put_env(:logflare_logger_backend, :source_id, source_id)
-      Application.put_env(:logflare_logger_backend, :flush_interval, 1_000)
-      Application.put_env(:logflare_logger_backend, :max_batch_size, 50)
-      Application.put_env(:logflare_logger_backend, :metadata, :all)
-
-      case Application.ensure_all_started(:opentelemetry) do
-        {:ok, _} ->
-          OtelLogger.info("OpenTelemetry started - spans will be logged via LogflareLogger", [
-            {"otel.export_method", "logflare_logger"},
-            {"otel.otlp_export", "disabled"}
-          ])
-        error ->
-          OtelLogger.warn("Failed to start OpenTelemetry - spans will not be created", [
-            {"otel.error", inspect(error)}
-          ])
-      end
-
-      Logger.add_backend(LogflareLogger.HttpBackend)
-      :enabled
-    else
-      Application.put_env(:opentelemetry, :traces_exporter, :none)
-      Application.put_env(:opentelemetry, :metrics_exporter, :none)
-      Application.put_env(:opentelemetry, :logs_exporter, :none)
-      :disabled
+defmodule OtelSetup do
+  def configure do
+    case Application.ensure_all_started(:opentelemetry) do
+      {:ok, _} ->
+        OtelLogger.info("OpenTelemetry started - logging to console only", [
+          {"otel.export_method", "console"},
+          {"otel.local_only", true}
+        ])
+        :ok
+      error ->
+        OtelLogger.warn("Failed to start OpenTelemetry - spans will not be created", [
+          {"otel.error", inspect(error)}
+        ])
+        {:error, error}
     end
   end
 end
@@ -189,7 +136,6 @@ defmodule ArgsParser do
       --num-steps, --steps <int>      Number of inference steps (default: 4 for turbo speed)
       --guidance-scale, -g <float>     Guidance scale (default: 0.0 for turbo models)
       --output-format, -f <format>    Output format: png, jpg, jpeg (default: "png")
-      --no-analytics                   Disable analytics and telemetry collection
       --help, -h                       Show this help message
 
     Examples:
@@ -218,7 +164,6 @@ defmodule ArgsParser do
         num_steps: :integer,
         guidance_scale: :float,
         output_format: :string,
-        no_analytics: :boolean,
         help: :boolean
       ],
       aliases: [
@@ -235,8 +180,6 @@ defmodule ArgsParser do
       show_help()
     end
 
-    no_analytics = Keyword.get(opts, :no_analytics, false)
-    analytics_enabled = !no_analytics
     prompts = args
 
     if prompts == [] do
@@ -294,8 +237,7 @@ defmodule ArgsParser do
       seed: Keyword.get(opts, :seed, 0),
       num_steps: Keyword.get(opts, :num_steps, 4),
       guidance_scale: Keyword.get(opts, :guidance_scale, 0.0),
-      output_format: Keyword.get(opts, :output_format, "png"),
-      analytics_enabled: analytics_enabled
+      output_format: Keyword.get(opts, :output_format, "png")
     }
   end
 end
@@ -579,7 +521,13 @@ defmodule ZImageGenerator.Server do
   end
 
   def generate(server \\ __MODULE__, prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-    GenServer.call(server, {:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, :infinity)
+    # Timeout: 10 minutes (600,000 ms) - image generation can take time, especially on first run
+    timeout_ms = 600_000
+    case GenServer.call(server, {:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, timeout_ms) do
+      {:error, reason} = error -> error
+      {:ok, path} = ok -> ok
+      other -> {:error, "Unexpected response: #{inspect(other)}"}
+    end
   end
 
   def get_state(server \\ __MODULE__) do
@@ -668,6 +616,17 @@ defmodule ZImageGenerator.Server do
     case state.current_generation do
       {from, %Task{ref: ^ref}} ->
         GenServer.reply(from, {:error, "Task failed: #{inspect(reason)}"})
+        {:noreply, %{state | current_generation: nil}}
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info(:timeout, state) do
+    case state.current_generation do
+      {from, _task} ->
+        GenServer.reply(from, {:error, "Generation timeout - the process took too long. This may indicate a GPU/CUDA issue or memory problem."})
         {:noreply, %{state | current_generation: nil}}
       _ ->
         {:noreply, state}
@@ -973,8 +932,8 @@ end
 # Get configuration
 config = ArgsParser.parse(System.argv())
 
-# Configure analytics
-AnalyticsSetup.configure(config.analytics_enabled, logflare_api_key, logflare_source_id)
+# Configure OpenTelemetry for console logging
+OtelSetup.configure()
 
 # Start GenServer
 {:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: ZImageGenerator.Impl)
