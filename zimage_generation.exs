@@ -176,7 +176,6 @@ defmodule ArgsParser do
     Repository: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
 
     Architecture:
-      - Single Program Multiple Data (SPMD): Pipeline loads once, reused for all generations
       - Lazy loading: Model weights downloaded and pipeline loaded on first generation
       - Efficient: Subsequent generations reuse the loaded pipeline
 
@@ -198,13 +197,12 @@ defmodule ArgsParser do
       elixir zimage_generation.exs "a cat wearing a hat" -w 512 -h 512 -s 42
       elixir zimage_generation.exs "futuristic cityscape" --steps 12 -f jpg
 
-      # SPMD: Multiple prompts with same pipeline
+      # Multiple prompts
       elixir zimage_generation.exs "prompt 1" "prompt 2" "prompt 3"
       elixir zimage_generation.exs "cat" "dog" "bird" --width 512
 
     Notes:
       - First generation will download model weights (~6GB) if not present
-      - Pipeline loads once (SPMD) and is reused for all prompts efficiently
       - Multiple prompts processed with the same loaded pipeline
       - Output saved to output/<timestamp>/zimage_<timestamp>.<format>
     """)
@@ -567,8 +565,7 @@ defmodule ZImageGenerator.Server do
     :generator_impl,
     :state_machine,
     :setup_complete,
-    :current_generation,
-    :pipeline_loaded
+    :current_generation
   ]
 
   # Client API
@@ -597,8 +594,7 @@ defmodule ZImageGenerator.Server do
       generator_impl: generator_impl,
       state_machine: state_machine,
       setup_complete: false,
-      current_generation: nil,
-      pipeline_loaded: false
+      current_generation: nil
     }
     {:ok, state}
   end
@@ -619,7 +615,6 @@ defmodule ZImageGenerator.Server do
 
   @impl true
   def handle_call({:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, from, state) do
-    # SPMD: Start generation in a Task, reuse pipeline if already loaded
     task = Task.async(fn ->
       # Transition to loading state
       ZImageGeneration.StateMachine.call(state.state_machine, {:start_generation, %{
@@ -632,11 +627,11 @@ defmodule ZImageGenerator.Server do
         output_format: output_format
       }})
 
-      # Model will be loaded/reused during generation (SPMD)
+      # Model will be loaded during generation
       ZImageGeneration.StateMachine.call(state.state_machine, {:model_loaded})
 
-      # Perform generation with SPMD (reuse pipeline if loaded)
-      case ZImageGenerator.Impl.generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format, state.pipeline_loaded) do
+      # Perform generation
+      case ZImageGenerator.Impl.generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
         {:ok, output_path} ->
           ZImageGeneration.StateMachine.call(state.state_machine, {:complete, output_path})
           {:ok, output_path}
@@ -646,8 +641,8 @@ defmodule ZImageGenerator.Server do
       end
     end)
 
-    # Monitor the task and reply when done, mark pipeline as loaded
-    new_state = %{state | current_generation: {from, task}, setup_complete: true, pipeline_loaded: true}
+    # Monitor the task and reply when done
+    new_state = %{state | current_generation: {from, task}, setup_complete: true}
     {:noreply, new_state}
   end
 
@@ -695,14 +690,14 @@ defmodule ZImageGenerator.Impl do
   end
 
   @impl ZImageGenerator.Behaviour
-  def generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-    # This is called from the GenServer, which manages pipeline state
-    # The actual generation happens in the GenServer to maintain SPMD
+  def generate(_prompt, _width, _height, _seed, _num_steps, _guidance_scale, _output_format) do
+    # This is called from the GenServer
+    # The actual generation happens in the GenServer
     {:error, "generate should be called through ZImageGenerator.Server"}
   end
 
-  # Internal function that uses the shared pipeline
-  def generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format, pipeline_loaded) do
+  # Internal function that loads the pipeline and generates
+  def generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
     OpenTelemetry.Tracer.with_span "zimage.generate" do
       OpenTelemetry.Tracer.set_attribute("image.width", width)
       OpenTelemetry.Tracer.set_attribute("image.height", height)
@@ -739,12 +734,10 @@ defmodule ZImageGenerator.Impl do
           end
         end
       else
-        if !pipeline_loaded do
-          OtelLogger.ok("Model weights already present", [
-            {"model.weights_dir", zimage_weights_dir},
-            {"model.weights_cached", true}
-          ])
-        end
+        OtelLogger.ok("Model weights already present", [
+          {"model.weights_dir", zimage_weights_dir},
+          {"model.weights_cached", true}
+        ])
         OpenTelemetry.Tracer.set_attribute("model.weights_cached", true)
       end
 
@@ -764,13 +757,12 @@ defmodule ZImageGenerator.Impl do
 
       OpenTelemetry.Tracer.with_span "zimage.python_generation" do
         try do
-          # SPMD: Load pipeline once, reuse for multiple data
-          load_code = if !pipeline_loaded do
-            OtelLogger.info("Loading pipeline (SPMD: will be reused for future generations)", [
-              {"spmd.pipeline_load", "first_time"}
-            ])
-            """
-# Load pipeline once (SPMD: single program)
+          OtelLogger.info("Loading pipeline", [
+            {"pipeline.load", "starting"}
+          ])
+
+          load_code = """
+# Load pipeline
 import json
 import os
 import sys
@@ -862,118 +854,12 @@ if device == "cuda":
         else:
             print(f"[INFO] torch.compile not available: {e}")
 
-print(f"[OK] Pipeline loaded on {device} with dtype {dtype} (SPMD: will be reused)")
+print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
 """
-          else
-            OtelLogger.info("Reusing loaded pipeline (SPMD: single program, multiple data)", [
-              {"spmd.pipeline_reuse", true}
-            ])
-            """
-# SPMD: Check if pipeline exists, if not load it
-try:
-    _ = pipe
-    print("[INFO] Reusing existing pipeline (SPMD)")
-except NameError:
-    # Pipeline not in scope, need to reload
-    print("[WARN] Pipeline not found, reloading...")
-    import json
-    import os
-    import sys
-    import logging
-    from pathlib import Path
-    from PIL import Image
-    import torch
-    from diffusers import DiffusionPipeline
 
-    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
-    logging.getLogger("transformers").setLevel(logging.ERROR)
-    logging.getLogger("diffusers").setLevel(logging.ERROR)
-    os.environ["TRANSFORMERS_VERBOSITY"] = "error"
-    os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-
-    from tqdm import tqdm
-    import warnings
-    warnings.filterwarnings("ignore")
-
-    _original_tqdm_init = tqdm.__init__
-    def _silent_tqdm_init(self, *args, **kwargs):
-        kwargs['disable'] = True
-        return _original_tqdm_init(self, *args, **kwargs)
-    tqdm.__init__ = _silent_tqdm_init
-
-    cpu_count = os.cpu_count()
-    half_cpu_count = cpu_count // 2
-    os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
-    os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
-    torch.set_num_threads(half_cpu_count)
-
-    MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
-
-    # Performance optimizations (from Exa best practices)
-    if device == "cuda":
-        torch.set_float32_matmul_precision("high")
-        # Torch inductor optimizations for maximum speed
-        torch._inductor.config.conv_1x1_as_mm = True
-        torch._inductor.config.coordinate_descent_tuning = True
-        torch._inductor.config.epilogue_fusion = False
-        torch._inductor.config.coordinate_descent_check_all_directions = True
-
-    zimage_weights_dir = Path(r"#{zimage_weights_dir}").resolve()
-
-    if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
-        print(f"Loading from local directory: {zimage_weights_dir}")
-        pipe = DiffusionPipeline.from_pretrained(
-            str(zimage_weights_dir),
-            torch_dtype=dtype,
-            local_files_only=False
-        )
-    else:
-        print(f"Loading from Hugging Face Hub: {MODEL_ID}")
-        pipe = DiffusionPipeline.from_pretrained(
-            MODEL_ID,
-            torch_dtype=dtype
-        )
-
-    pipe = pipe.to(device)
-
-    # Performance optimizations for 2x speed (from Exa)
-    if device == "cuda":
-        # Memory format optimization
-        try:
-            pipe.transformer.to(memory_format=torch.channels_last)
-            if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
-                pipe.vae.to(memory_format=torch.channels_last)
-            print("[OK] Memory format optimized (channels_last)")
-        except Exception as e:
-            print(f"[INFO] Memory format optimization: {e}")
-
-        # torch.compile for maximum speed (from Exa best practices)
-        # Note: Requires Triton package. Falls back gracefully if not available.
-        try:
-            # Check if Triton is available before compiling
-            import triton
-            pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead", fullgraph=False)
-            if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
-                pipe.vae.decode = torch.compile(pipe.vae.decode, mode="reduce-overhead", fullgraph=False)
-            print("[OK] torch.compile enabled (reduce-overhead mode for 2x speed boost)")
-        except ImportError:
-            print("[INFO] Triton not installed - skipping torch.compile (install triton for 2x speed boost)")
-        except Exception as e:
-            # Catch TritonMissing and other compilation errors
-            if "Triton" in str(e) or "triton" in str(e).lower():
-                print("[INFO] Triton not available - skipping torch.compile (install triton for 2x speed boost)")
-            else:
-                print(f"[INFO] torch.compile not available: {e}")
-
-    print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
-"""
-          end
-
-          # Generate with loaded/reused pipeline (SPMD: multiple data)
-          {_, _python_globals} = Pythonx.eval(load_code <> """
-# SPMD: Process different data with same program
+          # Generate with loaded pipeline
+          Pythonx.eval(load_code <> """
+# Process generation
 import json
 import time
 from pathlib import Path
@@ -998,7 +884,7 @@ if seed == 0:
 else:
     generator.manual_seed(seed)
 
-# SPMD: Same pipeline (program), different data (prompt/params)
+# Generate image
 print(f"[INFO] Starting generation: {prompt[:50]}...")
 print(f"[INFO] Parameters: {width}x{height}, {num_steps} steps, seed={seed}")
 print("[INFO] Generating (optimized for speed)...")
@@ -1093,21 +979,21 @@ AnalyticsSetup.configure(config.analytics_enabled, logflare_api_key, logflare_so
 # Start GenServer
 {:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: ZImageGenerator.Impl)
 
-# CLI mode - SPMD: generate multiple images with same pipeline
+# CLI mode - generate multiple images
 IO.puts("""
   ╔═══════════════════════════════════════════════════════════════════════════╗
-  ║              Z-Image-Turbo Generation (SPMD Mode)                          ║
+  ║                    Z-Image-Turbo Generation                               ║
   ╚═══════════════════════════════════════════════════════════════════════════╝
   """)
 
 prompt_count = length(config.prompts)
-IO.puts("SPMD: Processing #{prompt_count} prompt(s) with single pipeline")
+IO.puts("Processing #{prompt_count} prompt(s)")
 IO.puts("Dimensions: #{config.width}x#{config.height}px")
 IO.puts("Steps: #{config.num_steps}, Seed: #{if config.seed == 0, do: "random", else: config.seed}")
 IO.puts("Format: #{String.upcase(config.output_format)}")
 IO.puts("")
 
-# Process all prompts with the same pipeline (SPMD)
+# Process all prompts
 results = config.prompts
 |> Enum.with_index(1)
 |> Enum.map(fn {prompt, index} ->
@@ -1121,8 +1007,7 @@ results = config.prompts
     {"generation.seed", config.seed},
     {"generation.num_steps", config.num_steps},
     {"generation.guidance_scale", config.guidance_scale},
-    {"generation.output_format", config.output_format},
-    {"spmd.pipeline_reuse", index > 1}
+    {"generation.output_format", config.output_format}
   ])
 
   IO.puts("[#{index}/#{prompt_count}] Generating: #{prompt}")
@@ -1161,7 +1046,7 @@ if failed_count == 0 do
       ║                    ✓ ALL SUCCESSFUL (#{success_count}/#{prompt_count})                        ║
       ╚═══════════════════════════════════════════════════════════════════════════╝
       """)
-  IO.puts("All #{success_count} image(s) generated successfully using SPMD!")
+  IO.puts("All #{success_count} image(s) generated successfully!")
   IO.puts("")
   results
   |> Enum.filter(fn r -> match?({:ok, _}, r) end)
