@@ -109,6 +109,22 @@ defmodule ArgsParser do
       System.halt(0)
     end
 
+    # Check if no arguments provided at all
+    if Enum.empty?(args) do
+      IO.puts("""
+      Error: Image path and prompt are required.
+
+      Usage:
+        elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
+
+      Example:
+        elixir qwen3vl_inference.exs image.jpg "What is in this image?"
+
+      Use --help or -h for more information.
+      """)
+      System.halt(1)
+    end
+
     image_path = List.first(args)
     prompt = args |> Enum.at(1)
 
@@ -130,6 +146,9 @@ defmodule ArgsParser do
 
       Usage:
         elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
+
+      Example:
+        elixir qwen3vl_inference.exs image.jpg "What is in this image?"
 
       Use --help or -h for more information.
       """)
