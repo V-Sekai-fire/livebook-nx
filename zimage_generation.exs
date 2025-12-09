@@ -8,41 +8,20 @@
 # Model: Z-Image-Turbo by Tongyi-MAI (6B parameters)
 # Repository: https://huggingface.co/Tongyi-MAI/Z-Image-Turbo
 #
+# Architecture:
+#   Tier 1: Native CLI API using GenServer, Behaviours, :gen_statem, Task/AsyncStream
+#   Tier 2: ExMCP API that wraps Tier 1
+#
 # Usage:
 #   elixir zimage_generation.exs "<prompt>" [options]
 #   elixir zimage_generation.exs --mcp-server [options]  # Start as MCP HTTP server
-#
-# Options:
-#   --width <int>                   Image width in pixels (default: 1024)
-#   --height <int>                   Image height in pixels (default: 1024)
-#   --seed <int>                     Random seed for generation (default: 0)
-#   --num-steps <int>                Number of inference steps (default: 9, results in 8 DiT forwards)
-#   --guidance-scale <float>         Guidance scale (default: 0.0 for turbo models)
-#   --output-format "png"            Output format: png, jpg, jpeg (default: "png")
-#   --mcp-server                     Start as MCP HTTP server instead of running generation
-#   --mcp-port <int>                 Port for MCP HTTP server (default: 4000)
-#   --no-analytics                   Disable analytics and telemetry collection
-#
-# Note: Image-to-image editing is not supported by Z-Image-Turbo.
-#       Z-Image-Edit (a separate model) is required for image editing but is not yet released.
-#
-# MCP Server Mode:
-#   When --mcp-server is used, the script starts an HTTP server that exposes the generation
-#   functionality via Model Context Protocol (MCP). Connect with:
-#     mcp connect http://localhost:4000/mcp
-#   The server will call setup() once on startup to download weights, load the model,
-#   and perform a test generation to verify everything works.
 
 # Configure Logflare OpenTelemetry BEFORE Mix.install starts applications
-# Set environment variables which are read early in the application lifecycle
 logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
 logflare_api_key = System.get_env("LOGFLARE_API_KEY") || "00b958d441b10b33026109732c60f9b7378c374c0c9908993e473b98b6d992ae"
 
 if logflare_api_key do
-  # Set OpenTelemetry configuration BEFORE Mix.install starts applications
-  # OpenTelemetry data will be routed through LogflareLogger instead of direct OTLP export
   Application.put_env(:opentelemetry, :span_processor, :batch)
-  # Disable direct OTLP export - we'll route through LogflareLogger instead
   Application.put_env(:opentelemetry, :traces_exporter, :none)
   Application.put_env(:opentelemetry, :metrics_exporter, :none)
   Application.put_env(:opentelemetry, :logs_exporter, :none)
@@ -61,15 +40,12 @@ Mix.install([
   {:logflare_logger_backend, "~> 0.11.4"},
 ])
 
-# Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
 
-# Logflare configuration variables (already set above before Mix.install)
-# Reference: https://docs.logflare.app/integrations/open-telemetry/
+# ============================================================================
+# SHARED UTILITIES
+# ============================================================================
 
-# Legal Notice and Analytics Configuration
-# Analytics are enabled by default when LOGFLARE_API_KEY is set
-# Use --no-analytics to opt out of all telemetry collection
 defmodule AnalyticsConfig do
   def show_legal_notice do
     IO.puts("""
@@ -99,18 +75,11 @@ defmodule AnalyticsConfig do
   end
 end
 
-# Analytics configuration will be done after parsing command-line arguments
-# Note: logflare_source_id and logflare_api_key are already defined above (before Mix.install)
-# This function configures analytics based on the opt-out flag
 defmodule AnalyticsSetup do
   def configure(analytics_enabled, api_key, source_id) do
     if api_key && analytics_enabled do
-      # Show legal notice on first run
       AnalyticsConfig.show_legal_notice()
-
-      # Configure Logger to use Logflare backend
       Application.put_env(:logger, :backends, [LogflareLogger.HttpBackend])
-
       Application.put_env(:logflare_logger_backend, :url, "https://api.logflare.app")
       Application.put_env(:logflare_logger_backend, :level, :info)
       Application.put_env(:logflare_logger_backend, :api_key, api_key)
@@ -119,9 +88,6 @@ defmodule AnalyticsSetup do
       Application.put_env(:logflare_logger_backend, :max_batch_size, 50)
       Application.put_env(:logflare_logger_backend, :metadata, :all)
 
-      # OpenTelemetry configuration is already set before Mix.install (see above)
-      # OpenTelemetry is used for creating spans, but data is routed through LogflareLogger
-      # No direct OTLP export - all telemetry goes through Logflare HTTP API
       case Application.ensure_all_started(:opentelemetry) do
         {:ok, _} ->
           OtelLogger.info("OpenTelemetry started - spans will be logged via LogflareLogger", [
@@ -134,12 +100,9 @@ defmodule AnalyticsSetup do
           ])
       end
 
-      # Reconfigure Logger to apply backend changes
       Logger.add_backend(LogflareLogger.HttpBackend)
-
       :enabled
     else
-      # Disable all analytics
       Application.put_env(:opentelemetry, :traces_exporter, :none)
       Application.put_env(:opentelemetry, :metrics_exporter, :none)
       Application.put_env(:opentelemetry, :logs_exporter, :none)
@@ -148,34 +111,21 @@ defmodule AnalyticsSetup do
   end
 end
 
-# Analytics will be configured after parsing command-line arguments
-
-# Helper module for structured logging to Logflare
-# IMPORTANT: This module writes to logflare_logger_backend (via Logger), NOT to OpenTelemetry logs
-# OpenTelemetry logging is disabled - only traces and metrics are sent via OTLP
-# This ensures logs go to Logflare's HTTP API while traces/metrics go to Logflare's OTLP endpoint
 defmodule OtelLogger do
   require Logger
 
-  # Convert list of tuples to keyword list for Logger
-  # String keys are converted to atoms, handling dots by replacing with underscores
   defp to_keyword_list(attrs) when is_list(attrs) do
     Enum.map(attrs, fn
       {k, v} when is_binary(k) ->
-        # Convert string keys to atoms, replacing dots with underscores
         atom_key = k |> String.replace(".", "_") |> String.to_atom()
         {atom_key, v}
-      {k, v} when is_atom(k) ->
-        {k, v}
-      other ->
-        other
+      {k, v} when is_atom(k) -> {k, v}
+      other -> other
     end)
   end
 
   defp to_keyword_list(attrs), do: attrs
 
-  # All logging functions write to Logger, which is configured to use LogflareLogger.HttpBackend
-  # This sends logs to Logflare's HTTP API endpoint, NOT to OpenTelemetry
   def info(message, attrs \\ []) do
     Logger.info(message, to_keyword_list(attrs))
   end
@@ -193,9 +143,7 @@ defmodule OtelLogger do
   end
 end
 
-# Initialize Python environment with required dependencies
-# Z-Image-Turbo uses diffusers and transformers
-# All dependencies managed by uv (no pip)
+# Initialize Python environment
 Pythonx.uv_init("""
 [project]
 name = "zimage-generation"
@@ -223,7 +171,6 @@ url = "https://download.pytorch.org/whl/cu118"
 explicit = true
 """)
 
-# Parse command-line arguments
 defmodule ArgsParser do
   def show_help do
     IO.puts("""
@@ -245,10 +192,8 @@ defmodule ArgsParser do
       --mcp-server                     Start as MCP HTTP server instead of running generation
       --mcp-port <int>                 Port for MCP HTTP server (default: 4000)
       --mock                           Use mock implementation (skip expensive operations for testing)
+      --no-analytics                   Disable analytics and telemetry collection
       --help, -h                       Show this help message
-
-    Note: Image-to-image editing is not supported by Z-Image-Turbo.
-          Z-Image-Edit (a separate model) is required for image editing but is not yet released.
 
     Example:
       elixir zimage_generation.exs "a beautiful sunset over mountains" --width 1024 --height 1024
@@ -285,7 +230,6 @@ defmodule ArgsParser do
 
     if Keyword.get(opts, :help, false) do
       show_help()
-      System.halt(0)
     end
 
     mcp_server = Keyword.get(opts, :mcp_server, false)
@@ -294,7 +238,6 @@ defmodule ArgsParser do
     analytics_enabled = !no_analytics
     prompt = List.first(args)
 
-    # Prompt is only required in CLI mode (not MCP server mode)
     if !mcp_server and !prompt do
       OtelLogger.error("Text prompt is required", [
         {"error.type", "missing_argument"},
@@ -303,7 +246,6 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    # Only validate parameters if not in MCP server mode (they'll be validated per-request in MCP mode)
     if !mcp_server do
       width = Keyword.get(opts, :width, 1024)
       height = Keyword.get(opts, :height, 1024)
@@ -346,7 +288,7 @@ defmodule ArgsParser do
       end
     end
 
-    config = %{
+    %{
       prompt: prompt,
       width: Keyword.get(opts, :width, 1024),
       height: Keyword.get(opts, :height, 1024),
@@ -359,12 +301,9 @@ defmodule ArgsParser do
       mock_mode: mock_mode,
       analytics_enabled: analytics_enabled
     }
-
-    config
   end
 end
 
-# Elixir-native Hugging Face download function (must be defined before use)
 defmodule HuggingFaceDownloader do
   @base_url "https://huggingface.co"
   @api_base "https://huggingface.co/api"
@@ -375,13 +314,10 @@ defmodule HuggingFaceDownloader do
       {"download.repo_id", repo_id}
     ])
 
-    # Create directory
     File.mkdir_p!(local_dir)
 
-    # Get file tree from Hugging Face API
     case get_file_tree(repo_id) do
       {:ok, files} ->
-        # files is a map, convert to list for counting and iteration
         files_list = Map.to_list(files)
         total = length(files_list)
         OtelLogger.info("Found files to download", [
@@ -411,25 +347,18 @@ defmodule HuggingFaceDownloader do
   end
 
   defp get_file_tree(repo_id, revision \\ "main") do
-    # Recursively get all files
     case get_files_recursive(repo_id, revision, "") do
       {:ok, files} ->
         file_map =
           files
-          |> Enum.map(fn file ->
-            {file["path"], file}
-          end)
+          |> Enum.map(fn file -> {file["path"], file} end)
           |> Map.new()
-
         {:ok, file_map}
-
-      error ->
-        error
+      error -> error
     end
   end
 
   defp get_files_recursive(repo_id, revision, path) do
-    # Build URL - handle empty path correctly
     url = if path == "" do
       "#{@api_base}/models/#{repo_id}/tree/#{revision}"
     else
@@ -438,25 +367,18 @@ defmodule HuggingFaceDownloader do
 
     try do
       response = Req.get(url)
-
-      # Req.get returns response directly or wrapped in tuple
       items = case response do
         {:ok, %{status: 200, body: body}} when is_list(body) -> body
         %{status: 200, body: body} when is_list(body) -> body
-        {:ok, %{status: status}} ->
-          raise "API returned status #{status}"
-        %{status: status} ->
-          raise "API returned status #{status}"
-        {:error, reason} ->
-          raise inspect(reason)
-        other ->
-          raise "Unexpected response: #{inspect(other)}"
+        {:ok, %{status: status}} -> raise "API returned status #{status}"
+        %{status: status} -> raise "API returned status #{status}"
+        {:error, reason} -> raise inspect(reason)
+        other -> raise "Unexpected response: #{inspect(other)}"
       end
 
       files = Enum.filter(items, &(&1["type"] == "file"))
       dirs = Enum.filter(items, &(&1["type"] == "directory"))
 
-      # Recursively get files from subdirectories
       subdir_files =
         dirs
         |> Enum.flat_map(fn dir ->
@@ -473,28 +395,20 @@ defmodule HuggingFaceDownloader do
   end
 
   defp download_file(repo_id, path, local_dir, info, current, total) do
-    # Construct download URL (using resolve endpoint for LFS files)
     url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
     local_path = Path.join(local_dir, path)
-
-    # Get file size for progress display
     file_size = info["size"] || 0
     size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
-
-    # Show current file being downloaded
     filename = Path.basename(path)
     IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
 
-    # Skip if file already exists
     if File.exists?(local_path) do
       IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
     else
-      # Create parent directories
       local_path
       |> Path.dirname()
       |> File.mkdir_p!()
 
-      # Download file with streaming, suppress debug logs
       result = Req.get(url,
         into: File.stream!(local_path, [], 65536),
         retry: :transient,
@@ -502,24 +416,18 @@ defmodule HuggingFaceDownloader do
       )
 
       case result do
-        {:ok, %{status: 200}} ->
-          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-
-        %{status: 200} ->
-          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-
+        {:ok, %{status: 200}} -> IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
+        %{status: 200} -> IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
         {:ok, %{status: status}} ->
           OtelLogger.warn("Failed to download file", [
             {"download.file_path", path},
             {"download.status_code", status}
           ])
-
         %{status: status} ->
           OtelLogger.warn("Failed to download file", [
             {"download.file_path", path},
             {"download.status_code", status}
           ])
-
         {:error, reason} ->
           OtelLogger.warn("Failed to download file", [
             {"download.file_path", path},
@@ -530,227 +438,11 @@ defmodule HuggingFaceDownloader do
   end
 end
 
-# MCP Server Handler
-defmodule ZImageMCPHandler do
-  use ExMCP.Server.Handler
-  require OpenTelemetry.Tracer
+# ============================================================================
+# TIER 1: NATIVE CLI API
+# ============================================================================
 
-  @impl true
-  def init(_args), do: {:ok, %{}}
-
-  # Handle GenServer calls from ExMCP.HttpPlug
-  # ExMCP.HttpPlug wraps the handler in a GenServer and calls these methods
-  def handle_call({:initialize, params}, _from, state) do
-    case handle_initialize(params, state) do
-      {:ok, result, new_state} -> {:reply, {:ok, result}, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  def handle_call({:list_tools, params}, _from, state) do
-    # Handle both nil params and map params
-    case handle_list_tools(params || %{}, state) do
-      {:ok, result, new_state} -> {:reply, result, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  def handle_call({:call_tool, params}, _from, state) when is_map(params) do
-    tool_name = Map.get(params, "name")
-    args = Map.get(params, "arguments", %{})
-    case handle_call_tool(tool_name, args, state) do
-      {:ok, content, new_state} -> {:reply, {:ok, content}, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  # Handle ExMCP.HttpPlug calling with {:call_tool, tool_name, args} format
-  # Args may have atom keys, convert to string keys for handle_call_tool
-  def handle_call({:call_tool, tool_name, args}, _from, state) when is_binary(tool_name) do
-    # Convert atom keys to string keys if needed
-    string_keyed_args = if is_map(args) do
-      Enum.into(args, %{}, fn
-        {k, v} when is_atom(k) -> {Atom.to_string(k), v}
-        {k, v} when is_binary(k) -> {k, v}
-        other -> other
-      end)
-    else
-      args
-    end
-    case handle_call_tool(tool_name, string_keyed_args, state) do
-      {:ok, content, new_state} -> {:reply, {:ok, content}, new_state}
-      {:error, reason, new_state} -> {:reply, {:error, reason}, new_state}
-    end
-  end
-
-  def handle_call(msg, _from, state) do
-    {:reply, {:error, "Unknown call: #{inspect(msg)}"}, state}
-  end
-
-  @impl true
-  def handle_initialize(_params, state) do
-    OpenTelemetry.Tracer.with_span "mcp.initialize" do
-      OpenTelemetry.Tracer.set_attribute("mcp.server.name", "zimage-generation")
-      OpenTelemetry.Tracer.set_attribute("mcp.server.version", "1.0.0")
-
-      result = %{
-        "protocolVersion" => "2024-11-05",
-        "serverInfo" => %{
-          "name" => "zimage-generation",
-          "version" => "1.0.0"
-        },
-        "capabilities" => %{
-          "tools" => %{}
-        }
-      }
-      
-      {:ok, result, state}
-    end
-  end
-
-  @impl true
-  def handle_list_tools(_params, state) do
-    OpenTelemetry.Tracer.with_span "mcp.list_tools" do
-      tools = [
-        %{
-          "name" => "generate_image",
-          "description" => "Generate photorealistic images from text prompts using Z-Image-Turbo",
-          "inputSchema" => %{
-            "type" => "object",
-            "properties" => %{
-              "prompt" => %{
-                "type" => "string",
-                "description" => "Text prompt describing the image to generate"
-              },
-              "width" => %{
-                "type" => "integer",
-                "description" => "Image width in pixels (default: 1024, range: 64-2048)",
-                "default" => 1024
-              },
-              "height" => %{
-                "type" => "integer",
-                "description" => "Image height in pixels (default: 1024, range: 64-2048)",
-                "default" => 1024
-              },
-              "seed" => %{
-                "type" => "integer",
-                "description" => "Random seed for generation (default: 0)",
-                "default" => 0
-              },
-              "num_steps" => %{
-                "type" => "integer",
-                "description" => "Number of inference steps (default: 9)",
-                "default" => 9
-              },
-              "guidance_scale" => %{
-                "type" => "number",
-                "description" => "Guidance scale (default: 0.0 for turbo models)",
-                "default" => 0.0
-              },
-              "output_format" => %{
-                "type" => "string",
-                "description" => "Output format: png, jpg, jpeg (default: png)",
-                "enum" => ["png", "jpg", "jpeg"],
-                "default" => "png"
-              }
-            },
-            "required" => ["prompt"]
-          }
-        }
-      ]
-      OpenTelemetry.Tracer.set_attribute("mcp.tools.count", length(tools))
-      {:ok, tools, state}
-    end
-  end
-
-  @impl true
-  def handle_call_tool("generate_image", args, state) do
-    OpenTelemetry.Tracer.with_span "mcp.tool.generate_image" do
-      # Get mcp_port from application config or default
-      mcp_port = Application.get_env(:zimage_generation, :mcp_port, 4001)
-      prompt = Map.get(args, "prompt")
-
-      if !prompt do
-        OpenTelemetry.Tracer.set_status(:error, "prompt is required")
-        {:error, "prompt is required", state}
-      else
-        try do
-          # Extract parameters with defaults
-          width = Map.get(args, "width", 1024)
-          height = Map.get(args, "height", 1024)
-          seed = Map.get(args, "seed", 0)
-          num_steps = Map.get(args, "num_steps", 9)
-          guidance_scale = Map.get(args, "guidance_scale", 0.0)
-          output_format = Map.get(args, "output_format", "png")
-
-          # Set span attributes
-          OpenTelemetry.Tracer.set_attribute("image.width", width)
-          OpenTelemetry.Tracer.set_attribute("image.height", height)
-          OpenTelemetry.Tracer.set_attribute("image.seed", seed)
-          OpenTelemetry.Tracer.set_attribute("image.num_steps", num_steps)
-          OpenTelemetry.Tracer.set_attribute("image.guidance_scale", guidance_scale)
-          OpenTelemetry.Tracer.set_attribute("image.output_format", output_format)
-          OpenTelemetry.Tracer.set_attribute("prompt.length", String.length(prompt))
-
-          # Call the generation function
-          # Get the configured generator (real or mock)
-          generator = Application.get_env(:zimage_generation, :generator, ZImageGenerator)
-          
-          case generator.generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
-          {:ok, output_path} ->
-            OpenTelemetry.Tracer.set_attribute("image.output_path", output_path)
-            OpenTelemetry.Tracer.set_status(:ok)
-            
-            # Convert file path to HTTP URL
-            # output_path is like: output/20251209_12_34_56/zimage_20251209_12_34_56.png
-            # We need: /images/20251209_12_34_56/zimage_20251209_12_34_56.png
-            output_dir = Path.expand("output")
-            abs_output_path = Path.expand(output_path)
-            relative_path = Path.relative_to(abs_output_path, output_dir)
-            # Normalize path separators for URL
-            relative_path = String.replace(relative_path, "\\", "/")
-            # Get port from state or config
-            mcp_port = Application.get_env(:zimage_generation, :mcp_port, 4001)
-            image_url = "http://localhost:#{mcp_port}/images/#{relative_path}"
-            
-            content = [
-              %{
-                "type" => "text",
-                "text" => "Image generated successfully. View at: #{image_url}"
-              },
-              %{
-                "type" => "image",
-                "data" => image_url,
-                "mimeType" => "image/#{output_format}"
-              },
-              %{
-                "type" => "resource",
-                "uri" => image_url,
-                "mimeType" => "image/#{output_format}"
-              }
-            ]
-            {:ok, content, state}
-        {:error, reason} ->
-          OpenTelemetry.Tracer.set_status(:error, "Generation failed: #{reason}")
-          {:error, "Generation failed: #{reason}", state}
-        end
-      rescue
-        e ->
-          OpenTelemetry.Tracer.record_exception(e, [])
-          OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
-          {:error, "Generation failed: #{Exception.message(e)}", state}
-      end
-    end
-    end
-  end
-
-  @impl true
-  def handle_call_tool(tool_name, _args, state) do
-    {:error, "Unknown tool: #{tool_name}", state}
-  end
-end
-
-# Behaviour for ZImageGenerator to allow mocking
+# Behaviour for image generation operations
 defmodule ZImageGenerator.Behaviour do
   @moduledoc """
   Behaviour for Z-Image-Turbo model operations.
@@ -760,11 +452,254 @@ defmodule ZImageGenerator.Behaviour do
   @callback generate(String.t(), integer(), integer(), integer(), integer(), float(), String.t()) :: {:ok, Path.t()} | {:error, term()}
 end
 
-# Generation function module
-defmodule ZImageGenerator do
+# State machine for generation workflow using :gen_statem (OTP built-in)
+defmodule ZImageGeneration.StateMachine do
   @moduledoc """
-  Handles Z-Image-Turbo model setup and generation.
-  Setup is called once to prepare the model (download weights, load pipeline, and perform a test generation).
+  State machine for image generation workflow.
+  States: :idle -> :loading -> :generating -> :complete | :error
+  """
+  @behaviour :gen_statem
+
+  defstruct [
+    :prompt,
+    :width,
+    :height,
+    :seed,
+    :num_steps,
+    :guidance_scale,
+    :output_format,
+    :output_path,
+    :error
+  ]
+
+  # Client API
+  def start_link(opts \\ []) do
+    :gen_statem.start_link(__MODULE__, [], opts)
+  end
+
+  def call(server, event) do
+    :gen_statem.call(server, event)
+  end
+
+  def get_state(server) do
+    :gen_statem.call(server, :get_state)
+  end
+
+  # State machine callbacks
+  @impl :gen_statem
+  def callback_mode, do: :state_functions
+
+  @impl :gen_statem
+  def init(_), do: {:ok, :idle, %__MODULE__{}}
+
+  # State: idle
+  def idle({:call, from}, {:start_generation, params}, data) do
+    new_data = struct(data, params)
+    {:next_state, :loading, new_data, [{:reply, from, :ok}]}
+  end
+
+  def idle({:call, from}, :get_state, data) do
+    {:keep_state_and_data, [{:reply, from, {:idle, data}}]}
+  end
+
+  def idle(_, _, _), do: :keep_state_and_data
+
+  # State: loading
+  def loading({:call, from}, {:model_loaded}, data) do
+    {:next_state, :generating, data, [{:reply, from, :ok}]}
+  end
+
+  def loading({:call, from}, {:error, reason}, data) do
+    {:next_state, :error, %{data | error: reason}, [{:reply, from, {:error, reason}}]}
+  end
+
+  def loading({:call, from}, :get_state, data) do
+    {:keep_state_and_data, [{:reply, from, {:loading, data}}]}
+  end
+
+  def loading(_, _, _), do: :keep_state_and_data
+
+  # State: generating
+  def generating({:call, from}, {:complete, output_path}, data) do
+    {:next_state, :complete, %{data | output_path: output_path}, [{:reply, from, {:ok, output_path}}]}
+  end
+
+  def generating({:call, from}, {:error, reason}, data) do
+    {:next_state, :error, %{data | error: reason}, [{:reply, from, {:error, reason}}]}
+  end
+
+  def generating({:call, from}, :get_state, data) do
+    {:keep_state_and_data, [{:reply, from, {:generating, data}}]}
+  end
+
+  def generating(_, _, _), do: :keep_state_and_data
+
+  # State: complete
+  def complete({:call, from}, {:reset}, _data) do
+    {:next_state, :idle, %__MODULE__{}, [{:reply, from, :ok}]}
+  end
+
+  def complete({:call, from}, :get_state, data) do
+    {:keep_state_and_data, [{:reply, from, {:complete, data}}]}
+  end
+
+  def complete(_, _, _), do: :keep_state_and_data
+
+  # State: error
+  def error({:call, from}, {:reset}, _data) do
+    {:next_state, :idle, %__MODULE__{}, [{:reply, from, :ok}]}
+  end
+
+  def error({:call, from}, :get_state, data) do
+    {:keep_state_and_data, [{:reply, from, {:error, data}}]}
+  end
+
+  def error(_, _, _), do: :keep_state_and_data
+end
+
+# GenServer for managing Z-Image-Turbo generation
+defmodule ZImageGenerator.Server do
+  @moduledoc """
+  GenServer for managing Z-Image-Turbo image generation.
+  Handles setup, generation requests, and state management.
+  """
+  use GenServer
+  require OpenTelemetry.Tracer
+
+  defstruct [
+    :generator_impl,
+    :state_machine,
+    :setup_complete,
+    :current_generation
+  ]
+
+  # Client API
+  def start_link(opts \\ []) do
+    generator_impl = Keyword.get(opts, :generator_impl, ZImageGenerator.Impl)
+    GenServer.start_link(__MODULE__, generator_impl, name: __MODULE__)
+  end
+
+  def setup(server \\ __MODULE__) do
+    GenServer.call(server, :setup)
+  end
+
+  def generate(server \\ __MODULE__, prompt, width, height, seed, num_steps, guidance_scale, output_format) do
+    GenServer.call(server, {:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, :infinity)
+  end
+
+  def get_state(server \\ __MODULE__) do
+    GenServer.call(server, :get_state)
+  end
+
+  # Server callbacks
+  @impl true
+  def init(generator_impl) do
+    {:ok, state_machine} = ZImageGeneration.StateMachine.start_link([])
+    state = %__MODULE__{
+      generator_impl: generator_impl,
+      state_machine: state_machine,
+      setup_complete: false,
+      current_generation: nil
+    }
+    {:ok, state}
+  end
+
+  @impl true
+  def handle_call(:setup, _from, state) do
+    if state.setup_complete do
+      {:reply, :ok, state}
+    else
+      case state.generator_impl.setup() do
+        :ok ->
+          {:reply, :ok, %{state | setup_complete: true}}
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  @impl true
+  def handle_call({:generate, prompt, width, height, seed, num_steps, guidance_scale, output_format}, from, state) do
+    # Ensure setup is complete
+    setup_result = if !state.setup_complete do
+      case state.generator_impl.setup() do
+        :ok -> :ok
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :ok
+    end
+
+    case setup_result do
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+      :ok ->
+        # Start generation in a Task
+        task = Task.async(fn ->
+          # Transition to loading state
+          ZImageGeneration.StateMachine.call(state.state_machine, {:start_generation, %{
+            prompt: prompt,
+            width: width,
+            height: height,
+            seed: seed,
+            num_steps: num_steps,
+            guidance_scale: guidance_scale,
+            output_format: output_format
+          }})
+
+          # Model is already loaded (setup completed), transition to generating
+          ZImageGeneration.StateMachine.call(state.state_machine, {:model_loaded})
+
+          # Perform generation
+          case state.generator_impl.generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
+            {:ok, output_path} ->
+              ZImageGeneration.StateMachine.call(state.state_machine, {:complete, output_path})
+              {:ok, output_path}
+            {:error, reason} ->
+              ZImageGeneration.StateMachine.call(state.state_machine, {:error, reason})
+              {:error, reason}
+          end
+        end)
+
+        # Monitor the task and reply when done
+        new_state = %{state | current_generation: {from, task}, setup_complete: true}
+        {:noreply, new_state}
+    end
+  end
+
+  @impl true
+  def handle_call(:get_state, _from, state) do
+    sm_state = ZImageGeneration.StateMachine.get_state(state.state_machine)
+    {:reply, %{setup_complete: state.setup_complete, state_machine: sm_state}, state}
+  end
+
+  @impl true
+  def handle_info({ref, result}, state) when is_reference(ref) do
+    case state.current_generation do
+      {from, %Task{ref: ^ref}} ->
+        GenServer.reply(from, result)
+        {:noreply, %{state | current_generation: nil}}
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _pid, reason}, state) do
+    case state.current_generation do
+      {from, %Task{ref: ^ref}} ->
+        GenServer.reply(from, {:error, "Task failed: #{inspect(reason)}"})
+        {:noreply, %{state | current_generation: nil}}
+      _ ->
+        {:noreply, state}
+    end
+  end
+end
+
+# Real implementation
+defmodule ZImageGenerator.Impl do
+  @moduledoc """
+  Real implementation of Z-Image-Turbo generation.
   """
   @behaviour ZImageGenerator.Behaviour
   require OpenTelemetry.Tracer
@@ -780,7 +715,6 @@ defmodule ZImageGenerator do
       zimage_weights_dir = Path.join([base_dir, "pretrained_weights", "Z-Image-Turbo"])
       OpenTelemetry.Tracer.set_attribute("model.weights_dir", zimage_weights_dir)
 
-      # Download model weights if not already present
       repo_id = "Tongyi-MAI/Z-Image-Turbo"
       OpenTelemetry.Tracer.set_attribute("model.repo_id", repo_id)
 
@@ -813,13 +747,12 @@ defmodule ZImageGenerator do
         OpenTelemetry.Tracer.set_attribute("model.weights_cached", true)
       end
 
-      # Load pipeline and perform a test generation
       OtelLogger.info("Loading pipeline and performing test generation", [
         {"setup.phase", "load_pipeline"}
       ])
       OpenTelemetry.Tracer.with_span "zimage.load_pipeline" do
         try do
-      {_, _python_globals} = Pythonx.eval("""
+          {_, _python_globals} = Pythonx.eval("""
 import json
 import os
 import sys
@@ -829,19 +762,16 @@ from PIL import Image
 import torch
 from diffusers import DiffusionPipeline
 
-# Suppress Hugging Face Hub and tqdm logging/progress bars during setup
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("diffusers").setLevel(logging.ERROR)
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
-# Suppress tqdm output
 from tqdm import tqdm
 import warnings
 warnings.filterwarnings("ignore")
 
-# Monkey patch tqdm to suppress output during setup
 _original_tqdm_init = tqdm.__init__
 def _silent_tqdm_init(self, *args, **kwargs):
     kwargs['disable'] = True
@@ -851,14 +781,12 @@ tqdm.__init__ = _silent_tqdm_init
 base_dir = Path(".").resolve()
 zimage_weights_dir = base_dir / "pretrained_weights" / "Z-Image-Turbo"
 
-# Set CPU thread optimization
 cpu_count = os.cpu_count()
 half_cpu_count = cpu_count // 2
 os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
 os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
-# Load model
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
@@ -880,7 +808,6 @@ else:
 pipe = pipe.to(device)
 print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
 
-# Perform a test generation to verify everything works
 print("Performing test generation...")
 test_prompt = "a simple red circle"
 generator = torch.Generator(device=device)
@@ -935,23 +862,22 @@ print("[OK] Setup complete - model ready for generation")
 
       base_dir = Path.expand(".")
       config = %{
-      prompt: prompt,
-      width: width,
-      height: height,
-      seed: seed,
-      num_steps: num_steps,
-      guidance_scale: guidance_scale,
-      output_format: output_format,
-      zimage_weights_dir: Path.join([base_dir, "pretrained_weights", "Z-Image-Turbo"])
-    }
+        prompt: prompt,
+        width: width,
+        height: height,
+        seed: seed,
+        num_steps: num_steps,
+        guidance_scale: guidance_scale,
+        output_format: output_format,
+        zimage_weights_dir: Path.join([base_dir, "pretrained_weights", "Z-Image-Turbo"])
+      }
 
       config_json = Jason.encode!(config)
       File.write!("config.json", config_json)
 
-      # Execute the Python generation code
       OpenTelemetry.Tracer.with_span "zimage.python_generation" do
         try do
-      {_, _python_globals} = Pythonx.eval("""
+          {_, _python_globals} = Pythonx.eval("""
 import json
 import sys
 import os
@@ -960,7 +886,6 @@ from PIL import Image
 import torch
 from diffusers import DiffusionPipeline
 
-# Get configuration from JSON file
 with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
@@ -973,19 +898,16 @@ guidance_scale = config.get('guidance_scale', 0.0)
 output_format = config.get('output_format', 'png')
 zimage_weights_dir = config.get('zimage_weights_dir')
 
-# Set CPU thread optimization
 cpu_count = os.cpu_count()
 half_cpu_count = cpu_count // 2
 os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
 os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
-# Resolve paths
 zimage_weights_dir = Path(zimage_weights_dir).resolve()
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 
-# Load model
 MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
@@ -1006,7 +928,6 @@ else:
 pipe = pipe.to(device)
 print(f"[OK] Pipeline loaded on {device}")
 
-# Generate image
 generator = torch.Generator(device=device)
 if seed == 0:
     seed = generator.seed()
@@ -1024,7 +945,6 @@ output = pipe(
 
 image = output.images[0]
 
-# Save image
 import time
 tag = time.strftime("%Y%m%d_%H_%M_%S")
 export_dir = output_dir / tag
@@ -1046,9 +966,6 @@ print(f"[OK] Saved image to {output_path}")
 print(f"OUTPUT_PATH:{output_path}")
 """, %{})
 
-      # Extract output path from Python output
-      # The Python code prints the path, we need to capture it
-      # For now, construct it from the timestamp pattern
           {:ok, output_path} = find_latest_output(output_format)
           {:ok, output_path}
         rescue
@@ -1064,7 +981,6 @@ print(f"OUTPUT_PATH:{output_path}")
   defp find_latest_output(output_format) do
     output_dir = Path.expand("output")
     if File.exists?(output_dir) do
-      # Find the most recent directory
       dirs =
         output_dir
         |> File.ls!()
@@ -1089,45 +1005,13 @@ print(f"OUTPUT_PATH:{output_path}")
   end
 end
 
-# Helper function to extract output path from MCP content
-defmodule ZImageHelpers do
-  def extract_output_path(content) when is_list(content) do
-    Enum.find_value(content, fn item ->
-      case item do
-        %{type: "resource", uri: uri} ->
-          # Extract file path from file:// URI
-          if String.starts_with?(uri, "file://") do
-            String.replace_prefix(uri, "file://", "")
-          else
-            nil
-          end
-        %{type: "text", text: text} ->
-          # Try to extract path from text
-          case Regex.run(~r/(?:Output file|Saved|Path):\s*(.+)/i, text) do
-            [_, path] -> String.trim(path)
-            _ -> nil
-          end
-        _ ->
-          nil
-      end
-    end)
-  end
-end
-
-# Get configuration
-config = ArgsParser.parse(System.argv())
-
-# Configure analytics based on user preference
-AnalyticsSetup.configure(config.analytics_enabled, logflare_api_key, logflare_source_id)
-
-# Mock stub implementation for testing
-defmodule ZImageGeneratorMock.Stub do
+# Mock implementation
+defmodule ZImageGenerator.Mock do
   @moduledoc """
-  Stub implementation of ZImageGenerator.Behaviour for testing.
-  Returns mock responses without expensive operations.
+  Mock implementation for testing.
   """
   @behaviour ZImageGenerator.Behaviour
-  
+
   @impl ZImageGenerator.Behaviour
   def setup do
     OtelLogger.info("Mock setup - skipping model download and loading", [
@@ -1136,7 +1020,7 @@ defmodule ZImageGeneratorMock.Stub do
     ])
     :ok
   end
-  
+
   @impl ZImageGenerator.Behaviour
   def generate(prompt, width, height, _seed, _num_steps, _guidance_scale, output_format) do
     OtelLogger.info("Mock generation - creating solid color image", [
@@ -1146,46 +1030,34 @@ defmodule ZImageGeneratorMock.Stub do
       {"height", height},
       {"output_format", output_format}
     ])
-    
-    # Create output directory with timestamp (matching real implementation)
+
     base_dir = Path.expand(".")
     output_base = Path.join([base_dir, "output"])
     File.mkdir_p!(output_base)
-    
-    # Create timestamped folder for this run (matching real implementation)
+
     timestamp = DateTime.utc_now() |> DateTime.to_string() |> String.replace(~r/[^\d]/, "") |> String.slice(0..13)
     export_dir = Path.join([output_base, timestamp])
     File.mkdir_p!(export_dir)
-    
-    # Generate filename matching real implementation format
+
     output_filename = "zimage_#{timestamp}.#{output_format}"
     output_path = Path.join([export_dir, output_filename])
-    
-    # Create a solid color image with correct dimensions and format
-    # Use a pleasant blue-gray color
+
     {_, _python_globals} = Pythonx.eval("""
 from PIL import Image
 import os
 from pathlib import Path
 
-# Create a solid color image with the exact requested dimensions
 width = #{width}
 height = #{height}
 output_format = "#{output_format}".lower()
 
-# Use a pleasant blue-gray color (RGB: 100, 150, 200)
 color = (100, 150, 200)
-
-# Create the image
 img = Image.new('RGB', (width, height), color=color)
 
-# Ensure output directory exists
 output_path = Path(r"#{output_path}")
 output_path.parent.mkdir(parents=True, exist_ok=True)
 
-# Save with correct format
 if output_format in ['jpg', 'jpeg']:
-    # Convert RGBA to RGB for JPEG if needed
     if img.mode == 'RGBA':
         background = Image.new('RGB', img.size, (255, 255, 255))
         background.paste(img, mask=img.split()[3] if img.mode == 'RGBA' else None)
@@ -1196,10 +1068,9 @@ else:
 
 print(f"OUTPUT_PATH:{output_path}")
 """, %{})
-    
-    # Extract output path from Python print output or use the path we constructed
+
     output_path_actual = output_path
-    
+
     OtelLogger.ok("Mock image generated successfully", [
       {"test.mode", "mock"},
       {"output_path", output_path_actual},
@@ -1207,27 +1078,119 @@ print(f"OUTPUT_PATH:{output_path}")
       {"image.height", height},
       {"image.format", output_format}
     ])
-    
+
     {:ok, output_path_actual}
   end
 end
 
-# Setup mocking if --mock flag is set
-if config.mock_mode do
-  # Set the generator to use mock stub
-  Application.put_env(:zimage_generation, :generator, ZImageGeneratorMock.Stub)
-  
-  OtelLogger.info("Mock mode enabled - using ZImageGeneratorMock.Stub", [
-    {"test.mode", "mock"},
-    {"test.generator", "ZImageGeneratorMock.Stub"}
-  ])
-else
-  # Use real implementation
-  Application.put_env(:zimage_generation, :generator, ZImageGenerator)
+# ============================================================================
+# TIER 2: EXMCP API (using generic wrapper)
+# ============================================================================
+
+# Load the generic MCP wrapper
+Code.require_file("mcp_generation_wrapper.ex", __DIR__)
+
+# MCP Server Handler that uses Tier 1 via generic wrapper
+defmodule ZImageMCPHandler do
+  use MCPGenerationWrapper,
+    generator_server: ZImageGenerator.Server,
+    server_name: "zimage-generation",
+    server_version: "1.0.0",
+    tool_definitions: [
+      %{
+        "name" => "generate_image",
+        "description" => "Generate photorealistic images from text prompts using Z-Image-Turbo",
+        "inputSchema" => %{
+          "type" => "object",
+          "properties" => %{
+            "prompt" => %{"type" => "string", "description" => "Text prompt describing the image to generate"},
+            "width" => %{"type" => "integer", "description" => "Image width in pixels (default: 1024, range: 64-2048)", "default" => 1024},
+            "height" => %{"type" => "integer", "description" => "Image height in pixels (default: 1024, range: 64-2048)", "default" => 1024},
+            "seed" => %{"type" => "integer", "description" => "Random seed for generation (default: 0)", "default" => 0},
+            "num_steps" => %{"type" => "integer", "description" => "Number of inference steps (default: 9)", "default" => 9},
+            "guidance_scale" => %{"type" => "number", "description" => "Guidance scale (default: 0.0 for turbo models)", "default" => 0.0},
+            "output_format" => %{"type" => "string", "description" => "Output format: png, jpg, jpeg (default: png)", "enum" => ["png", "jpg", "jpeg"], "default" => "png"}
+          },
+          "required" => ["prompt"]
+        }
+      }
+    ],
+    response_formatter: &ZImageMCPHandler.format_response/2,
+    mcp_port: 4000,
+    static_files_path: "output",
+    static_files_at: "/images"
+
+  # Custom tool handler for generate_image - override the default from wrapper
+  def handle_tool("generate_image", args, state) do
+    prompt = Map.get(args, "prompt")
+    if !prompt do
+      {:error, "prompt is required", state}
+    else
+      try do
+        width = Map.get(args, "width", 1024)
+        height = Map.get(args, "height", 1024)
+        seed = Map.get(args, "seed", 0)
+        num_steps = Map.get(args, "num_steps", 9)
+        guidance_scale = Map.get(args, "guidance_scale", 0.0)
+        output_format = Map.get(args, "output_format", "png")
+
+        # Use Tier 1 GenServer
+        case ZImageGenerator.Server.generate(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
+          {:ok, output_path} -> {:ok, {:ok, output_path}, state}
+          {:error, reason} -> {:error, reason, state}
+        end
+      rescue
+        e -> {:error, Exception.message(e), state}
+      end
+    end
+  end
+
+  # Custom response formatter for image generation
+  def format_response({:ok, output_path}, args) do
+    output_format = Map.get(args, "output_format", "png")
+    output_dir = Path.expand("output")
+    abs_output_path = Path.expand(output_path)
+    relative_path = Path.relative_to(abs_output_path, output_dir) |> String.replace("\\", "/")
+    mcp_port = Application.get_env(:zimage_generation, :mcp_port, 4000)
+    image_url = "http://localhost:#{mcp_port}/images/#{relative_path}"
+
+    [
+      %{"type" => "text", "text" => "Image generated successfully. View at: #{image_url}"},
+      %{"type" => "image", "data" => image_url, "mimeType" => "image/#{output_format}"},
+      %{"type" => "resource", "uri" => image_url, "mimeType" => "image/#{output_format}"}
+    ]
+  end
+
+  def format_response({:error, reason}, _args) do
+    [
+      %{"type" => "text", "text" => "Generation failed: #{inspect(reason)}"}
+    ]
+  end
 end
 
-# Get the configured generator
-generator = Application.get_env(:zimage_generation, :generator, ZImageGenerator)
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
+
+# Get configuration
+config = ArgsParser.parse(System.argv())
+
+# Configure analytics
+AnalyticsSetup.configure(config.analytics_enabled, logflare_api_key, logflare_source_id)
+
+# Setup mocking if --mock flag is set
+generator_impl = if config.mock_mode do
+  OtelLogger.info("Mock mode enabled - using ZImageGenerator.Mock", [
+    {"test.mode", "mock"},
+    {"test.generator", "ZImageGenerator.Mock"}
+  ])
+  ZImageGenerator.Mock
+else
+  ZImageGenerator.Impl
+end
+
+# Start Tier 1 GenServer
+{:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: generator_impl)
 
 # Check if MCP server mode
 if config.mcp_server do
@@ -1238,11 +1201,8 @@ if config.mcp_server do
     {"server.transport", "http"}
   ])
 
-  # Get the configured generator (real or mock) and call setup
-  generator = Application.get_env(:zimage_generation, :generator, ZImageGenerator)
-  
-  # Call setup once when server starts - crash if it fails
-  case generator.setup() do
+  # Call setup once when server starts
+  case ZImageGenerator.Server.setup() do
     :ok ->
       OtelLogger.ok("Setup completed successfully", [
         {"setup.status", "success"}
@@ -1255,13 +1215,10 @@ if config.mcp_server do
       System.halt(1)
   end
 
-  # Create a Plug router with static file serving for images
+  # Create Plug router with static file serving
   defmodule ZImageMCPRouter do
     use Plug.Router
 
-    # Serve static files from output directory
-    # Plug.Static serves files relative to the "from" directory
-    # So /images/20251209_12_34_56/file.png maps to output/20251209_12_34_56/file.png
     plug Plug.Static,
       at: "/images",
       from: Path.expand("output"),
@@ -1282,21 +1239,18 @@ if config.mcp_server do
     end
   end
 
-  # Store port in application config for use in handlers
   Application.put_env(:zimage_generation, :mcp_port, config.mcp_port)
-  
-  # Start the server
+
   {:ok, _} = Plug.Cowboy.http(ZImageMCPRouter, [], port: config.mcp_port)
-  
+
   OtelLogger.info("Image server started", [
     {"server.images_endpoint", "http://localhost:#{config.mcp_port}/images"},
     {"server.mcp_endpoint", "http://localhost:#{config.mcp_port}/mcp"}
   ])
 
-  # Keep the process alive
   Process.sleep(:infinity)
 else
-  # Normal CLI mode - route through MCP handler
+  # Normal CLI mode - use Tier 1 GenServer
   OtelLogger.info("Starting Z-Image-Turbo Generation", [
     {"generation.prompt_length", String.length(config.prompt)},
     {"generation.width", config.width},
@@ -1307,11 +1261,7 @@ else
     {"generation.output_format", config.output_format}
   ])
 
-  # Get the configured generator (real or mock)
-  generator = Application.get_env(:zimage_generation, :generator, ZImageGenerator)
-  
-  # Call generation directly (bypassing MCP handler for CLI mode)
-  case generator.generate(config.prompt, config.width, config.height, config.seed, config.num_steps, config.guidance_scale, config.output_format) do
+  case ZImageGenerator.Server.generate(config.prompt, config.width, config.height, config.seed, config.num_steps, config.guidance_scale, config.output_format) do
     {:ok, output_path} ->
       OtelLogger.ok("Image generation completed successfully", [
         {"generation.status", "complete"},
