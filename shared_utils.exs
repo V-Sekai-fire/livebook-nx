@@ -421,48 +421,45 @@ defmodule SpanCollector do
       IO.puts("  No spans recorded")
       IO.puts("")
     else
-      # Build span tree
-      span_map = Enum.reduce(trace.spans, %{}, fn span, acc ->
-        Map.put(acc, span.name, span)
-      end)
+      # Calculate total time from all spans for percentage calculation
+      total_span_time = Enum.sum(Enum.map(trace.spans, fn s -> s.duration_ms || 0 end))
 
-      # Calculate total time from root spans
+      # Calculate total time from root spans for overhead calculation
       root_spans = Enum.filter(trace.spans, fn span -> span.parent == :root end)
-      total_span_time = Enum.sum(Enum.map(root_spans, fn s -> s.duration_ms || 0 end))
+      total_root_time = Enum.sum(Enum.map(root_spans, fn s -> s.duration_ms || 0 end))
 
       IO.puts("  Total Execution Time: #{format_duration(trace.total_time_ms)}")
-      IO.puts("  Total Span Time: #{format_duration(total_span_time)}")
-      IO.puts("  Overhead: #{format_duration(trace.total_time_ms - total_span_time)}")
+      IO.puts("  Total Span Time: #{format_duration(total_root_time)}")
+      IO.puts("  Overhead: #{format_duration(trace.total_time_ms - total_root_time)}")
       IO.puts("")
       IO.puts("  Span Breakdown:")
       IO.puts("")
 
       # Display spans in order with indentation
-      display_spans(root_spans, span_map, 0)
+      display_spans(root_spans, trace.spans, total_span_time, 0)
 
       IO.puts("")
     end
   end
 
-  defp display_spans(spans, span_map, indent) do
+  defp display_spans(spans, all_spans, total_span_time, indent) do
     Enum.each(spans, fn span ->
       indent_str = String.duplicate("  ", indent)
       duration_str = if span.duration_ms, do: format_duration(span.duration_ms), else: "N/A"
       error_str = if Map.has_key?(span, :error) && span.error, do: " [ERROR: #{span.error}]", else: ""
 
-      percentage = if span.duration_ms do
-        total = Enum.sum(Enum.map(Map.values(span_map), fn s -> s.duration_ms || 0 end))
-        if total > 0, do: Float.round(span.duration_ms / total * 100, 1), else: 0.0
+      percentage = if span.duration_ms && total_span_time > 0 do
+        Float.round(span.duration_ms / total_span_time * 100, 1)
       else
         0.0
       end
 
       IO.puts("#{indent_str}├─ #{span.name}: #{duration_str} (#{percentage}%)#{error_str}")
 
-      # Display child spans
-      child_spans = Enum.filter(Map.values(span_map), fn s -> s.parent == span.name end)
+      # Display child spans - find all spans that have this span's name as parent
+      child_spans = Enum.filter(all_spans, fn s -> s.parent == span.name end)
       if child_spans != [] do
-        display_spans(child_spans, span_map, indent + 1)
+        display_spans(child_spans, all_spans, total_span_time, indent + 1)
       end
     end)
   end
