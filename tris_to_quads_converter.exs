@@ -20,15 +20,27 @@
 #   --output, -o <path>        Output USDC file path (default: input file with _quads.usdc suffix)
 #   --help, -h                 Show this help message
 
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
-  {:jason, "~> 1.4.4"}
+  {:jason, "~> 1.4.4"},
+  {:opentelemetry_api, "~> 1.3"},
+  {:opentelemetry, "~> 1.3"},
+  {:opentelemetry_exporter, "~> 1.0"},
 ])
 
 Logger.configure(level: :info)
 
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
+
+# Initialize OpenTelemetry
+OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
 Pythonx.uv_init("""
@@ -178,6 +190,7 @@ File.write!(config_file, config_json)
 config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Run conversion with proper cleanup
+SpanCollector.track_span("tris_to_quads.conversion", fn ->
 try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -449,6 +462,10 @@ after
     {:error, reason} -> IO.puts("Warning: Could not delete temp file: #{inspect(reason)}")
   end
 end
+end)
 
 IO.puts("\n=== Complete ===")
 IO.puts("Tris-to-quads conversion completed successfully!")
+
+# Display OpenTelemetry trace
+SpanCollector.display_trace()

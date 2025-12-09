@@ -20,16 +20,28 @@
 #   --guidance-scale <float>     Guidance scale (default: 7.0)
 #   --use-flash-decoder          Use flash decoder for faster inference (default: true)
 
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
-  {:req, "~> 0.5.0"}
+  {:req, "~> 0.5.0"},
+  {:opentelemetry_api, "~> 1.3"},
+  {:opentelemetry, "~> 1.3"},
+  {:opentelemetry_exporter, "~> 1.0"},
 ])
 
 Logger.configure(level: :info)
 
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
+
+# Initialize OpenTelemetry
+OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
 # PartCrafter uses Hugging Face models and diffusers
@@ -233,21 +245,24 @@ config_with_paths = Map.merge(config, %{
 {config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "partcrafter_config")
 
 # Download models using Elixir-native approach
-IO.puts("\n=== Step 2: Download Pretrained Weights ===")
-IO.puts("Downloading PartCrafter models from Hugging Face...")
+SpanCollector.track_span("partcrafter.download_weights", fn ->
+  IO.puts("\n=== Step 2: Download Pretrained Weights ===")
+  IO.puts("Downloading PartCrafter models from Hugging Face...")
 
-base_dir = Path.expand(".")
-partcrafter_weights_dir = Path.join([base_dir, "pretrained_weights", "PartCrafter"])
+  base_dir = Path.expand(".")
+  partcrafter_weights_dir = Path.join([base_dir, "pretrained_weights", "PartCrafter"])
 
-IO.puts("Using weights directory: #{partcrafter_weights_dir}")
+  IO.puts("Using weights directory: #{partcrafter_weights_dir}")
 
-# Download PartCrafter weights
-case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weights_dir, "PartCrafter") do
-  {:ok, _} -> :ok
-  {:error, _} -> IO.puts("[WARN] PartCrafter download had errors, but continuing...")
-end
+  # Download PartCrafter weights
+  case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weights_dir, "PartCrafter") do
+    {:ok, _} -> :ok
+    {:error, _} -> IO.puts("[WARN] PartCrafter download had errors, but continuing...")
+  end
+end)
 
 # Import libraries and process using PartCrafter
+SpanCollector.track_span("partcrafter.generation", fn ->
 try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -449,6 +464,10 @@ after
   # Clean up temp file
   ConfigFile.cleanup(config_file)
 end
+end)
 
 IO.puts("\n=== Complete ===")
 IO.puts("3D parts generation completed successfully!")
+
+# Display OpenTelemetry trace
+SpanCollector.display_trace()

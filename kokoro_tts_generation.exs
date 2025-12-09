@@ -24,16 +24,28 @@
 #   --output-format "wav"             Output format: wav, mp3, flac (default: "wav")
 #   --sample-rate <int>               Audio sample rate in Hz (default: 24000)
 
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
-  {:req, "~> 0.5.0"}
+  {:req, "~> 0.5.0"},
+  {:opentelemetry_api, "~> 1.3"},
+  {:opentelemetry, "~> 1.3"},
+  {:opentelemetry_exporter, "~> 1.0"},
 ])
 
 Logger.configure(level: :info)
 
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
+
+# Initialize OpenTelemetry
+OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
 # Kokoro uses kokoro package and misaki for G2P
@@ -443,8 +455,9 @@ IO.puts("\n=== spaCy Model ===")
 IO.puts("spaCy model 'en_core_web_sm' will be installed automatically via uv dependencies")
 
 # Import libraries and process using Kokoro
+SpanCollector.track_span("kokoro_tts.generation", fn ->
 try do
-  {_, _python_globals} = Pythonx.eval(~S"""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -770,6 +783,10 @@ after
     File.rm(config_file)
   end
 end
+end)
 
 IO.puts("\n=== Complete ===")
 IO.puts("TTS generation completed successfully!")
+
+# Display OpenTelemetry trace
+SpanCollector.display_trace()

@@ -17,15 +17,27 @@
 #   --mask-video                   Output a separate mask video (black and white masks)
 #   --return-zip                   Create ZIP file with video and masks
 
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
-  {:jason, "~> 1.4.4"}
+  {:jason, "~> 1.4.4"},
+  {:opentelemetry_api, "~> 1.3"},
+  {:opentelemetry, "~> 1.3"},
+  {:opentelemetry_exporter, "~> 1.0"},
 ])
 
 Logger.configure(level: :info)
 
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
+
+# Initialize OpenTelemetry
+OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
 # Note: This installs PyTorch with CUDA 11.8 support by default
@@ -212,6 +224,7 @@ File.write!(config_file, config_json)
 config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Import libraries and define constants using Pythonx
+SpanCollector.track_span("sam3.segmentation", fn ->
 try do
   {_, python_globals} = Pythonx.eval(~S"""
 import os
@@ -700,5 +713,9 @@ after
     File.rm(config_file)
   end
 end
+end)
 
 IO.puts("\n=== Complete ===")
+
+# Display OpenTelemetry trace
+SpanCollector.display_trace()

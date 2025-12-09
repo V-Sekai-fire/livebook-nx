@@ -18,16 +18,28 @@
 #   --output <path>                  Output file path for text response (optional)
 #   --use-flash-attention            Use Flash Attention 2 for better performance (default: false)
 
+# Configure OpenTelemetry for console-only logging
+Application.put_env(:opentelemetry, :span_processor, :batch)
+Application.put_env(:opentelemetry, :traces_exporter, :none)
+Application.put_env(:opentelemetry, :metrics_exporter, :none)
+Application.put_env(:opentelemetry, :logs_exporter, :none)
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
-  {:req, "~> 0.5.0"}
+  {:req, "~> 0.5.0"},
+  {:opentelemetry_api, "~> 1.3"},
+  {:opentelemetry, "~> 1.3"},
+  {:opentelemetry_exporter, "~> 1.0"},
 ])
 
 Logger.configure(level: :info)
 
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
+
+# Initialize OpenTelemetry
+OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
 # Qwen3-VL uses transformers and accelerate
@@ -220,26 +232,29 @@ config_with_paths = Map.merge(config, %{
 {config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "qwen3vl_config")
 
 # Download models using Elixir-native approach
-IO.puts("\n=== Step 2: Download Pretrained Weights ===")
-IO.puts("Downloading Qwen3-VL models from Hugging Face...")
+SpanCollector.track_span("qwen3vl.download_weights", fn ->
+  IO.puts("\n=== Step 2: Download Pretrained Weights ===")
+  IO.puts("Downloading Qwen3-VL models from Hugging Face...")
 
-base_dir = Path.expand(".")
-model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Instruct-abliterated"])
+  base_dir = Path.expand(".")
+  model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Instruct-abliterated"])
 
-IO.puts("Using weights directory: #{model_weights_dir}")
+  IO.puts("Using weights directory: #{model_weights_dir}")
 
-# Qwen3-VL repository on Hugging Face
-repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated"
+  # Qwen3-VL repository on Hugging Face
+  repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated"
 
-# Download model weights
-case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
-  {:ok, _} -> :ok
-  {:error, _} ->
-    IO.puts("[WARN] Qwen3-VL download had errors, but continuing...")
-    IO.puts("[INFO] Model will be loaded from Hugging Face Hub if local files are incomplete")
-end
+  # Download model weights
+  case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
+    {:ok, _} -> :ok
+    {:error, _} ->
+      IO.puts("[WARN] Qwen3-VL download had errors, but continuing...")
+      IO.puts("[INFO] Model will be loaded from Hugging Face Hub if local files are incomplete")
+  end
+end)
 
 # Import libraries and process using Qwen3-VL
+SpanCollector.track_span("qwen3vl.inference", fn ->
 try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -502,6 +517,10 @@ after
   # Clean up temp file
   ConfigFile.cleanup(config_file)
 end
+end)
 
 IO.puts("\n=== Complete ===")
 IO.puts("Vision-language inference completed successfully!")
+
+# Display OpenTelemetry trace
+SpanCollector.display_trace()
