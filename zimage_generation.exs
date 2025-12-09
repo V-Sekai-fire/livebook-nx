@@ -43,6 +43,8 @@ defmodule OtelSetup do
           {"otel.export_method", "console"},
           {"otel.local_only", true}
         ])
+        # Start span collector for performance tracking
+        SpanCollector.start_link()
         :ok
       error ->
         OtelLogger.warn("Failed to start OpenTelemetry - spans will not be created", [
@@ -51,6 +53,168 @@ defmodule OtelSetup do
         {:error, error}
     end
   end
+end
+
+defmodule SpanCollector do
+  @moduledoc """
+  Collects OpenTelemetry span timing data for performance debugging.
+  """
+  use Agent
+
+  def start_link(_opts \\ []) do
+    Agent.start_link(fn -> %{spans: [], start_time: System.monotonic_time(:millisecond)} end, name: __MODULE__)
+  end
+
+  def track_span(name, fun) do
+    start_time = System.monotonic_time(:millisecond)
+    parent_span = get_current_span()
+
+    Agent.update(__MODULE__, fn state ->
+      span_id = :erlang.unique_integer([:positive])
+      new_span = %{
+        id: span_id,
+        name: name,
+        parent: parent_span,
+        start_time: start_time,
+        end_time: nil,
+        duration_ms: nil
+      }
+      %{state | spans: [new_span | state.spans]}
+    end)
+
+    set_current_span(name)
+
+    try do
+      result = fun.()
+      end_time = System.monotonic_time(:millisecond)
+      duration = end_time - start_time
+
+      Agent.update(__MODULE__, fn state ->
+        spans = Enum.map(state.spans, fn span ->
+          if span.name == name && span.end_time == nil do
+            %{span | end_time: end_time, duration_ms: duration}
+          else
+            span
+          end
+        end)
+        %{state | spans: spans}
+      end)
+
+      clear_current_span()
+      result
+    rescue
+      e ->
+        end_time = System.monotonic_time(:millisecond)
+        duration = end_time - start_time
+
+        Agent.update(__MODULE__, fn state ->
+          spans = Enum.map(state.spans, fn span ->
+            if span.name == name && span.end_time == nil do
+              %{span | end_time: end_time, duration_ms: duration, error: Exception.message(e)}
+            else
+              span
+            end
+          end)
+          %{state | spans: spans}
+        end)
+
+        clear_current_span()
+        raise e
+    end
+  end
+
+  defp get_current_span do
+    case Process.get(:current_span) do
+      nil -> :root
+      span -> span
+    end
+  end
+
+  defp set_current_span(name) do
+    Process.put(:current_span, name)
+  end
+
+  defp clear_current_span do
+    Process.delete(:current_span)
+  end
+
+  def get_trace do
+    Agent.get(__MODULE__, fn state ->
+      total_time = System.monotonic_time(:millisecond) - state.start_time
+      %{
+        spans: Enum.reverse(state.spans),
+        total_time_ms: total_time,
+        start_time: state.start_time
+      }
+    end)
+  end
+
+  def display_trace do
+    trace = get_trace()
+
+    IO.puts("")
+    IO.puts("=== OpenTelemetry Trace Summary ===")
+    IO.puts("")
+
+    if trace.spans == [] do
+      IO.puts("  No spans recorded")
+      IO.puts("")
+    else
+
+    # Build span tree
+    span_map = Enum.reduce(trace.spans, %{}, fn span, acc ->
+      Map.put(acc, span.name, span)
+    end)
+
+    # Calculate total time from root spans
+    root_spans = Enum.filter(trace.spans, fn span -> span.parent == :root end)
+    total_span_time = Enum.sum(Enum.map(root_spans, fn s -> s.duration_ms || 0 end))
+
+    IO.puts("  Total Execution Time: #{format_duration(trace.total_time_ms)}")
+    IO.puts("  Total Span Time: #{format_duration(total_span_time)}")
+    IO.puts("  Overhead: #{format_duration(trace.total_time_ms - total_span_time)}")
+    IO.puts("")
+    IO.puts("  Span Breakdown:")
+    IO.puts("")
+
+    # Display spans in order with indentation
+    display_spans(root_spans, span_map, 0)
+
+    IO.puts("")
+    end
+  end
+
+  defp display_spans(spans, span_map, indent) do
+    Enum.each(spans, fn span ->
+      indent_str = String.duplicate("  ", indent)
+      duration_str = if span.duration_ms, do: format_duration(span.duration_ms), else: "N/A"
+      error_str = if span.error, do: " [ERROR: #{span.error}]", else: ""
+
+      percentage = if span.duration_ms do
+        total = Enum.sum(Enum.map(Map.values(span_map), fn s -> s.duration_ms || 0 end))
+        if total > 0, do: Float.round(span.duration_ms / total * 100, 1), else: 0.0
+      else
+        0.0
+      end
+
+      IO.puts("#{indent_str}├─ #{span.name}: #{duration_str} (#{percentage}%)#{error_str}")
+
+      # Display child spans
+      child_spans = Enum.filter(Map.values(span_map), fn s -> s.parent == span.name end)
+      if child_spans != [] do
+        display_spans(child_spans, span_map, indent + 1)
+      end
+    end)
+  end
+
+  defp format_duration(ms) when is_integer(ms) do
+    cond do
+      ms >= 1000 -> "#{Float.round(ms / 1000, 2)}s"
+      true -> "#{ms}ms"
+    end
+  end
+
+  defp format_duration(_), do: "N/A"
 end
 
 defmodule OtelLogger do
@@ -657,6 +821,7 @@ defmodule ZImageGenerator.Impl do
 
   # Internal function that loads the pipeline and generates
   def generate_with_pipeline(prompt, width, height, seed, num_steps, guidance_scale, output_format) do
+    SpanCollector.track_span("zimage.generate", fn ->
     OpenTelemetry.Tracer.with_span "zimage.generate" do
       OpenTelemetry.Tracer.set_attribute("image.width", width)
       OpenTelemetry.Tracer.set_attribute("image.height", height)
@@ -672,6 +837,7 @@ defmodule ZImageGenerator.Impl do
 
       # Download weights if needed (only once)
       if !File.exists?(zimage_weights_dir) or !File.exists?(Path.join(zimage_weights_dir, "config.json")) do
+        SpanCollector.track_span("zimage.download_weights", fn ->
         OpenTelemetry.Tracer.with_span "zimage.download_weights" do
           OtelLogger.info("Downloading Z-Image-Turbo models from Hugging Face", [
             {"download.weights_dir", zimage_weights_dir}
@@ -692,6 +858,7 @@ defmodule ZImageGenerator.Impl do
               OpenTelemetry.Tracer.set_status(:error, inspect(reason))
           end
         end
+        end)
       else
         OtelLogger.ok("Model weights already present", [
           {"model.weights_dir", zimage_weights_dir},
@@ -719,6 +886,7 @@ defmodule ZImageGenerator.Impl do
       File.write!(config_file, config_json)
       config_file_normalized = String.replace(config_file, "\\", "/")
 
+      SpanCollector.track_span("zimage.python_generation", fn ->
       OpenTelemetry.Tracer.with_span "zimage.python_generation" do
         try do
           OtelLogger.info("Loading pipeline", [
@@ -912,7 +1080,9 @@ print(f"OUTPUT_PATH:{output_path}")
           end
         end
       end
+      end)
     end
+  end)
   end
 
   defp find_latest_output(output_format) do
@@ -956,11 +1126,8 @@ OtelSetup.configure()
 {:ok, _pid} = ZImageGenerator.Server.start_link(generator_impl: ZImageGenerator.Impl)
 
 # CLI mode - generate multiple images
-IO.puts("""
-  ╔═══════════════════════════════════════════════════════════════════════════╗
-  ║                    Z-Image-Turbo Generation                               ║
-  ╚═══════════════════════════════════════════════════════════════════════════╝
-  """)
+IO.puts("=== Z-Image-Turbo Generation ===")
+IO.puts("")
 
 prompt_count = length(config.prompts)
 IO.puts("Processing #{prompt_count} prompt(s)")
@@ -1017,22 +1184,17 @@ success_count = Enum.count(results, fn r -> match?({:ok, _}, r) end)
 failed_count = prompt_count - success_count
 
 if failed_count == 0 do
-  IO.puts("""
-      ╔═══════════════════════════════════════════════════════════════════════════╗
-      ║                    ✓ ALL SUCCESSFUL (#{success_count}/#{prompt_count})                        ║
-      ╚═══════════════════════════════════════════════════════════════════════════╝
-      """)
+  IO.puts("=== ALL SUCCESSFUL (#{success_count}/#{prompt_count}) ===")
   IO.puts("All #{success_count} image(s) generated successfully!")
   IO.puts("")
   results
   |> Enum.filter(fn r -> match?({:ok, _}, r) end)
   |> Enum.each(fn {:ok, path} -> IO.puts("  • #{path}") end)
+
+  # Display OpenTelemetry trace summary for performance debugging
+  SpanCollector.display_trace()
 else
-  IO.puts("""
-      ╔═══════════════════════════════════════════════════════════════════════════╗
-      ║              ⚠ PARTIAL SUCCESS (#{success_count}/#{prompt_count} succeeded)                    ║
-      ╚═══════════════════════════════════════════════════════════════════════════╝
-      """)
+  IO.puts("=== PARTIAL SUCCESS (#{success_count}/#{prompt_count} succeeded) ===")
   if success_count > 0 do
     IO.puts("Successful generations:")
     results
@@ -1048,5 +1210,9 @@ else
     |> Enum.filter(fn {r, _} -> match?({:error, _}, r) end)
     |> Enum.each(fn {{:error, reason}, idx} -> IO.puts("  [#{idx}] #{inspect(reason)}") end)
   end
+
+  # Display OpenTelemetry trace summary for performance debugging
+  SpanCollector.display_trace()
+
   System.halt(1)
 end
