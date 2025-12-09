@@ -344,7 +344,7 @@ if transcribe_start:
 # Ensure target_text is a string before processing
 if not target_text:
     raise ValueError("target_text is required but was not provided")
-    
+
 if isinstance(target_text, str) and target_text.endswith('.txt'):
     text_path = Path(target_text)
     if text_path.exists() and text_path.is_file():
