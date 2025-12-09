@@ -12,9 +12,9 @@
 #   elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
 #
 # Options:
-#   --max-tokens <int>              Maximum number of tokens to generate (default: 128)
-#   --temperature <float>            Sampling temperature (default: 1.0)
-#   --top-p <float>                  Top-p (nucleus) sampling (default: 1.0)
+#   --max-tokens <int>              Maximum number of tokens to generate (default: 4096)
+#   --temperature <float>            Sampling temperature (default: 0.7)
+#   --top-p <float>                  Top-p (nucleus) sampling (default: 0.9)
 #   --output <path>                  Output file path for text response (optional)
 #   --use-flash-attention            Use Flash Attention 2 for better performance (default: false)
 
@@ -69,9 +69,9 @@ defmodule ArgsParser do
       elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
 
     Options:
-      --max-tokens, -m <int>        Maximum number of tokens to generate (default: 128)
-      --temperature, -t <float>     Sampling temperature (default: 1.0)
-      --top-p <float>                Top-p (nucleus) sampling (default: 1.0)
+      --max-tokens, -m <int>        Maximum number of tokens to generate (default: 4096)
+      --temperature, -t <float>     Sampling temperature (default: 0.7)
+      --top-p <float>                Top-p (nucleus) sampling (default: 0.9)
       --output, -o <path>            Output file path for text response (optional)
       --use-flash-attention          Use Flash Attention 2 for better performance (default: false)
       --use-4bit                     Use 4-bit quantization (default: true, recommended for 4B model, ~2-3GB VRAM)
@@ -79,8 +79,8 @@ defmodule ArgsParser do
       --help, -h                      Show this help message
 
     Example:
-      elixir qwen3vl_inference.exs image.jpg "What is in this image?" --max-tokens 256
-      elixir qwen3vl_inference.exs photo.png "Describe this scene" -m 128 -t 0.7 -o output.txt
+      elixir qwen3vl_inference.exs image.jpg "What is in this image?"
+      elixir qwen3vl_inference.exs photo.png "Describe this scene" -m 2048 -t 0.8 -o output.txt
     """)
   end
 
@@ -160,19 +160,19 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    max_tokens = Keyword.get(opts, :max_tokens, 128)
+    max_tokens = Keyword.get(opts, :max_tokens, 4096)
     if max_tokens < 1 do
       IO.puts("Error: max_tokens must be at least 1")
       System.halt(1)
     end
 
-    temperature = Keyword.get(opts, :temperature, 1.0)
+    temperature = Keyword.get(opts, :temperature, 0.7)
     if temperature < 0.0 do
       IO.puts("Error: temperature must be non-negative")
       System.halt(1)
     end
 
-    top_p = Keyword.get(opts, :top_p, 1.0)
+    top_p = Keyword.get(opts, :top_p, 0.9)
     if top_p < 0.0 or top_p > 1.0 do
       IO.puts("Error: top_p must be between 0.0 and 1.0")
       System.halt(1)
@@ -448,9 +448,9 @@ if not isinstance(config, dict):
 
 image_path = config.get('image_path')
 prompt = config.get('prompt')
-max_tokens = config.get('max_tokens', 128)
-temperature = config.get('temperature', 1.0)
-top_p = config.get('top_p', 1.0)
+max_tokens = config.get('max_tokens', 4096)
+temperature = config.get('temperature', 0.7)
+top_p = config.get('top_p', 0.9)
 output_path = config.get('output_path')
 use_flash_attention = config.get('use_flash_attention', False)
 use_4bit = config.get('use_4bit', True)
