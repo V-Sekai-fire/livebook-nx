@@ -62,10 +62,11 @@ dependencies = [
   "gradio==5.35.0",
   "accelerate",
   "pillow",
-  "torch",
-  "torchvision",
+  # Pin torch to 2.4.x to match torch-cluster version
+  "torch==2.4.1",
+  "torchvision==0.19.1",
   # torch-cluster: platform-specific wheel URLs using environment markers
-  # Match torch 2.4.x version (pytorch-cu118 index installs 2.4.1)
+  # Match torch 2.4.x version (pinned to 2.4.1 above)
   # Windows: win_amd64 wheel for torch 2.4.0+cu118
   "torch-cluster @ https://data.pyg.org/whl/torch-2.4.0%2Bcu118/torch_cluster-1.6.3%2Bpt24cu118-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
   # Linux: linux_x86_64 wheel for torch 2.4.0+cu118
