@@ -198,12 +198,18 @@ Skeleton Only: #{config.skeleton_only}
 Skin Only: #{config.skin_only}
 """)
 
-# Save config to JSON for Python to read
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "unirig_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Import libraries and process using UniRig
-{_, _python_globals} = Pythonx.eval(~S"""
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -596,7 +602,11 @@ def run_unirig_inference(
         Exporter._export_fbx = original_export_fbx
 
 # Get configuration from JSON file
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
+    config = json.load(f)
+""" <> ~S"""
     config = json.load(f)
 
 mesh_path = config.get('mesh_path')
@@ -891,7 +901,20 @@ else:
     print(f"  - {export_dir.name}/skin.usdc (Skinning weights)")
     print(f"  - {export_dir.name}/rigged.{output_format} (Final rigged model)")
     print(f"  - {export_dir.name}/intermediate/ (Intermediate NPZ files)")
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("\n=== Complete ===")
 IO.puts("3D model rigging completed successfully!")

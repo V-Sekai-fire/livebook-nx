@@ -712,7 +712,12 @@ defmodule ZImageGenerator.Impl do
       }
 
       config_json = Jason.encode!(config)
-      File.write!("config.json", config_json)
+      # Use cross-platform temp directory
+      tmp_dir = System.tmp_dir!()
+      File.mkdir_p!(tmp_dir)
+      config_file = Path.join(tmp_dir, "zimage_config_#{System.system_time(:millisecond)}.json")
+      File.write!(config_file, config_json)
+      config_file_normalized = String.replace(config_file, "\\", "/")
 
       OpenTelemetry.Tracer.with_span "zimage.python_generation" do
         try do
@@ -822,9 +827,12 @@ print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
 import json
 import time
 from pathlib import Path
-
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
+""" <> ~S"""
 
 prompt = config.get('prompt')
 width = config.get('width', 1024)
@@ -884,15 +892,24 @@ else:
 
 print(f"[OK] Saved image to {output_path}")
 print(f"OUTPUT_PATH:{output_path}")
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
 
           {:ok, output_path} = find_latest_output(output_format)
           {:ok, output_path}
         rescue
           e ->
+            # Clean up temp file on error
+            if File.exists?(config_file) do
+              File.rm(config_file)
+            end
             OpenTelemetry.Tracer.record_exception(e, [])
             OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
             {:error, Exception.message(e)}
+        after
+          # Clean up temp file
+          if File.exists?(config_file) do
+            File.rm(config_file)
+          end
         end
       end
     end

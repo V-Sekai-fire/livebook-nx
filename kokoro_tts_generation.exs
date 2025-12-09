@@ -262,9 +262,14 @@ config_with_paths = Map.merge(config, %{
   kokoro_weights_dir: Path.join([base_dir, "pretrained_weights", "Kokoro-82M"])
 })
 
-# Save config to JSON for Python to read
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config_with_paths)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "kokoro_tts_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Elixir-native Hugging Face download function
 defmodule HuggingFaceDownloader do
@@ -436,7 +441,8 @@ IO.puts("\n=== spaCy Model ===")
 IO.puts("spaCy model 'en_core_web_sm' will be installed automatically via uv dependencies")
 
 # Import libraries and process using Kokoro
-{_, _python_globals} = Pythonx.eval(~S"""
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -546,8 +552,13 @@ sys.exit = _patched_sys_exit
 from kokoro import KPipeline
 
 # Get configuration from JSON file
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
+
+""" <> ~S"""
 
 text = config.get('text')
 lang_code = config.get('lang_code', 'a')
@@ -743,7 +754,20 @@ if len(all_audio_segments) > 1:
     print(f"  - {len(all_audio_segments)} metadata files")
 sys.stdout.flush()
 sys.stderr.flush()
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("\n=== Complete ===")
 IO.puts("TTS generation completed successfully!")

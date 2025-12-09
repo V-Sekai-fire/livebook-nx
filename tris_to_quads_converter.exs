@@ -163,10 +163,14 @@ Input: #{config.input_path}
 Output: #{output_display}
 """)
 
-# Convert JSON config to string for Python
+# Convert JSON config to string for Python (use temp file to avoid conflicts)
 config_json = Jason.encode!(config)
-config_file = "config.json"
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "tris_to_quads_config_#{System.system_time(:millisecond)}.json")
 File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Run conversion with proper cleanup
 try do
@@ -180,8 +184,11 @@ import bmesh
 from pulp import PULP_CBC_CMD, LpMaximize, LpProblem, LpVariable, lpSum, value
 
 # Get configuration from JSON file
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
 
 # Normalize paths to use forward slashes for cross-platform compatibility
 input_path = str(Path(config['input_path'])).replace("\\", "/")

@@ -214,9 +214,14 @@ config_with_paths = Map.merge(config, %{
   model_weights_dir: Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Instruct-abliterated"])
 })
 
-# Save config to JSON for Python to read
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config_with_paths)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "qwen3vl_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Elixir-native Hugging Face download function
 defmodule HuggingFaceDownloader do
@@ -396,7 +401,8 @@ case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL")
 end
 
 # Import libraries and process using Qwen3-VL
-{_, _python_globals} = Pythonx.eval(~S"""
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -435,9 +441,11 @@ os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
 # Get configuration from JSON file
-config_file = Path("config.json")
+""" <> """
+config_file = Path(r"#{String.replace(config_file_normalized, "\\", "\\\\")}")
 if not config_file.exists():
-    raise FileNotFoundError("config.json not found. This should be created by the Elixir script.")
+    raise FileNotFoundError(f"Config file not found: {config_file}. This should be created by the Elixir script.")
+""" <> ~S"""
 
 with open(config_file, 'r', encoding='utf-8') as f:
     config = json.load(f)
@@ -645,7 +653,20 @@ else:
     print(f"\n[OK] Response saved to: {output_path_default}")
 
 print("\n=== Complete ===")
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("\n=== Complete ===")
 IO.puts("Vision-language inference completed successfully!")

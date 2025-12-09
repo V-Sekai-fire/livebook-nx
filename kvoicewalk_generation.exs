@@ -268,9 +268,14 @@ config_with_paths = Map.merge(config, %{
   workspace_root: base_dir
 })
 
-# Save config to JSON for Python to read
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config_with_paths)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "kvoicewalk_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Check if KVoiceWalk repository exists
 IO.puts("\n=== Step 1: Setup KVoiceWalk Repository ===")
@@ -285,7 +290,8 @@ else
 end
 
 # Import libraries and run KVoiceWalk directly (no subprocess)
-{_, _python_globals} = Pythonx.eval(~S"""
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -293,8 +299,11 @@ import shutil
 from pathlib import Path
 
 # Get configuration from JSON file
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
 
 target_audio = config.get('target_audio')
 target_text = config.get('target_text')
@@ -657,7 +666,20 @@ os.chdir(original_cwd)
 
 print("\n=== Complete ===")
 print(f"Voice cloning completed!")
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("\n=== Complete ===")
 IO.puts("Voice cloning completed successfully!")

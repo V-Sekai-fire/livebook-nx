@@ -247,20 +247,29 @@ Note: This process may take a long time depending on mesh complexity and bake qu
 Press ESC in Blender to cancel if needed.
 """)
 
-# Convert JSON config to string for Python
+# Convert JSON config to string for Python (use temp file to avoid conflicts)
 config_json = Jason.encode!(config)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "corrective_smooth_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Run corrective smooth baking
-{_, _python_globals} = Pythonx.eval(~S"""
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
 from pathlib import Path
 
 # Load config
-with open('config.json', 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
 
 input_path = config['input_path']
 output_path = config['output_path']
@@ -812,7 +821,20 @@ try:
 except Exception as e:
     # Ignore cleanup errors
     pass
-""", %{})
+""", %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("""
 === Complete ===

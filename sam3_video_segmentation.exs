@@ -197,12 +197,18 @@ Mask Video: #{config.mask_video}
 Return ZIP: #{config.return_zip}
 """)
 
-# Save config to JSON for Python to read
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config)
-File.write!("config.json", config_json)
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
+File.mkdir_p!(tmp_dir)
+config_file = Path.join(tmp_dir, "sam3_config_#{System.system_time(:millisecond)}.json")
+File.write!(config_file, config_json)
+config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Import libraries and define constants using Pythonx
-{_, python_globals} = Pythonx.eval(~S"""
+try do
+  {_, python_globals} = Pythonx.eval(~S"""
 import os
 import cv2
 import time
@@ -454,7 +460,10 @@ IO.puts("\n=== Step 3: Generate Output Video ===")
 # Get configuration from JSON file
 import json
 
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
+""" <> ~S"""
     config = json.load(f)
 
 mask_color = config.get('mask_color', 'green')
@@ -633,7 +642,10 @@ IO.puts("\n=== Step 5: Create Output Files ===")
 # Create ZIP if return_zip is True, otherwise just provide video download
 import json
 
-with open("config.json", 'r', encoding='utf-8') as f:
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
+""" <> ~S"""
     config = json.load(f)
 
 return_zip = config.get('return_zip', False)
@@ -669,6 +681,19 @@ else:
         print(f"📥 Mask video location: {mask_video_path.absolute()}")
 
 print("\n✓ All done!")
-""", Process.get(:python_globals) || %{})
+""", Process.get(:python_globals) || %{"config_file_normalized" => config_file_normalized})
+rescue
+  e ->
+    # Clean up temp file on error
+    if File.exists?(config_file) do
+      File.rm(config_file)
+    end
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  if File.exists?(config_file) do
+    File.rm(config_file)
+  end
+end
 
 IO.puts("\n=== Complete ===")

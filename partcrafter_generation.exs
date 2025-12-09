@@ -225,10 +225,10 @@ config_with_paths = Map.merge(config, %{
   partcrafter_weights_dir: Path.join([base_dir, "pretrained_weights", "PartCrafter"])
 })
 
-# Save config to JSON for Python to read (use TEMP folder to avoid conflicts)
+# Save config to JSON for Python to read (use temp file to avoid conflicts)
 config_json = Jason.encode!(config_with_paths)
-# Use TEMP environment variable or fallback to system temp
-tmp_dir = System.get_env("TEMP") || System.get_env("TMP") || System.tmp_dir!()
+# Use cross-platform temp directory
+tmp_dir = System.tmp_dir!()
 File.mkdir_p!(tmp_dir)
 config_file = Path.join(tmp_dir, "partcrafter_config_#{System.system_time(:millisecond)}.json")
 File.write!(config_file, config_json)
@@ -396,7 +396,7 @@ end
 
 # Import libraries and process using PartCrafter
 try do
-  {_, _python_globals} = Pythonx.eval("""
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -424,9 +424,11 @@ else:
     )
 
 # Get configuration from JSON file
-config_file_path = r"#{config_file_normalized}"
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
 with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
+""" <> ~S"""
 
 image_path = config.get('image_path')
 output_format = config.get('output_format', 'glb')
@@ -588,7 +590,7 @@ print(f"  - {export_dir}/object.{output_format} (Merged mesh)")
 for i in range(len(outputs)):
     part_num = str(i).zfill(2)
     print(f"  - {export_dir}/part_{part_num}.{output_format} (Part {i})")
-""", %{config_file_normalized: config_file_normalized})
+""", %{"config_file_normalized" => config_file_normalized})
 rescue
   e ->
     # Clean up temp file on error
