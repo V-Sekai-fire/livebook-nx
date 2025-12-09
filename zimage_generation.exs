@@ -33,6 +33,21 @@
 #   The server will call setup() once on startup to download weights, load the model,
 #   and perform a test generation to verify everything works.
 
+# Configure Logflare OpenTelemetry BEFORE Mix.install starts applications
+# Set environment variables which are read early in the application lifecycle
+logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
+logflare_api_key = System.get_env("LOGFLARE_API_KEY") || "00b958d441b10b33026109732c60f9b7378c374c0c9908993e473b98b6d992ae"
+
+if logflare_api_key do
+  # Set OpenTelemetry configuration BEFORE Mix.install starts applications
+  # OpenTelemetry data will be routed through LogflareLogger instead of direct OTLP export
+  Application.put_env(:opentelemetry, :span_processor, :batch)
+  # Disable direct OTLP export - we'll route through LogflareLogger instead
+  Application.put_env(:opentelemetry, :traces_exporter, :none)
+  Application.put_env(:opentelemetry, :metrics_exporter, :none)
+  Application.put_env(:opentelemetry, :logs_exporter, :none)
+end
+
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
@@ -49,28 +64,8 @@ Mix.install([
 # Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
 
-# Configure Logflare integration BEFORE Mix.install starts applications
-# This ensures OpenTelemetry exporter reads the correct endpoint at startup
+# Logflare configuration variables (already set above before Mix.install)
 # Reference: https://docs.logflare.app/integrations/open-telemetry/
-logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
-logflare_api_key = System.get_env("LOGFLARE_API_KEY") || "00b958d441b10b33026109732c60f9b7378c374c0c9908993e473b98b6d992ae"
-
-# Set OpenTelemetry configuration BEFORE applications start
-# This ensures the exporter reads the correct endpoint instead of defaulting to localhost:4318
-if logflare_api_key do
-  Application.put_env(:opentelemetry, :span_processor, :batch)
-  Application.put_env(:opentelemetry, :traces_exporter, :otlp)
-  Application.put_env(:opentelemetry, :metrics_exporter, :otlp)
-  Application.put_env(:opentelemetry, :logs_exporter, :none)
-  
-  Application.put_env(:opentelemetry_exporter, :otlp_protocol, :grpc)
-  Application.put_env(:opentelemetry_exporter, :otlp_compression, :gzip)
-  Application.put_env(:opentelemetry_exporter, :otlp_endpoint, "https://otel.logflare.app:443")
-  Application.put_env(:opentelemetry_exporter, :otlp_headers, [
-    {"x-source", logflare_source_id},
-    {"x-api-key", logflare_api_key}
-  ])
-end
 
 # Legal Notice and Analytics Configuration
 # Analytics are enabled by default when LOGFLARE_API_KEY is set
@@ -104,13 +99,8 @@ defmodule AnalyticsConfig do
   end
 end
 
-# Configure Logflare integration
-# Reference: https://docs.logflare.app/integrations/open-telemetry/
-# Reference: https://github.com/Logflare/logflare_logger_backend
-logflare_source_id = "ee297a54-c48f-4795-8ca1-2c4cb6e57296"
-logflare_api_key = System.get_env("LOGFLARE_API_KEY") || "00b958d441b10b33026109732c60f9b7378c374c0c9908993e473b98b6d992ae"
-
 # Analytics configuration will be done after parsing command-line arguments
+# Note: logflare_source_id and logflare_api_key are already defined above (before Mix.install)
 # This function configures analytics based on the opt-out flag
 defmodule AnalyticsSetup do
   def configure(analytics_enabled, api_key, source_id) do
@@ -130,11 +120,19 @@ defmodule AnalyticsSetup do
       Application.put_env(:logflare_logger_backend, :metadata, :all)
 
       # OpenTelemetry configuration is already set before Mix.install (see above)
-      # This ensures the exporter reads the correct endpoint at startup
-      # Just ensure both opentelemetry and opentelemetry_exporter are started
-      # The exporter must be started for traces to be sent to Logflare
-      {:ok, _} = Application.ensure_all_started(:opentelemetry)
-      {:ok, _} = Application.ensure_all_started(:opentelemetry_exporter)
+      # OpenTelemetry is used for creating spans, but data is routed through LogflareLogger
+      # No direct OTLP export - all telemetry goes through Logflare HTTP API
+      case Application.ensure_all_started(:opentelemetry) do
+        {:ok, _} ->
+          OtelLogger.info("OpenTelemetry started - spans will be logged via LogflareLogger", [
+            {"otel.export_method", "logflare_logger"},
+            {"otel.otlp_export", "disabled"}
+          ])
+        error ->
+          OtelLogger.warn("Failed to start OpenTelemetry - spans will not be created", [
+            {"otel.error", inspect(error)}
+          ])
+      end
 
       # Reconfigure Logger to apply backend changes
       Logger.add_backend(LogflareLogger.HttpBackend)
