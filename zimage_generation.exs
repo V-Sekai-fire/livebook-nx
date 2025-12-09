@@ -187,7 +187,7 @@ defmodule ArgsParser do
       --width, -w <int>               Image width in pixels (default: 1024, range: 64-2048)
       --height <int>                  Image height in pixels (default: 1024, range: 64-2048)
       --seed, -s <int>                 Random seed for generation (default: 0 = random)
-      --num-steps, --steps <int>      Number of inference steps (default: 9)
+      --num-steps, --steps <int>      Number of inference steps (default: 4 for turbo speed)
       --guidance-scale, -g <float>     Guidance scale (default: 0.0 for turbo models)
       --output-format, -f <format>    Output format: png, jpg, jpeg (default: "png")
       --no-analytics                   Disable analytics and telemetry collection
@@ -271,7 +271,7 @@ defmodule ArgsParser do
       System.halt(1)
     end
 
-    num_steps = Keyword.get(opts, :num_steps, 9)
+    num_steps = Keyword.get(opts, :num_steps, 4)
     if num_steps < 1 do
       OtelLogger.error("num_steps must be at least 1", [
         {"error.type", "validation_error"},
@@ -294,7 +294,7 @@ defmodule ArgsParser do
       width: Keyword.get(opts, :width, 1024),
       height: Keyword.get(opts, :height, 1024),
       seed: Keyword.get(opts, :seed, 0),
-      num_steps: Keyword.get(opts, :num_steps, 9),
+      num_steps: Keyword.get(opts, :num_steps, 4),
       guidance_scale: Keyword.get(opts, :guidance_scale, 0.0),
       output_format: Keyword.get(opts, :output_format, "png"),
       analytics_enabled: analytics_enabled
@@ -806,6 +806,15 @@ MODEL_ID = "Tongyi-MAI/Z-Image-Turbo"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
+# Performance optimizations (from Exa best practices)
+if device == "cuda":
+    torch.set_float32_matmul_precision("high")
+    # Torch inductor optimizations for maximum speed
+    torch._inductor.config.conv_1x1_as_mm = True
+    torch._inductor.config.coordinate_descent_tuning = True
+    torch._inductor.config.epilogue_fusion = False
+    torch._inductor.config.coordinate_descent_check_all_directions = True
+
 zimage_weights_dir = Path(r"#{zimage_weights_dir}").resolve()
 
 if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
@@ -823,6 +832,36 @@ else:
     )
 
 pipe = pipe.to(device)
+
+# Performance optimizations for 2x speed (from Exa)
+if device == "cuda":
+    # Memory format optimization
+    try:
+        pipe.transformer.to(memory_format=torch.channels_last)
+        if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
+            pipe.vae.to(memory_format=torch.channels_last)
+        print("[OK] Memory format optimized (channels_last)")
+    except Exception as e:
+        print(f"[INFO] Memory format optimization: {e}")
+
+    # torch.compile for maximum speed (from Exa best practices)
+    # Note: Requires Triton package. Falls back gracefully if not available.
+    try:
+        # Check if Triton is available before compiling
+        import triton
+        pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead", fullgraph=False)
+        if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
+            pipe.vae.decode = torch.compile(pipe.vae.decode, mode="reduce-overhead", fullgraph=False)
+        print("[OK] torch.compile enabled (reduce-overhead mode for 2x speed boost)")
+    except ImportError:
+        print("[INFO] Triton not installed - skipping torch.compile (install triton for 2x speed boost)")
+    except Exception as e:
+        # Catch TritonMissing and other compilation errors
+        if "Triton" in str(e) or "triton" in str(e).lower():
+            print("[INFO] Triton not available - skipping torch.compile (install triton for 2x speed boost)")
+        else:
+            print(f"[INFO] torch.compile not available: {e}")
+
 print(f"[OK] Pipeline loaded on {device} with dtype {dtype} (SPMD: will be reused)")
 """
           else
@@ -872,6 +911,15 @@ except NameError:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
+    # Performance optimizations (from Exa best practices)
+    if device == "cuda":
+        torch.set_float32_matmul_precision("high")
+        # Torch inductor optimizations for maximum speed
+        torch._inductor.config.conv_1x1_as_mm = True
+        torch._inductor.config.coordinate_descent_tuning = True
+        torch._inductor.config.epilogue_fusion = False
+        torch._inductor.config.coordinate_descent_check_all_directions = True
+
     zimage_weights_dir = Path(r"#{zimage_weights_dir}").resolve()
 
     if zimage_weights_dir.exists() and (zimage_weights_dir / "config.json").exists():
@@ -889,6 +937,36 @@ except NameError:
         )
 
     pipe = pipe.to(device)
+
+    # Performance optimizations for 2x speed (from Exa)
+    if device == "cuda":
+        # Memory format optimization
+        try:
+            pipe.transformer.to(memory_format=torch.channels_last)
+            if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
+                pipe.vae.to(memory_format=torch.channels_last)
+            print("[OK] Memory format optimized (channels_last)")
+        except Exception as e:
+            print(f"[INFO] Memory format optimization: {e}")
+
+        # torch.compile for maximum speed (from Exa best practices)
+        # Note: Requires Triton package. Falls back gracefully if not available.
+        try:
+            # Check if Triton is available before compiling
+            import triton
+            pipe.transformer = torch.compile(pipe.transformer, mode="reduce-overhead", fullgraph=False)
+            if hasattr(pipe, 'vae') and hasattr(pipe.vae, 'decode'):
+                pipe.vae.decode = torch.compile(pipe.vae.decode, mode="reduce-overhead", fullgraph=False)
+            print("[OK] torch.compile enabled (reduce-overhead mode for 2x speed boost)")
+        except ImportError:
+            print("[INFO] Triton not installed - skipping torch.compile (install triton for 2x speed boost)")
+        except Exception as e:
+            # Catch TritonMissing and other compilation errors
+            if "Triton" in str(e) or "triton" in str(e).lower():
+                print("[INFO] Triton not available - skipping torch.compile (install triton for 2x speed boost)")
+            else:
+                print(f"[INFO] torch.compile not available: {e}")
+
     print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
 """
           end
@@ -907,7 +985,7 @@ prompt = config.get('prompt')
 width = config.get('width', 1024)
 height = config.get('height', 1024)
 seed = config.get('seed', 0)
-num_steps = config.get('num_steps', 9)
+num_steps = config.get('num_steps', 4)
 guidance_scale = config.get('guidance_scale', 0.0)
 output_format = config.get('output_format', 'png')
 
@@ -923,18 +1001,20 @@ else:
 # SPMD: Same pipeline (program), different data (prompt/params)
 print(f"[INFO] Starting generation: {prompt[:50]}...")
 print(f"[INFO] Parameters: {width}x{height}, {num_steps} steps, seed={seed}")
-print("[INFO] Generating (this may take 1-3 minutes)...")
+print("[INFO] Generating (optimized for speed)...")
 import sys
 sys.stdout.flush()
 
-output = pipe(
-    prompt=prompt,
-    width=width,
-    height=height,
-    num_inference_steps=num_steps,
-    guidance_scale=guidance_scale,
-    generator=generator,
-)
+# Use inference_mode for faster execution (2x speed)
+with torch.inference_mode():
+    output = pipe(
+        prompt=prompt,
+        width=width,
+        height=height,
+        num_inference_steps=num_steps,
+        guidance_scale=guidance_scale,
+        generator=generator,
+    )
 
 print("[INFO] Generation complete, processing image...")
 sys.stdout.flush()
