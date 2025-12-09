@@ -653,7 +653,7 @@ else:
     print(f"\n[OK] Response saved to: {output_path_default}")
 
 print("\n=== Complete ===")
-""", %{"config_file_normalized" => config_file_normalized})
+""", %{})
 rescue
   e ->
     # Clean up temp file on error

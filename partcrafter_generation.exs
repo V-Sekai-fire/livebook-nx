@@ -65,10 +65,11 @@ dependencies = [
   "torch",
   "torchvision",
   # torch-cluster: platform-specific wheel URLs using environment markers
-  # Windows: win_amd64 wheel
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
-  # Linux: linux_x86_64 wheel
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.7.0%2Bcu118/torch_cluster-1.6.3%2Bpt27cu118-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+  # Match torch 2.4.x version (pytorch-cu118 index installs 2.4.1)
+  # Windows: win_amd64 wheel for torch 2.4.0+cu118
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.4.0%2Bcu118/torch_cluster-1.6.3%2Bpt24cu118-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
+  # Linux: linux_x86_64 wheel for torch 2.4.0+cu118
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.4.0%2Bcu118/torch_cluster-1.6.3%2Bpt24cu118-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
 ]
 
 [tool.uv.sources]
@@ -590,7 +591,7 @@ print(f"  - {export_dir}/object.{output_format} (Merged mesh)")
 for i in range(len(outputs)):
     part_num = str(i).zfill(2)
     print(f"  - {export_dir}/part_{part_num}.{output_format} (Part {i})")
-""", %{"config_file_normalized" => config_file_normalized})
+""", %{})
 rescue
   e ->
     # Clean up temp file on error
