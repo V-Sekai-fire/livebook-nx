@@ -4,9 +4,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
 #
 # Qwen3-VL Vision-Language Inference Script
-# Generate text responses from images using Huihui-Qwen3-VL-4B-Thinking-abliterated
-# Model: Huihui-Qwen3-VL-4B-Thinking-abliterated (uncensored version)
-# Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated
+# Generate text responses from images using Huihui-Qwen3-VL-4B-Instruct-abliterated
+# Model: Huihui-Qwen3-VL-4B-Instruct-abliterated (uncensored version)
+# Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated
 #
 # Usage:
 #   elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
@@ -61,9 +61,9 @@ defmodule ArgsParser do
   def show_help do
     IO.puts("""
     Qwen3-VL Vision-Language Inference Script
-    Generate text responses from images using Huihui-Qwen3-VL-4B-Thinking-abliterated
-    Model: Huihui-Qwen3-VL-4B-Thinking-abliterated (uncensored version)
-    Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated
+    Generate text responses from images using Huihui-Qwen3-VL-4B-Instruct-abliterated
+    Model: Huihui-Qwen3-VL-4B-Instruct-abliterated (uncensored version)
+    Repository: https://huggingface.co/huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated
 
     Usage:
       elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
@@ -211,7 +211,7 @@ Use 4-bit Quantization: #{config.use_4bit}
 # Add weights directory to config for Python
 base_dir = Path.expand(".")
 config_with_paths = Map.merge(config, %{
-  model_weights_dir: Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Thinking-abliterated"])
+  model_weights_dir: Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Instruct-abliterated"])
 })
 
 # Save config to JSON for Python to read
@@ -380,12 +380,12 @@ IO.puts("\n=== Step 2: Download Pretrained Weights ===")
 IO.puts("Downloading Qwen3-VL models from Hugging Face...")
 
 base_dir = Path.expand(".")
-model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Thinking-abliterated"])
+model_weights_dir = Path.join([base_dir, "pretrained_weights", "Huihui-Qwen3-VL-4B-Instruct-abliterated"])
 
 IO.puts("Using weights directory: #{model_weights_dir}")
 
 # Qwen3-VL repository on Hugging Face
-repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
+repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated"
 
 # Download model weights
 case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
@@ -467,7 +467,7 @@ model_weights_dir = config.get('model_weights_dir')
 # Fallback to default path if not in config
 if not model_weights_dir:
     base_dir = Path.cwd()
-    model_weights_dir = str(base_dir / "pretrained_weights" / "Huihui-Qwen3-VL-4B-Thinking-abliterated")
+    model_weights_dir = str(base_dir / "pretrained_weights" / "Huihui-Qwen3-VL-4B-Instruct-abliterated")
 
 # Ensure path is string
 model_weights_dir = str(Path(model_weights_dir).resolve())
@@ -482,7 +482,7 @@ output_dir.mkdir(exist_ok=True)
 print("\n=== Step 3: Initialize Model ===")
 print("Loading Qwen3-VL model...")
 
-MODEL_ID = "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
+MODEL_ID = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated"
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
