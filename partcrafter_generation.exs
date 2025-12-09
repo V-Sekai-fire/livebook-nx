@@ -26,8 +26,10 @@ Mix.install([
   {:req, "~> 0.5.0"}
 ])
 
-# Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
+
+# Load shared utilities
+Code.eval_file("shared_utils.exs")
 
 # Initialize Python environment with required dependencies
 # PartCrafter uses Hugging Face models and diffusers
@@ -228,158 +230,7 @@ config_with_paths = Map.merge(config, %{
 })
 
 # Save config to JSON for Python to read (use temp file to avoid conflicts)
-config_json = Jason.encode!(config_with_paths)
-# Use cross-platform temp directory
-tmp_dir = System.tmp_dir!()
-File.mkdir_p!(tmp_dir)
-config_file = Path.join(tmp_dir, "partcrafter_config_#{System.system_time(:millisecond)}.json")
-File.write!(config_file, config_json)
-config_file_normalized = String.replace(config_file, "\\", "/")
-
-# Elixir-native Hugging Face download function
-defmodule HuggingFaceDownloader do
-  @base_url "https://huggingface.co"
-  @api_base "https://huggingface.co/api"
-
-  def download_repo(repo_id, local_dir, repo_name \\ "model") do
-    IO.puts("Downloading #{repo_name}...")
-
-    # Create directory
-    File.mkdir_p!(local_dir)
-
-    # Get file tree from Hugging Face API
-    case get_file_tree(repo_id) do
-      {:ok, files} ->
-        # files is a map, convert to list for counting and iteration
-        files_list = Map.to_list(files)
-        total = length(files_list)
-        IO.puts("Found #{total} files to download")
-
-        files_list
-        |> Enum.with_index(1)
-        |> Enum.each(fn {{path, info}, index} ->
-          download_file(repo_id, path, local_dir, info, index, total)
-        end)
-
-        IO.puts("\n[OK] #{repo_name} downloaded")
-        {:ok, local_dir}
-
-      {:error, reason} ->
-        IO.puts("[ERROR] #{repo_name} download failed: #{inspect(reason)}")
-        {:error, reason}
-    end
-  end
-
-  defp get_file_tree(repo_id, revision \\ "main") do
-    # Recursively get all files
-    case get_files_recursive(repo_id, revision, "") do
-      {:ok, files} ->
-        file_map =
-          files
-          |> Enum.map(fn file ->
-            {file["path"], file}
-          end)
-          |> Map.new()
-
-        {:ok, file_map}
-
-      error ->
-        error
-    end
-  end
-
-  defp get_files_recursive(repo_id, revision, path) do
-    # Build URL - handle empty path correctly
-    url = if path == "" do
-      "#{@api_base}/models/#{repo_id}/tree/#{revision}"
-    else
-      "#{@api_base}/models/#{repo_id}/tree/#{revision}/#{path}"
-    end
-
-    try do
-      response = Req.get(url)
-
-      # Req.get returns response directly or wrapped in tuple
-      items = case response do
-        {:ok, %{status: 200, body: body}} when is_list(body) -> body
-        %{status: 200, body: body} when is_list(body) -> body
-        {:ok, %{status: status}} ->
-          raise "API returned status #{status}"
-        %{status: status} ->
-          raise "API returned status #{status}"
-        {:error, reason} ->
-          raise inspect(reason)
-        other ->
-          raise "Unexpected response: #{inspect(other)}"
-      end
-
-      files = Enum.filter(items, &(&1["type"] == "file"))
-      dirs = Enum.filter(items, &(&1["type"] == "directory"))
-
-      # Recursively get files from subdirectories
-      subdir_files =
-        dirs
-        |> Enum.flat_map(fn dir ->
-          case get_files_recursive(repo_id, revision, dir["path"]) do
-            {:ok, subfiles} -> subfiles
-            _ -> []
-          end
-        end)
-
-      {:ok, files ++ subdir_files}
-    rescue
-      e -> {:error, Exception.message(e)}
-    end
-  end
-
-  defp download_file(repo_id, path, local_dir, info, current, total) do
-    # Construct download URL (using resolve endpoint for LFS files)
-    url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
-    local_path = Path.join(local_dir, path)
-
-    # Get file size for progress display
-    file_size = info["size"] || 0
-    size_mb = if file_size > 0, do: Float.round(file_size / 1024 / 1024, 1), else: 0
-
-    # Show current file being downloaded
-    filename = Path.basename(path)
-    IO.write("\r  [#{current}/#{total}] Downloading: #{filename} (#{size_mb} MB)")
-
-    # Skip if file already exists
-    if File.exists?(local_path) do
-      IO.write("\r  [#{current}/#{total}] Skipped (exists): #{filename}")
-    else
-      # Create parent directories
-      local_path
-      |> Path.dirname()
-      |> File.mkdir_p!()
-
-      # Download file with streaming, suppress debug logs
-      result = Req.get(url,
-        into: File.stream!(local_path, [], 65536),
-        retry: :transient,
-        max_redirects: 10
-      )
-
-      case result do
-        {:ok, %{status: 200}} ->
-          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-
-        %{status: 200} ->
-          IO.write("\r  [#{current}/#{total}] ✓ #{filename}")
-
-        {:ok, %{status: status}} ->
-          IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-
-        %{status: status} ->
-          IO.puts("\n[WARN] Failed to download #{path}: status #{status}")
-
-        {:error, reason} ->
-          IO.puts("\n[WARN] Failed to download #{path}: #{inspect(reason)}")
-      end
-    end
-  end
-end
+{config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "partcrafter_config")
 
 # Download models using Elixir-native approach
 IO.puts("\n=== Step 2: Download Pretrained Weights ===")
@@ -426,11 +277,7 @@ else:
     )
 
 # Get configuration from JSON file
-""" <> """
-config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
-with open(config_file_path, 'r', encoding='utf-8') as f:
-    config = json.load(f)
-""" <> ~S"""
+""" <> ConfigFile.python_path_string(config_file_normalized) <> ~S"""
 
 image_path = config.get('image_path')
 output_format = config.get('output_format', 'glb')
@@ -596,15 +443,11 @@ for i in range(len(outputs)):
 rescue
   e ->
     # Clean up temp file on error
-    if File.exists?(config_file) do
-      File.rm(config_file)
-    end
+    ConfigFile.cleanup(config_file)
     reraise e, __STACKTRACE__
 after
   # Clean up temp file
-  if File.exists?(config_file) do
-    File.rm(config_file)
-  end
+  ConfigFile.cleanup(config_file)
 end
 
 IO.puts("\n=== Complete ===")

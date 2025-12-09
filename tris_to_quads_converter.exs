@@ -25,6 +25,11 @@ Mix.install([
   {:jason, "~> 1.4.4"}
 ])
 
+Logger.configure(level: :info)
+
+# Load shared utilities
+Code.eval_file("shared_utils.exs")
+
 # Initialize Python environment with required dependencies
 Pythonx.uv_init("""
 [project]

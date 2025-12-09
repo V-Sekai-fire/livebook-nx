@@ -31,8 +31,10 @@ Mix.install([
   {:req, "~> 0.5.0"}
 ])
 
-# Suppress debug logs from Req to avoid showing long URLs
 Logger.configure(level: :info)
+
+# Load shared utilities
+Code.eval_file("shared_utils.exs")
 
 # Initialize Python environment with required dependencies
 # KVoiceWalk uses Kokoro, Resemblyzer, and various audio processing libraries

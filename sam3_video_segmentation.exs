@@ -22,6 +22,11 @@ Mix.install([
   {:jason, "~> 1.4.4"}
 ])
 
+Logger.configure(level: :info)
+
+# Load shared utilities
+Code.eval_file("shared_utils.exs")
+
 # Initialize Python environment with required dependencies
 # Note: This installs PyTorch with CUDA 11.8 support by default
 # To use CPU-only version, remove the [[tool.uv.index]] section and change torch/torchvision to regular dependencies

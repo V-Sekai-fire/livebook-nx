@@ -26,6 +26,11 @@ Mix.install([
   {:jason, "~> 1.4.4"}
 ])
 
+Logger.configure(level: :info)
+
+# Load shared utilities
+Code.eval_file("shared_utils.exs")
+
 # Initialize Python environment with required dependencies
 # UniRig uses PyTorch Lightning and various 3D processing libraries
 # All dependencies managed by uv (no pip)
