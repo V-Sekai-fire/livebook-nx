@@ -202,7 +202,7 @@ config_json = Jason.encode!(config)
 File.write!("config.json", config_json)
 
 # Import libraries and define constants using Pythonx
-{_, python_globals} = Pythonx.eval("""
+{_, python_globals} = Pythonx.eval(~S"""
 import os
 import cv2
 import time
@@ -302,7 +302,7 @@ IO.puts("\n=== Step 1: Download and Load SAM 3 Model ===")
 # Setup device, download weights, and load model
 python_globals = Process.get(:python_globals) || %{}
 
-{_, python_globals} = Pythonx.eval("""
+{_, python_globals} = Pythonx.eval(~S"""
 # Check if PyTorch is installed with CUDA support
 # First check if torch is available
 try:
@@ -333,28 +333,28 @@ else:
     device = "cpu"
     dtype = torch.float16
     print(f"Using CPU: {device}, dtype: {dtype}")
-    print("\\n" + "="*60)
+    print("\n" + "="*60)
     print("WARNING: CUDA is not available! Using CPU instead.")
     print("="*60)
-    print("\\nPyTorch was installed without CUDA support.")
+    print("\nPyTorch was installed without CUDA support.")
     print("To enable GPU acceleration, you need to reinstall PyTorch with CUDA:")
-    print("\\n1. First, uninstall the current CPU-only version:")
+    print("\n1. First, uninstall the current CPU-only version:")
     print("   pip uninstall torch torchvision -y")
-    print("\\n2. Then install PyTorch with CUDA 11.8 support:")
+    print("\n2. Then install PyTorch with CUDA 11.8 support:")
     print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu118")
-    print("\\n   Or for CUDA 12.1:")
+    print("\n   Or for CUDA 12.1:")
     print("   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121")
-    print("\\n3. Verify CUDA is available:")
+    print("\n3. Verify CUDA is available:")
     print("   python -c 'import torch; print(torch.cuda.is_available())'")
-    print("\\nNote: Make sure you have NVIDIA GPU drivers and CUDA toolkit installed.")
-    print("="*60 + "\\n")
+    print("\nNote: Make sure you have NVIDIA GPU drivers and CUDA toolkit installed.")
+    print("="*60 + "\n")
 
 # Download weights if they don't exist
 if not os.path.exists(MODEL_PATH):
     download_weights(MODEL_URL, MODEL_PATH)
 
 # Load model
-print(f"\\nLoading SAM 3 model from {MODEL_PATH}...")
+print(f"\nLoading SAM 3 model from {MODEL_PATH}...")
 
 model = Sam3VideoModel.from_pretrained(MODEL_PATH).to(device, dtype=dtype).eval()
 processor = Sam3VideoProcessor.from_pretrained(MODEL_PATH)
@@ -368,7 +368,7 @@ Process.put(:python_globals, python_globals)
 IO.puts("\n=== Step 2: Process Video ===")
 
 # Get configuration from JSON file and process video
-{_, python_globals} = Pythonx.eval("""
+{_, python_globals} = Pythonx.eval(~S"""
 # Get configuration from JSON file (created by Elixir)
 import json
 import os
@@ -450,7 +450,7 @@ Process.put(:python_globals, python_globals)
 IO.puts("\n=== Step 3: Generate Output Video ===")
 
 # Generate output video
-{_, python_globals} = Pythonx.eval("""
+{_, python_globals} = Pythonx.eval(~S"""
 # Get configuration from JSON file
 import json
 
@@ -535,7 +535,7 @@ print(f"✓ Video saved: {output_video_path}")
 # Generate mask video if requested
 if mask_video:
     mask_video_path = output_dir / "output_mask.mp4"
-    print(f"\\nGenerating mask video: {mask_video_path}...")
+    print(f"\nGenerating mask video: {mask_video_path}...")
 
     mask_writer = imageio.get_writer(str(mask_video_path), fps=original_fps, codec='libx264', quality=None, pixelformat='yuv420p')
 
@@ -581,7 +581,7 @@ Process.put(:python_globals, python_globals)
 if config.return_zip do
   IO.puts("\n=== Step 4: Save Individual Frame Masks ===")
 
-  {_, python_globals} = Pythonx.eval("""
+  {_, python_globals} = Pythonx.eval(~S"""
   # Get configuration from JSON file
   import json
 
@@ -629,7 +629,7 @@ end
 IO.puts("\n=== Step 5: Create Output Files ===")
 
 # Create ZIP if return_zip is True
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 # Create ZIP if return_zip is True, otherwise just provide video download
 import json
 
@@ -668,7 +668,7 @@ else:
         print(f"✓ Mask video saved: {mask_video_path}")
         print(f"📥 Mask video location: {mask_video_path.absolute()}")
 
-print("\\n✓ All done!")
+print("\n✓ All done!")
 """, Process.get(:python_globals) || %{})
 
 IO.puts("\n=== Complete ===")

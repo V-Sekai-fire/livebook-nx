@@ -396,14 +396,14 @@ case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL")
 end
 
 # Import libraries and process using Qwen3-VL
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
 from pathlib import Path
 
 # Verify PyTorch installation before importing transformers
-print("\\nVerifying PyTorch installation...")
+print("\nVerifying PyTorch installation...")
 try:
     import torch
     print(f"PyTorch version: {torch.__version__}")
@@ -414,12 +414,12 @@ try:
     from torch import serialization
     print("[OK] PyTorch installation verified")
 except ImportError as e:
-    print(f"\\n[ERROR] Failed to import PyTorch: {e}")
+    print(f"\n[ERROR] Failed to import PyTorch: {e}")
     print("This may be due to missing DLLs or an incomplete installation.")
     print("Please ensure Visual C++ Redistributables are installed.")
     raise
 except Exception as e:
-    print(f"\\n[ERROR] PyTorch import error: {e}")
+    print(f"\n[ERROR] PyTorch import error: {e}")
     print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
     raise
 
@@ -479,7 +479,7 @@ image_path = str(Path(image_path).resolve())
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 
-print("\\n=== Step 3: Initialize Model ===")
+print("\n=== Step 3: Initialize Model ===")
 print("Loading Qwen3-VL model...")
 
 MODEL_ID = "huihui-ai/Huihui-Qwen3-VL-4B-Thinking-abliterated"
@@ -542,7 +542,7 @@ except Exception as e:
     print(f"[ERROR] Error loading model: {e}")
     import traceback
     traceback.print_exc()
-    print("\\nMake sure you have")
+    print("\nMake sure you have")
     print("  1. All dependencies installed via uv")
     print("  2. Sufficient GPU memory:")
     print("     - 8GB+ VRAM for 4B model at full precision")
@@ -550,7 +550,7 @@ except Exception as e:
     print("  3. Flash Attention 2 installed if using --use-flash-attention")
     raise
 
-print("\\n=== Step 4: Process Image and Generate Response ===")
+print("\n=== Step 4: Process Image and Generate Response ===")
 print(f"Loading image: {image_path}")
 
 # Load and verify image
@@ -616,9 +616,9 @@ output_text = processor.batch_decode(
 response = output_text[0] if output_text else ""
 
 print("[OK] Response generated")
-print("\\n=== Response ===")
+print("\n=== Response ===")
 print(response)
-print("\\n=== End Response ===")
+print("\n=== End Response ===")
 
 # Save output if specified
 if output_path:
@@ -628,7 +628,7 @@ if output_path:
     with open(output_path_resolved, 'w', encoding='utf-8') as f:
         f.write(response)
 
-    print(f"\\n[OK] Response saved to: {output_path_resolved}")
+    print(f"\n[OK] Response saved to: {output_path_resolved}")
 else:
     # Save to default output directory with timestamp
     import time
@@ -642,9 +642,9 @@ else:
     with open(output_path_default, 'w', encoding='utf-8') as f:
         f.write(response)
 
-    print(f"\\n[OK] Response saved to: {output_path_default}")
+    print(f"\n[OK] Response saved to: {output_path_default}")
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 """, %{})
 
 IO.puts("\n=== Complete ===")

@@ -143,6 +143,19 @@ end
 # Get configuration
 config = ArgsParser.parse(System.argv())
 
+# Convert input path to absolute path to avoid path resolution issues
+# Normalize to forward slashes for cross-platform compatibility with Blender
+absolute_input_path = Path.expand(config.input_path) |> String.replace("\\", "/")
+config = Map.put(config, :input_path, absolute_input_path)
+
+# Normalize output path if provided
+config = if config.output_path do
+  normalized_output = String.replace(config.output_path, "\\", "/")
+  Map.put(config, :output_path, normalized_output)
+else
+  config
+end
+
 output_display = if config.output_path, do: config.output_path, else: "output/<timestamp>/<filename>_quads.usdc"
 IO.puts("""
 === Tris-to-Quads Converter ===
@@ -152,10 +165,12 @@ Output: #{output_display}
 
 # Convert JSON config to string for Python
 config_json = Jason.encode!(config)
-File.write!("config.json", config_json)
+config_file = "config.json"
+File.write!(config_file, config_json)
 
-# Run conversion
-{_, _python_globals} = Pythonx.eval("""
+# Run conversion with proper cleanup
+try do
+  {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -168,8 +183,11 @@ from pulp import PULP_CBC_CMD, LpMaximize, LpProblem, LpVariable, lpSum, value
 with open("config.json", 'r', encoding='utf-8') as f:
     config = json.load(f)
 
-input_path = config['input_path']
+# Normalize paths to use forward slashes for cross-platform compatibility
+input_path = str(Path(config['input_path'])).replace("\\", "/")
 output_path = config.get('output_path')
+if output_path:
+    output_path = str(Path(output_path)).replace("\\", "/")
 use_timestamped_folder = config.get('use_timestamped_folder', True)
 
 # Create output directory structure
@@ -186,16 +204,17 @@ if use_timestamped_folder:
     # Generate output filename from input
     input_stem = Path(input_path).stem
     output_filename = f"{input_stem}_quads.usdc"
-    output_path = str(export_dir / output_filename)
+    output_path = str(export_dir / output_filename).replace("\\", "/")
     print(f"Using timestamped output folder: {export_dir.name}/")
 else:
     # Use provided output path, ensure directory exists
     export_dir = Path(output_path).parent
     export_dir.mkdir(exist_ok=True, parents=True)
+    output_path = str(Path(output_path)).replace("\\", "/")
 
 # Detect input format
 input_ext = Path(input_path).suffix.lower()
-print(f"\\n=== Loading {input_ext.upper()}: {input_path} ===")
+print(f"\n=== Loading {input_ext.upper()}: {input_path} ===")
 
 # Clear Blender scene
 bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -245,7 +264,7 @@ def is_valid_edge_for_quad_conversion(edge):
 def convert_tris_to_quads(obj):
     '''Convert triangles to quads using Optimized-Tris-to-Quads-Converter algorithm
     Returns: number of edges converted (0 if none)'''
-    print(f"\\nProcessing mesh: {obj.name}")
+    print(f"\nProcessing mesh: {obj.name}")
 
     # Ensure we're in object mode
     bpy.context.view_layer.objects.active = obj
@@ -341,7 +360,7 @@ for obj in mesh_objects:
         traceback.print_exc()
 
 if total_converted == 0:
-    print("\\n✗ Error: No meshes were processed")
+    print("\n✗ Error: No meshes were processed")
     raise ValueError("No meshes processed")
 
 # Force USDC output format (only format supported)
@@ -349,20 +368,20 @@ output_ext = Path(output_path).suffix.lower()
 if output_ext != '.usdc':
     # Change output to binary USDC format
     base = Path(output_path).stem
-    output_path = str(Path(output_path).parent / f"{base}.usdc")
+    output_path = str(Path(output_path).parent / f"{base}.usdc").replace("\\", "/")
     if quads_were_converted:
-        print(f"\\n⚠ Quads were converted - switching output to binary USDC format: {output_path}")
+        print(f"\n⚠ Quads were converted - switching output to binary USDC format: {output_path}")
     else:
-        print(f"\\n⚠ Output format changed to binary USDC: {output_path}")
+        print(f"\n⚠ Output format changed to binary USDC: {output_path}")
 
 # Validate output format - only USDC allowed
 output_ext = Path(output_path).suffix.lower()
 if output_ext != '.usdc':
-    print(f"\\n✗ Error: Only USDC output format is supported, got: {output_ext}")
+    print(f"\n✗ Error: Only USDC output format is supported, got: {output_ext}")
     print("  Please use .usdc extension for output file")
     raise ValueError(f"Only USDC output format supported, got: {output_ext}")
 
-print(f"\\n=== Exporting USDC: {output_path} ===")
+print(f"\n=== Exporting USDC: {output_path} ===")
 
 # Ensure output directory exists
 output_dir = os.path.dirname(output_path)
@@ -393,7 +412,7 @@ except Exception as e:
     traceback.print_exc()
     raise
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 if quads_were_converted:
     print(f"Converted {total_edges_converted} edge pairs to quads in {total_converted} mesh object(s)")
     print(f"Saved to: {output_path} (binary USDC format preserves quads and materials)")
@@ -403,9 +422,21 @@ else:
 
 if use_timestamped_folder:
     export_dir_name = Path(output_path).parent.name
-    print(f"\\nOutput files in {export_dir_name}/:")
+    print(f"\nOutput files in {export_dir_name}/:")
     print(f"  - {Path(output_path).name} (Converted model)")
 """, %{})
+rescue
+  e ->
+    IO.puts("\n✗ Error during conversion: #{inspect(e)}")
+    reraise e, __STACKTRACE__
+after
+  # Clean up temp file
+  case File.rm(config_file) do
+    :ok -> :ok
+    {:error, :enoent} -> :ok  # File doesn't exist, that's fine
+    {:error, reason} -> IO.puts("Warning: Could not delete temp file: #{inspect(reason)}")
+  end
+end
 
 IO.puts("\n=== Complete ===")
 IO.puts("Tris-to-quads conversion completed successfully!")

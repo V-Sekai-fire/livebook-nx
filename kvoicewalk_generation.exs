@@ -285,7 +285,7 @@ else
 end
 
 # Import libraries and run KVoiceWalk directly (no subprocess)
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -345,7 +345,7 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
     # Process a single audio/text pair through KVoiceWalk
     # Verify PyTorch can be imported before proceeding (only once)
     if not hasattr(process_single_pair, '_pytorch_verified'):
-        print("\\nVerifying PyTorch installation...")
+        print("\nVerifying PyTorch installation...")
         try:
             import torch
             print(f"PyTorch version: {torch.__version__}")
@@ -354,12 +354,12 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
                 print(f"CUDA device: {torch.cuda.get_device_name(0)}")
             process_single_pair._pytorch_verified = True
         except ImportError as e:
-            print(f"\\n[ERROR] Failed to import PyTorch: {e}")
+            print(f"\n[ERROR] Failed to import PyTorch: {e}")
             print("This may be due to missing DLLs or an incomplete installation.")
             print("Please ensure Visual C++ Redistributables are installed.")
             raise
         except Exception as e:
-            print(f"\\n[ERROR] PyTorch import error: {e}")
+            print(f"\n[ERROR] PyTorch import error: {e}")
             print("This may be due to missing DLLs. Try reinstalling PyTorch or installing Visual C++ Redistributables.")
             raise
 
@@ -375,7 +375,7 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
 
     # Handle transcription if requested
     if transcribe_start:
-        print(f"\\nTranscribing target audio...")
+        print(f"\nTranscribing target audio...")
         transcriber = Transcriber()
         target_text = transcriber.transcribe(audio_path=target_audio)
         print(f"Transcribed text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
@@ -400,7 +400,7 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
         other_text = "If you mix vinegar, baking soda, and a bit of dish soap in a tall cylinder, the resulting eruption is both a visual and tactile delight, often used in classrooms to simulate volcanic activity on a miniature scale."
 
     # Initialize and run KVoiceWalk
-    print(f"\\nInitializing KVoiceWalk...")
+    print(f"\nInitializing KVoiceWalk...")
     try:
         kvoicewalk = KVoiceWalk(
             target_audio=target_audio,
@@ -413,10 +413,10 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
             output_name=output_name
         )
 
-        print(f"\\nStarting random walk with {step_limit} steps...")
+        print(f"\nStarting random walk with {step_limit} steps...")
         kvoicewalk.random_walk(step_limit)
 
-        print("\\n[OK] KVoiceWalk completed successfully")
+        print("\n[OK] KVoiceWalk completed successfully")
 
         # Find the generated voice file
         from utilities.path_router import OUT_DIR
@@ -445,28 +445,28 @@ def process_single_pair(target_audio, target_text, other_text, starting_voice, v
 
                     pt_files.sort(key=get_step_number, reverse=True)
                     generated_voice = pt_files[0]
-                    print(f"\\nFound generated voice tensor: {generated_voice.name}")
+                    print(f"\nFound generated voice tensor: {generated_voice.name}")
                 else:
-                    print(f"\\n[WARN] No .pt files found in {latest_result_dir}")
+                    print(f"\n[WARN] No .pt files found in {latest_result_dir}")
             else:
-                print(f"\\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
+                print(f"\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
         else:
-            print(f"\\n[WARN] Output directory not found: {out_dir}")
+            print(f"\n[WARN] Output directory not found: {out_dir}")
 
         if generated_voice:
             output_voice = export_dir / generated_voice.name
             shutil.copy2(generated_voice, output_voice)
-            print(f"\\n[OK] Generated voice tensor saved to: {output_voice}")
-            print(f"\\nYou can use this voice tensor with kokoro_tts_generation.exs:")
+            print(f"\n[OK] Generated voice tensor saved to: {output_voice}")
+            print(f"\nYou can use this voice tensor with kokoro_tts_generation.exs:")
             print(f"  elixir kokoro_tts_generation.exs \"<text>\" --voice-file {output_voice}")
             return output_voice
         else:
-            print(f"\\n[WARN] Could not find generated voice tensor")
+            print(f"\n[WARN] Could not find generated voice tensor")
             print(f"  Check the KVoiceWalk output directory manually: {out_dir}")
             return None
 
     except Exception as e:
-        print(f"\\n[ERROR] Error running KVoiceWalk: {e}")
+        print(f"\n[ERROR] Error running KVoiceWalk: {e}")
         import traceback
         traceback.print_exc()
         raise
@@ -479,7 +479,7 @@ if target_folder:
         # Make it relative to workspace_root
         target_folder = workspace_root / target_folder
     target_folder = target_folder.resolve()
-    print(f"\\n=== Step 2: Processing Folder Mode ===")
+    print(f"\n=== Step 2: Processing Folder Mode ===")
     print(f"Target Folder: {target_folder}")
     print(f"Output Directory: {export_dir}")
 
@@ -495,15 +495,15 @@ if target_folder:
             if text_file.exists():
                 audio_files.append((audio_file, text_file))
 
-    print(f"\\nFound {len(audio_files)} audio/text pairs to combine")
+    print(f"\nFound {len(audio_files)} audio/text pairs to combine")
 
     if len(audio_files) == 0:
-        print(f"\\n[ERROR] No audio/text pairs found in {target_folder}")
+        print(f"\n[ERROR] No audio/text pairs found in {target_folder}")
         print("Expected: audio files (.mp3, .wav, etc.) with corresponding .txt files")
         raise ValueError("No audio/text pairs found")
 
     # Combine all audio/text pairs from the same speaker
-    print(f"\\n=== Combining {len(audio_files)} audio/text pairs ===")
+    print(f"\n=== Combining {len(audio_files)} audio/text pairs ===")
 
     # Import audio processing libraries
     import soundfile as sf
@@ -531,7 +531,7 @@ if target_folder:
         combined_text_parts.append(text_content)
 
     # Concatenate all audio segments
-    print(f"\\nConcatenating {len(combined_audio_segments)} audio segments...")
+    print(f"\nConcatenating {len(combined_audio_segments)} audio segments...")
     combined_audio = np.concatenate(combined_audio_segments)
     total_duration = len(combined_audio) / sample_rate
     print(f"Combined audio duration: {total_duration:.2f} seconds")
@@ -545,10 +545,10 @@ if target_folder:
     import tempfile
     temp_audio_file = Path(tempfile.gettempdir()) / f"combined_{target_folder.name}_{tag}.wav"
     sf.write(str(temp_audio_file), combined_audio, sample_rate, format='WAV')
-    print(f"\\nSaved combined audio to temporary file: {temp_audio_file.name}")
+    print(f"\nSaved combined audio to temporary file: {temp_audio_file.name}")
 
     # Process combined audio/text as single training run
-    print(f"\\n=== Processing Combined Audio/Text ===")
+    print(f"\n=== Processing Combined Audio/Text ===")
     print(f"Using combined audio from {len(audio_files)} clips")
     print(f"Total duration: {total_duration:.2f} seconds")
 
@@ -558,7 +558,7 @@ if target_folder:
             interpolate_start, transcribe_start, population_limit, step_limit,
             output_name, export_dir, kvoicewalk_path
         )
-        print(f"\\n=== Folder Processing Complete ===")
+        print(f"\n=== Folder Processing Complete ===")
         print(f"Successfully processed combined audio from {len(audio_files)} pairs")
         print(f"Output directory: {export_dir}")
 
@@ -568,7 +568,7 @@ if target_folder:
             print(f"Cleaned up temporary file: {temp_audio_file.name}")
 
     except Exception as e:
-        print(f"\\n[ERROR] Failed to process combined audio: {e}")
+        print(f"\n[ERROR] Failed to process combined audio: {e}")
         import traceback
         traceback.print_exc()
         # Clean up temporary file on error
@@ -578,14 +578,14 @@ if target_folder:
 
 else:
     # Single file mode
-    print(f"\\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
+    print(f"\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
     print(f"Target Audio: {target_audio}")
     if target_text:
         print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
     else:
         print(f"Target Text: (not provided)")
     print(f"Output Directory: {export_dir}")
-    print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
+    print(f"\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
 
     process_single_pair(
         Path(target_audio).resolve(), target_text, other_text, starting_voice, voice_folder,
@@ -633,29 +633,29 @@ else:
                 # Sort by step number and get the highest (most recent step)
                 pt_files.sort(key=get_step_number, reverse=True)
                 generated_voice = pt_files[0]
-                print(f"\\nFound generated voice tensor: {generated_voice.name}")
+                print(f"\nFound generated voice tensor: {generated_voice.name}")
             else:
-                print(f"\\n[WARN] No .pt files found in {latest_result_dir}")
+                print(f"\n[WARN] No .pt files found in {latest_result_dir}")
         else:
-            print(f"\\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
+            print(f"\n[WARN] No results directories found matching '{output_name}_*' in {out_dir}")
     else:
-        print(f"\\n[WARN] Output directory not found: {out_dir}")
+        print(f"\n[WARN] Output directory not found: {out_dir}")
 
     if generated_voice:
         # Copy to output directory
         output_voice = export_dir / generated_voice.name
         shutil.copy2(generated_voice, output_voice)
-        print(f"\\n[OK] Generated voice tensor saved to: {output_voice}")
-        print(f"\\nYou can use this voice tensor with kokoro_tts_generation.exs:")
+        print(f"\n[OK] Generated voice tensor saved to: {output_voice}")
+        print(f"\nYou can use this voice tensor with kokoro_tts_generation.exs:")
         print(f"  elixir kokoro_tts_generation.exs \"<text>\" --voice-file {output_voice}")
     else:
-        print(f"\\n[WARN] Could not find generated voice tensor")
+        print(f"\n[WARN] Could not find generated voice tensor")
         print(f"  Check the KVoiceWalk output directory manually: {out_dir}")
 
 # Restore original working directory
 os.chdir(original_cwd)
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 print(f"Voice cloning completed!")
 """, %{})
 

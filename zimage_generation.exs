@@ -720,7 +720,7 @@ defmodule ZImageGenerator.Impl do
             {"pipeline.load", "starting"}
           ])
 
-          load_code = """
+          load_code = ~S"""
 # Load pipeline
 import json
 import os
@@ -817,7 +817,7 @@ print(f"[OK] Pipeline loaded on {device} with dtype {dtype}")
 """
 
           # Generate with loaded pipeline
-          Pythonx.eval(load_code <> """
+          Pythonx.eval(load_code <> ~S"""
 # Process generation
 import json
 import time

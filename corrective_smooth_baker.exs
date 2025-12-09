@@ -252,7 +252,7 @@ config_json = Jason.encode!(config)
 File.write!("config.json", config_json)
 
 # Run corrective smooth baking
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -370,7 +370,7 @@ for mesh_obj in mesh_objects:
 bpy.ops.object.mode_set(mode='OBJECT')
 
 # Run the corrective smooth baker
-print("\\nStarting corrective smooth baking...")
+print("\nStarting corrective smooth baking...")
 print("This may take a long time. Press ESC in Blender to cancel if needed.")
 print("Progress will be shown in Blender's status bar.")
 
@@ -642,7 +642,7 @@ operator = BakingRunner(armature, mesh_objects)
 operator.save_current_poses()
 
 # Run baking stages
-print("\\nStage 0: Checking for Corrective Smooth modifiers...")
+print("\nStage 0: Checking for Corrective Smooth modifiers...")
 if not operator.optimize_stage_0(mesh_objects):
     raise ValueError("No corrective smooth modifier found. Please ensure the modifier was added.")
 
@@ -771,10 +771,10 @@ for mesh_idx in range(len(mesh_objects)):
         if operator._should_terminate:
             break
 
-print("\\nBaking completed successfully!")
+print("\nBaking completed successfully!")
 
 # Remove Corrective Smooth modifiers after baking
-print("\\nRemoving Corrective Smooth modifiers...")
+print("\nRemoving Corrective Smooth modifiers...")
 for mesh_obj in mesh_objects:
     for mod in list(mesh_obj.modifiers):
         if mod.type == 'CORRECTIVE_SMOOTH':
@@ -782,7 +782,7 @@ for mesh_obj in mesh_objects:
             print(f"  Removed modifier from {mesh_obj.name}")
 
 # Export result
-print(f"\\nExporting to: {output_path}")
+print(f"\nExporting to: {output_path}")
 os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
 
 if output_path.endswith('.usdc') or output_path.endswith('.usda') or output_path.endswith('.usd'):

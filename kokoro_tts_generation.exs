@@ -436,7 +436,7 @@ IO.puts("\n=== spaCy Model ===")
 IO.puts("spaCy model 'en_core_web_sm' will be installed automatically via uv dependencies")
 
 # Import libraries and process using Kokoro
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -554,7 +554,7 @@ lang_code = config.get('lang_code', 'a')
 voice = config.get('voice', 'af_heart')
 voice_file = config.get('voice_file')
 speed = config.get('speed', 1.0)
-split_pattern = config.get('split_pattern', '\\\\n+')
+split_pattern = config.get('split_pattern', '\\n+')
 output_format = config.get('output_format', 'wav')
 sample_rate = config.get('sample_rate', 24000)
 
@@ -573,7 +573,7 @@ kokoro_weights_dir = str(Path(kokoro_weights_dir).resolve())
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 
-print("\\n=== Step 3: Initialize Kokoro Pipeline ===")
+print("\n=== Step 3: Initialize Kokoro Pipeline ===")
 sys.stdout.flush()
 print(f"Loading Kokoro pipeline for language code: {lang_code}")
 sys.stdout.flush()
@@ -608,13 +608,13 @@ except Exception as e:
     print(f"[ERROR] Error initializing pipeline: {e}")
     import traceback
     traceback.print_exc()
-    print("\\nMake sure you have")
+    print("\nMake sure you have")
     print("  1. All dependencies installed via uv (including kokoro>=0.9.4)")
     print("  2. misaki[en] or appropriate language support installed")
     print("  3. espeak-ng installed (system dependency)")
     raise
 
-print("\\n=== Step 4: Load Voice ===")
+print("\n=== Step 4: Load Voice ===")
 sys.stdout.flush()
 
 # Load voice (either from file or use default)
@@ -635,7 +635,7 @@ else:
     print(f"Using default voice: {voice}")
     sys.stdout.flush()
 
-print("\\n=== Step 5: Generate Speech ===")
+print("\n=== Step 5: Generate Speech ===")
 print(f"Text: {text[:100]}{'...' if len(text) > 100 else ''}")
 print(f"Speed: {speed}x")
 print(f"Split pattern: {split_pattern}")
@@ -673,7 +673,7 @@ try:
     generator_items = list(generator)
 
     for i, (gs, ps, audio) in enumerate(generator_items):
-        print(f"\\nSegment {i+1}/{len(generator_items)}:")
+        print(f"\nSegment {i+1}/{len(generator_items)}:")
         print(f"  Graphemes: {gs[:100]}{'...' if len(gs) > 100 else ''}")
         print(f"  Phonemes: {ps[:100]}{'...' if len(ps) > 100 else ''}")
         print(f"  Audio length: {len(audio) / sample_rate:.2f}s")
@@ -683,7 +683,7 @@ try:
         all_graphemes.append(gs)
         all_phonemes.append(ps)
 
-    print(f"\\n[OK] Generated {len(all_audio_segments)} audio segment(s)")
+    print(f"\n[OK] Generated {len(all_audio_segments)} audio segment(s)")
     sys.stdout.flush()
 
 except Exception as e:
@@ -692,7 +692,7 @@ except Exception as e:
     traceback.print_exc()
     raise
 
-print("\\n=== Step 6: Save Audio ===")
+print("\n=== Step 6: Save Audio ===")
 
 # Create output directory with timestamp
 tag = time.strftime("%Y%m%d_%H_%M_%S")
@@ -727,16 +727,16 @@ if all_audio_segments:
             metadata_filename = f"kokoro_{tag}_segment_{i:02d}.txt"
             metadata_path = export_dir / metadata_filename
             with open(metadata_path, 'w', encoding='utf-8') as f:
-                f.write(f"Graphemes: {gs}\\n")
-                f.write(f"Phonemes: {ps}\\n")
+                f.write(f"Graphemes: {gs}\n")
+                f.write(f"Phonemes: {ps}\n")
             print(f"[OK] Saved metadata to {metadata_path}")
 else:
     print("[ERROR] No audio segments generated")
     raise ValueError("No audio segments generated")
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 print(f"Generated speech saved to: {output_path}")
-print(f"\\nOutput files")
+print(f"\nOutput files")
 print(f"  - {output_path} (Main audio file)")
 if len(all_audio_segments) > 1:
     print(f"  - {len(all_audio_segments)} segment files")

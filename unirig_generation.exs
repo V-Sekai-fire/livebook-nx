@@ -203,7 +203,7 @@ config_json = Jason.encode!(config)
 File.write!("config.json", config_json)
 
 # Import libraries and process using UniRig
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -245,8 +245,8 @@ class FilteredOutput:
 
         # Handle partial lines (text might not end with newline)
         self.buffer += text
-        if '\\n' in self.buffer:
-            lines = self.buffer.split('\\n')
+        if '\n' in self.buffer:
+            lines = self.buffer.split('\n')
             # Keep the last incomplete line in buffer
             self.buffer = lines[-1]
             complete_lines = lines[:-1]
@@ -265,7 +265,7 @@ class FilteredOutput:
 
             # Write filtered lines
             if filtered_lines:
-                self.original_stream.write('\\n'.join(filtered_lines) + '\\n')
+                self.original_stream.write('\n'.join(filtered_lines) + '\n')
 
     def flush(self):
         # Flush any remaining buffer content (if it doesn't match filter)
@@ -428,7 +428,7 @@ def run_unirig_inference(
                 files_to_extract.append((input_file, output_dir))
 
         if files_to_extract:
-            print(f"\\n=== Extracting {len(files_to_extract)} mesh file(s) ===")
+            print(f"\n=== Extracting {len(files_to_extract)} mesh file(s) ===")
             for input_file, output_dir in files_to_extract:
                 print(f"  Input: {input_file}")
                 print(f"  Output dir: {output_dir}")
@@ -464,7 +464,7 @@ def run_unirig_inference(
                 traceback.print_exc()
                 raise
         else:
-            print("\\n=== No extraction needed (raw_data.npz files already exist) ===")
+            print("\n=== No extraction needed (raw_data.npz files already exist) ===")
             # Verify files exist
             for input_file, output_dir in files:
                 raw_data_npz = os.path.join(output_dir, data_name_actual)
@@ -625,7 +625,7 @@ export_dir.mkdir(exist_ok=True, parents=True)
 intermediate_dir = export_dir / "intermediate"
 intermediate_dir.mkdir(exist_ok=True, parents=True)
 
-print("\\n=== Step 1: Setup UniRig Environment ===")
+print("\n=== Step 1: Setup UniRig Environment ===")
 
 # Check if UniRig repository is available
 # Try to find UniRig in thirdparty relative to current working directory
@@ -661,7 +661,7 @@ if unirig_path and unirig_path.exists():
 
 # Determine workflow
 if skin_only:
-    print("\\n=== Step 2: Generate Skinning Weights ===")
+    print("\n=== Step 2: Generate Skinning Weights ===")
     print("⚠ Note: Skin-only mode requires an existing skeleton file")
     print("  Please provide skeleton file path or use full pipeline")
 
@@ -707,7 +707,7 @@ if skin_only:
         raise
 
 elif skeleton_only:
-    print("\\n=== Step 2: Generate Skeleton ===")
+    print("\n=== Step 2: Generate Skeleton ===")
     print(f"Generating skeleton for: {mesh_path}")
 
     skeleton_output = export_dir / f"skeleton.{output_format}"
@@ -732,7 +732,7 @@ elif skeleton_only:
 
 else:
     # Full pipeline: skeleton + skin + merge
-    print("\\n=== Step 2: Generate Skeleton ===")
+    print("\n=== Step 2: Generate Skeleton ===")
     print(f"Generating skeleton for: {mesh_path}")
 
     skeleton_output = export_dir / "skeleton.usdc"
@@ -755,7 +755,7 @@ else:
         traceback.print_exc()
         raise
 
-    print("\\n=== Step 3: Generate Skinning Weights ===")
+    print("\n=== Step 3: Generate Skinning Weights ===")
     print(f"Generating skinning weights for skeleton: {skeleton_output}")
 
     # Verify predict_skeleton.npz exists before skin generation
@@ -823,7 +823,7 @@ else:
         traceback.print_exc()
         raise
 
-    print("\\n=== Step 4: Merge Skeleton and Skin ===")
+    print("\n=== Step 4: Merge Skeleton and Skin ===")
     print("Merging skeleton and skinning weights...")
 
     final_output = export_dir / f"rigged.{output_format}"
@@ -879,9 +879,9 @@ else:
 # Restore original working directory
 os.chdir(original_cwd)
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 print("3D model rigging completed successfully!")
-print(f"\\nOutput files in {export_dir.name}/:")
+print(f"\nOutput files in {export_dir.name}/:")
 if skeleton_only:
     print(f"  - {export_dir.name}/skeleton.{output_format} (Skeleton only)")
 elif skin_only:

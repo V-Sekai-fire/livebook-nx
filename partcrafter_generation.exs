@@ -390,7 +390,7 @@ case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weight
 end
 
 # Import libraries and process using PartCrafter
-{_, _python_globals} = Pythonx.eval("""
+{_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
 import os
@@ -448,7 +448,7 @@ input_image_path = str(Path(image_path).resolve())
 output_dir = Path("output")
 output_dir.mkdir(exist_ok=True)
 
-print("\\n=== Step 1: Load Image ===")
+print("\n=== Step 1: Load Image ===")
 
 # Check if input_image_path is a video and extract first frame
 image_path_str = str(input_image_path)
@@ -477,7 +477,7 @@ else:
         raise FileNotFoundError(f"Image file not found: {input_image_path}")
     print(f"[OK] Image file found: {input_image_path}")
 
-print("\\n=== Step 3 Initialize Models ===")
+print("\n=== Step 3 Initialize Models ===")
 print("Loading PartCrafter pipeline...")
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -500,13 +500,13 @@ except Exception as e:
     print(f"[ERROR] Error loading models: {e}")
     import traceback
     traceback.print_exc()
-    print("\\nMake sure you have")
+    print("\nMake sure you have")
     print("  1. All dependencies installed via uv")
     print("  2. Hugging Face models will be downloaded automatically")
     print("  3. Sufficient GPU memory")
     raise
 
-print("\\n=== Step 5 Generate Parts ===")
+print("\n=== Step 5 Generate Parts ===")
 print(f"Running PartCrafter inference with {num_parts} parts, seed={seed}, guidance_scale={guidance_scale}, steps={num_steps}...")
 
 # Generate random seed if seed is 0
@@ -547,7 +547,7 @@ except Exception as e:
     traceback.print_exc()
     raise
 
-print("\\n=== Step 6 Export Meshes ===")
+print("\n=== Step 6 Export Meshes ===")
 
 # Create output directory with timestamp
 import time
@@ -574,9 +574,9 @@ try:
 except Exception as e:
     print(f"[WARN] Could not export merged mesh - {e}")
 
-print("\\n=== Complete ===")
+print("\n=== Complete ===")
 print(f"Generated {len(outputs)} parts and saved to {export_dir}")
-print(f"\\nOutput files")
+print(f"\nOutput files")
 print(f"  - {export_dir}/object.{output_format} (Merged mesh)")
 for i in range(len(outputs)):
     part_num = str(i).zfill(2)
