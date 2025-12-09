@@ -495,42 +495,86 @@ if target_folder:
             if text_file.exists():
                 audio_files.append((audio_file, text_file))
 
-    print(f"\\nFound {len(audio_files)} audio/text pairs to process")
+    print(f"\\nFound {len(audio_files)} audio/text pairs to combine")
 
     if len(audio_files) == 0:
         print(f"\\n[ERROR] No audio/text pairs found in {target_folder}")
         print("Expected: audio files (.mp3, .wav, etc.) with corresponding .txt files")
         raise ValueError("No audio/text pairs found")
 
-    # Process each pair
-    processed_count = 0
+    # Combine all audio/text pairs from the same speaker
+    print(f"\\n=== Combining {len(audio_files)} audio/text pairs ===")
+
+    # Import audio processing libraries
+    import soundfile as sf
+    import librosa
+    import numpy as np
+
+    # Combine all audio files
+    print("Combining audio files...")
+    combined_audio_segments = []
+    combined_text_parts = []
+
     for idx, (audio_file, text_file) in enumerate(audio_files, 1):
-        print(f"\\n--- Processing {idx}/{len(audio_files)}: {audio_file.name} ---")
+        print(f"  Loading {idx}/{len(audio_files)}: {audio_file.name}")
+
+        # Read and convert audio to mono 24K
+        from utilities.audio_processor import convert_to_wav_mono_24k
+        converted_audio = convert_to_wav_mono_24k(audio_file)
+
+        # Load audio data
+        audio_data, sample_rate = sf.read(converted_audio)
+        combined_audio_segments.append(audio_data)
 
         # Read text
-        target_text = text_file.read_text(encoding='utf-8').strip()
+        text_content = text_file.read_text(encoding='utf-8').strip()
+        combined_text_parts.append(text_content)
 
-        # Create output name based on audio file stem
-        audio_stem = audio_file.stem
-        pair_output_name = f"{output_name}_{audio_stem}"
+    # Concatenate all audio segments
+    print(f"\\nConcatenating {len(combined_audio_segments)} audio segments...")
+    combined_audio = np.concatenate(combined_audio_segments)
+    total_duration = len(combined_audio) / sample_rate
+    print(f"Combined audio duration: {total_duration:.2f} seconds")
 
-        # Process this pair
-        try:
-            process_single_pair(
-                audio_file, target_text, other_text, starting_voice, voice_folder,
-                interpolate_start, transcribe_start, population_limit, step_limit,
-                pair_output_name, export_dir, kvoicewalk_path
-            )
-            processed_count += 1
-        except Exception as e:
-            print(f"\\n[ERROR] Failed to process {audio_file.name}: {e}")
-            import traceback
-            traceback.print_exc()
-            continue
+    # Combine all text with spaces
+    combined_text = " ".join(combined_text_parts)
+    print(f"Combined text length: {len(combined_text)} characters")
+    print(f"Combined text preview: {combined_text[:200]}{'...' if len(combined_text) > 200 else ''}")
 
-    print(f"\\n=== Folder Processing Complete ===")
-    print(f"Successfully processed: {processed_count}/{len(audio_files)} pairs")
-    print(f"Output directory: {export_dir}")
+    # Save combined audio to temporary file
+    import tempfile
+    temp_audio_file = Path(tempfile.gettempdir()) / f"combined_{target_folder.name}_{tag}.wav"
+    sf.write(str(temp_audio_file), combined_audio, sample_rate, format='WAV')
+    print(f"\\nSaved combined audio to temporary file: {temp_audio_file.name}")
+
+    # Process combined audio/text as single training run
+    print(f"\\n=== Processing Combined Audio/Text ===")
+    print(f"Using combined audio from {len(audio_files)} clips")
+    print(f"Total duration: {total_duration:.2f} seconds")
+
+    try:
+        process_single_pair(
+            temp_audio_file, combined_text, other_text, starting_voice, voice_folder,
+            interpolate_start, transcribe_start, population_limit, step_limit,
+            output_name, export_dir, kvoicewalk_path
+        )
+        print(f"\\n=== Folder Processing Complete ===")
+        print(f"Successfully processed combined audio from {len(audio_files)} pairs")
+        print(f"Output directory: {export_dir}")
+
+        # Clean up temporary file
+        if temp_audio_file.exists():
+            temp_audio_file.unlink()
+            print(f"Cleaned up temporary file: {temp_audio_file.name}")
+
+    except Exception as e:
+        print(f"\\n[ERROR] Failed to process combined audio: {e}")
+        import traceback
+        traceback.print_exc()
+        # Clean up temporary file on error
+        if temp_audio_file.exists():
+            temp_audio_file.unlink()
+        raise
 
 else:
     # Single file mode
