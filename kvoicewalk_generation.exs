@@ -297,7 +297,10 @@ export_dir.mkdir(exist_ok=True, parents=True)
 
 print(f"\\n=== Step 2: Run KVoiceWalk Voice Cloning ===")
 print(f"Target Audio: {target_audio}")
-print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
+if target_text:
+    print(f"Target Text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
+else:
+    print(f"Target Text: (not provided)")
 print(f"Output Directory: {export_dir}")
 print(f"\\nThis may take a while depending on step_limit ({step_limit}) and population_limit ({population_limit})...")
 
@@ -338,12 +341,19 @@ if transcribe_start:
     print(f"Transcribed text: {target_text[:100]}{'...' if len(target_text) > 100 else ''}")
 
 # Handle text input - read from file if it's a .txt file path
-if target_text and str(target_text).endswith('.txt'):
+# Ensure target_text is a string before processing
+if not target_text:
+    raise ValueError("target_text is required but was not provided")
+    
+if isinstance(target_text, str) and target_text.endswith('.txt'):
     text_path = Path(target_text)
     if text_path.exists() and text_path.is_file():
         target_text = text_path.read_text(encoding='utf-8')
     else:
         print(f"Warning: Text file not found: {text_path}, using as literal text")
+elif not isinstance(target_text, str):
+    # Convert to string if it's not already
+    target_text = str(target_text)
 
 # Set default other_text if not provided
 if not other_text:
