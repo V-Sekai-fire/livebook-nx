@@ -24,38 +24,6 @@ Your Elixir scripts follow a consistent pattern:
 
 **Note: All models listed below are FOSS (Free and Open Source Software) with permissive licenses (MIT, Apache 2.0, BSD, or similar).**
 
-### 1. Image-to-Image (Inpainting, Outpainting, Style Transfer)
-
-#### LanPaint (Universal Inpainting)
-
-- **Model**: `charrywhite/LanPaint`
-- **Hugging Face**: https://huggingface.co/charrywhite/LanPaint
-- **Repository**: https://github.com/scraed/LanPaint
-- **Paper**: https://arxiv.org/abs/2502.03491
-- **Published**: February 2025
-- **License**: GPL-3.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Training-free diffusion inpainting
-- **Integration**: Universal inpainting sampler with "think mode"
-- **Script Name**: `lanpaint_inpainting.exs`
-- **Features**: Multiple iterations before denoising, works with any diffusion model, superior quality
-
-#### Paint-by-Inpaint
-
-- **Model**: `paint-by-inpaint`
-- **Hugging Face**: https://huggingface.co/paint-by-inpaint
-- **Style Match**: ✅ High - Advanced inpainting model
-- **Integration**: Fine-tuned for inpainting tasks
-- **Script Name**: `paint_by_inpaint.exs`
-
-#### Stable Diffusion Inpainting
-
-- **Model**: Various SD inpainting models via diffusers
-- **License**: CreativeML Open RAIL-M ✅ FOSS
-- **Style Match**: ✅ High - Industry standard inpainting
-- **Integration**: Uses diffusers pipeline
-- **Script Name**: `stable_diffusion_inpainting.exs`
-- **Note**: Can use SDXL or SD 1.5/2.1 base models, permissive license
-
 ### 2. Image Super-Resolution / Upscaling
 
 #### UltraZoom-2X
@@ -68,77 +36,6 @@ Your Elixir scripts follow a consistent pattern:
 - **Integration**: Two-stage "zoom in and enhance" mechanism
 - **Script Name**: `ultrazoom_upscaling.exs`
 - **Features**: Fast and scalable, controllable enhancements (denoising, deblurring, deartifacting), full RGB support
-
-#### FLUX Upscale
-
-- **Model**: `wangkanai/flux-upscale`
-- **Hugging Face**: https://huggingface.co/wangkanai/flux-upscale
-- **Style Match**: ✅ High - Real-ESRGAN upscale models
-- **Integration**: 2x and 4x upscaling with detail enhancement
-- **Script Name**: `flux_upscale.exs`
-- **Features**: Post-processing for AI-generated images, noise reduction, CPU and GPU compatible
-
-#### Real-ESRGAN
-
-- **Model**: Various Real-ESRGAN models
-- **Repository**: https://github.com/xinntao/Real-ESRGAN
-- **Paper**: https://arxiv.org/abs/2107.10833
-- **Published**: July 2021 (ICCV 2021)
-- **License**: BSD-3-Clause ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Popular upscaling solution
-- **Integration**: General purpose or specialized (anime, photo, text)
-- **Script Name**: `realesrgan_upscaling.exs`
-- **Note**: Multiple variants for different content types, fully open-source
-
-### 3. OCR / Document Processing
-
-#### DeepSeek-OCR
-
-- **Model**: `deepseek-ai/DeepSeek-OCR`
-- **Hugging Face**: https://huggingface.co/deepseek-ai/DeepSeek-OCR
-- **Repository**: https://github.com/deepseek-ai/DeepSeek-OCR
-- **Published**: October 2024
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - High-accuracy OCR model
-- **Integration**: Extracts text from complex visual inputs
-- **Script Name**: `deepseek_ocr.exs`
-- **Features**: Documents, screenshots, receipts, natural scenes, multilingual support, high accuracy
-
-#### LightOnOCR-1B
-
-- **Model**: `lightonai/LightOnOCR-1B-1025`
-- **Hugging Face**: https://huggingface.co/lightonai/LightOnOCR-1B-1025
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Efficient OCR model
-- **Integration**: 1B parameter model for text extraction
-- **Script Name**: `lighton_ocr.exs`
-- **Note**: Smaller, faster alternative, fully open-source
-
-#### PaddleOCR
-
-- **Model**: Various PaddleOCR models
-- **Repository**: https://github.com/PaddlePaddle/PaddleOCR
-- **Paper**: https://arxiv.org/abs/2507.05595
-- **Published**: May 2020 (initial release, ongoing development)
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Open-source OCR solution
-- **Integration**: End-to-end OCR with detector and recognizer
-- **Script Name**: `paddleocr.exs`
-- **Features**:
-  - Multi-line, multi-block text
-  - Natural scene text
-  - Multiple languages
-  - Fully open-source (Apache 2.0)
-
-#### TrOCR (Microsoft)
-
-- **Model**: `microsoft/trocr-base-printed` or variants
-- **Hugging Face**: https://huggingface.co/microsoft/trocr-base-printed
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Transformer-based OCR
-- **Integration**: Text recognition from images
-- **Script Name**: `trocrocr.exs`
-- **Note**: Fully open-source, good for printed text
 
 ### 4. Text Generation (LLMs)
 
@@ -189,16 +86,6 @@ Your Elixir scripts follow a consistent pattern:
 
 ### 7. Image Classification / Object Detection
 
-#### Vision Transformer (ViT)
-
-- **Model**: Various ViT models (e.g., `google/vit-base-patch16-224`)
-- **Hugging Face**: https://huggingface.co/google/vit-base-patch16-224
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Image classification
-- **Integration**: Classify images into categories
-- **Script Name**: `vit_classification.exs`
-- **Note**: Multiple variants and sizes available, fully open-source
-
 #### RF-DETR (Roboflow)
 
 - **Model**: `roboflow/rfdetr-base` or variants (nano, small, medium, base)
@@ -224,16 +111,6 @@ Your Elixir scripts follow a consistent pattern:
 - **Integration**: Segment objects in images (different from SAM3 which is video)
 - **Script Name**: `sam_segmentation.exs`
 - **Note**: Different from SAM3 (video segmentation), fully open-source
-
-#### SegFormer
-
-- **Model**: `nvidia/segformer-b0-finetuned-ade-640-640`
-- **Hugging Face**: https://huggingface.co/nvidia/segformer-b0-finetuned-ade-640-640
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Semantic segmentation
-- **Integration**: Segment images into semantic regions
-- **Script Name**: `segformer_segmentation.exs`
-- **Note**: Fully open-source (Apache 2.0)
 
 ### 9. Depth Estimation
 
@@ -311,15 +188,6 @@ Your Elixir scripts follow a consistent pattern:
   - Bounding boxes and pose skeletons
   - Mobile-optimized
   - Fully open-source (Apache 2.0)
-
-#### ViTPose
-
-- **Model**: Various ViTPose models
-- **License**: Apache 2.0 ✅ FOSS
-- **Style Match**: ✅ High - Vision Transformer for pose
-- **Integration**: Human pose estimation
-- **Script Name**: `vitpose_estimation.exs`
-- **Note**: Fully open-source (Apache 2.0)
 
 ### 12. 3D Texture Inpainting / Generation
 
