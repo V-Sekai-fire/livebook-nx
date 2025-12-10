@@ -11,8 +11,22 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
     # Debug: Print settings
     print(f"[DEBUG] save_parts_outputs settings: save_video={save_video}, save_glb={save_glb}, textured={textured}")
 
-    # num_parts = min(len(outputs['gaussian']), len(outputs['radiance_field']), len(outputs['mesh']))
-    num_parts = min(len(outputs['gaussian']), len(outputs['mesh']))
+    # Handle missing formats gracefully
+    available_formats = [fmt for fmt in ['gaussian', 'mesh', 'radiance_field'] if fmt in outputs and len(outputs[fmt]) > 0]
+    if not available_formats:
+        print("[WARN] No valid output formats available. Skipping save_parts_outputs.")
+        return
+    
+    # Use the format with the most parts, or gaussian if available
+    if 'gaussian' in outputs and len(outputs['gaussian']) > 0:
+        num_parts = len(outputs['gaussian'])
+    elif 'mesh' in outputs and len(outputs['mesh']) > 0:
+        num_parts = len(outputs['mesh'])
+    elif 'radiance_field' in outputs and len(outputs['radiance_field']) > 0:
+        num_parts = len(outputs['radiance_field'])
+    else:
+        print("[WARN] No valid output formats available. Skipping save_parts_outputs.")
+        return
     gs_list = []
     
     for i in range(num_parts):
@@ -40,10 +54,18 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                     import traceback
                     traceback.print_exc()
         if save_glb:
+            # Check if mesh is available
+            if 'mesh' not in outputs or i >= len(outputs['mesh']) or outputs['mesh'][i] is None:
+                print(f"[WARN] Mesh not available for part {i}, skipping GLB generation")
+                continue
+            
             print(f"[DEBUG] Generating GLB for part {i} (save_glb=True)")
+            # Get gaussian if available, otherwise None
+            gaussian = outputs['gaussian'][i] if 'gaussian' in outputs and i < len(outputs['gaussian']) else None
+            
             # Try with textured first, fall back to untextured if it fails
             glb = postprocessing_utils.to_glb(
-                outputs['gaussian'][i],
+                gaussian,
                 outputs['mesh'][i],
                 simplify=simplify_ratio,  # Mesh simplification factor
                 texture_size=1024,
@@ -53,10 +75,10 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
             if glb is None and textured:
                 print(f"[WARN] Textured GLB generation failed for part {i}, trying untextured...")
                 glb = postprocessing_utils.to_glb(
-                    outputs['gaussian'][i],
+                    gaussian,
                     outputs['mesh'][i],
                     simplify=simplify_ratio,
-                    texture_size=2048,  # Photogrammetry quality: 2048
+                    texture_size=1024,
                     textured=False,  # Disable texture baking
                 )
             if glb is None:

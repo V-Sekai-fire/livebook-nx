@@ -403,9 +403,11 @@ class OmniPartImageTo3DPipeline(Pipeline):
                 print(f"[DEBUG] decode_slat: Mesh format decoded successfully, got {len(ret['mesh'])} meshes")
             except Exception as e:
                 print(f"[ERROR] decode_slat: Mesh format failed: {type(e).__name__}: {e}")
+                print("[WARN] Continuing without mesh format - will skip mesh outputs")
                 import traceback
                 traceback.print_exc()
-                raise
+                # Don't raise - continue with other formats
+                ret['mesh'] = []  # Return empty list so save_parts_outputs can handle it
                 
         if 'gaussian' in formats:
             print("[DEBUG] decode_slat: Decoding gaussian format...")

@@ -11,6 +11,8 @@ except ImportError:
     dr = None
 
 # Try PyTorch3D as alternative to nvdiffrast
+PYTORCH3D_AVAILABLE = False
+PYTORCH3D_IMPORT_ERROR = None
 try:
     from pytorch3d.renderer import (
         MeshRasterizer, RasterizationSettings, PerspectiveCameras,
@@ -19,8 +21,14 @@ try:
     from pytorch3d.structures import Meshes
     from pytorch3d.renderer.mesh.rasterizer import Fragments
     PYTORCH3D_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     PYTORCH3D_AVAILABLE = False
+    # Store error for debugging
+    PYTORCH3D_IMPORT_ERROR = str(e)
+except Exception as e:
+    # Catch other errors (e.g., CUDA initialization issues)
+    PYTORCH3D_AVAILABLE = False
+    PYTORCH3D_IMPORT_ERROR = str(e)
 
 from tqdm import tqdm
 import trimesh
@@ -111,17 +119,90 @@ def _fill_holes(
 
     # Rasterize mesh from multiple viewpoints to determine visible faces
     visblity = torch.zeros(faces.shape[0], dtype=torch.int32, device=verts.device)
-    rastctx = utils3d.torch.RastContext(backend='cuda')
-    for i in tqdm(range(views.shape[0]), total=views.shape[0], disable=not verbose, desc='Rasterizing'):
-        view = views[i]
-        # Render from current viewpoint
-        buffers = utils3d.torch.rasterize_triangle_faces(
-            rastctx, verts[None], faces, resolution, resolution, view=view, projection=projection
-        )
-        # Collect face IDs that are visible from this view
-        face_id = buffers['face_id'][0][buffers['mask'][0] > 0.95] - 1
-        face_id = torch.unique(face_id).long()
-        visblity[face_id] += 1
+    
+    # Re-check PyTorch3D availability at runtime (in case import failed at module load but works now)
+    pytorch3d_available_runtime = PYTORCH3D_AVAILABLE
+    if not pytorch3d_available_runtime and not NVDIFFRAST_AVAILABLE:
+        # Try importing again at runtime
+        try:
+            from pytorch3d.renderer import MeshRasterizer, RasterizationSettings, PerspectiveCameras
+            from pytorch3d.structures import Meshes
+            pytorch3d_available_runtime = True
+        except Exception:
+            pytorch3d_available_runtime = False
+    
+    # Use PyTorch3D if nvdiffrast is not available
+    use_pytorch3d = not NVDIFFRAST_AVAILABLE and pytorch3d_available_runtime
+    
+    if not NVDIFFRAST_AVAILABLE and not pytorch3d_available_runtime:
+        error_msg = "Either nvdiffrast or PyTorch3D is required for hole filling. Please install one of them."
+        if PYTORCH3D_IMPORT_ERROR:
+            error_msg += f" PyTorch3D import error: {PYTORCH3D_IMPORT_ERROR}"
+        raise ImportError(error_msg)
+    
+    if use_pytorch3d:
+        # Import PyTorch3D components at runtime (in case module-level import failed)
+        try:
+            from pytorch3d.renderer import MeshRasterizer, RasterizationSettings, PerspectiveCameras
+            from pytorch3d.structures import Meshes
+        except ImportError as e:
+            raise ImportError(f"PyTorch3D is required for hole filling but import failed: {e}")
+        
+        # Use PyTorch3D for rasterization
+        for i in tqdm(range(views.shape[0]), total=views.shape[0], disable=not verbose, desc='Rasterizing'):
+            view = views[i]
+            # Create mesh without textures for visibility detection
+            meshes = Meshes(verts=verts[None], faces=faces[None])
+            
+            # Convert view and projection to PyTorch3D format
+            R_w2c = view[:3, :3]
+            T_w2c = view[:3, 3].unsqueeze(0)
+            fx_pixels = projection[0, 0] / 2.0
+            fy_pixels = projection[1, 1] / 2.0
+            cx_pixels = (projection[0, 2] + 1.0) / 2.0
+            cy_pixels = (1.0 - projection[1, 2]) / 2.0
+            focal_length = torch.tensor([[fx_pixels, fy_pixels]], device=verts.device, dtype=torch.float32)
+            principal_point = torch.tensor([[(cx_pixels - resolution / 2.0) / (resolution / 2.0), 
+                                             (cy_pixels - resolution / 2.0) / (resolution / 2.0)]], 
+                                           device=verts.device, dtype=torch.float32)
+            
+            cameras = PerspectiveCameras(
+                R=R_w2c[None].to(verts.device),
+                T=T_w2c.to(verts.device),
+                focal_length=focal_length,
+                principal_point=principal_point,
+                image_size=torch.tensor([[resolution, resolution]], device=verts.device, dtype=torch.float32),
+                device=verts.device,
+            )
+            
+            raster_settings = RasterizationSettings(
+                image_size=(resolution, resolution),
+                blur_radius=0.0,
+                faces_per_pixel=1,
+                perspective_correct=True,
+            )
+            rasterizer = MeshRasterizer(cameras=cameras, raster_settings=raster_settings)
+            fragments = rasterizer(meshes)
+            
+            # Get face IDs from fragments
+            pix_to_face = fragments.pix_to_face[0]  # (H, W, 1)
+            mask = (pix_to_face >= 0).squeeze(-1)  # (H, W)
+            face_id = pix_to_face[mask] - 1  # Subtract 1 to get 0-indexed face IDs
+            face_id = torch.unique(face_id).long()
+            visblity[face_id] += 1
+    else:
+        # Use utils3d (nvdiffrast) for rasterization
+        rastctx = utils3d.torch.RastContext(backend='cuda')
+        for i in tqdm(range(views.shape[0]), total=views.shape[0], disable=not verbose, desc='Rasterizing'):
+            view = views[i]
+            # Render from current viewpoint
+            buffers = utils3d.torch.rasterize_triangle_faces(
+                rastctx, verts[None], faces, resolution, resolution, view=view, projection=projection
+            )
+            # Collect face IDs that are visible from this view
+            face_id = buffers['face_id'][0][buffers['mask'][0] > 0.95] - 1
+            face_id = torch.unique(face_id).long()
+            visblity[face_id] += 1
     # Normalize visibility to [0,1]
     visblity = visblity.float() / num_views
     
@@ -290,45 +371,48 @@ def postprocess_mesh(
     if vertices.shape[0] == 0 or faces.shape[0] == 0:
         return vertices, faces
     
-    try:
-        # Simplify mesh using quadric edge collapse decimation
-        if simplify and simplify_ratio > 0:
+    # Simplify mesh using quadric edge collapse decimation
+    # Note: PyVista decimation may fail in some environments (e.g., Pythonx) due to signal handler conflicts
+    # If it fails, we'll skip decimation but still proceed with hole filling
+    if simplify and simplify_ratio > 0:
+        try:
             mesh = pv.PolyData(vertices, np.concatenate([np.full((faces.shape[0], 1), 3), faces], axis=1))
             mesh = mesh.decimate(simplify_ratio, progress_bar=verbose)
             vertices, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:]
             if verbose:
                 tqdm.write(f'After decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+        except Exception as e:
+            # Decimation failed (e.g., signal handler issue in Pythonx), skip it but continue
+            if verbose:
+                tqdm.write(f'Warning: Decimation failed ({e}), skipping decimation but continuing with hole filling')
+            # Keep original vertices/faces for hole filling
 
-        # Remove invisible faces and fill small holes
-        if fill_holes:
-            # Save decimated mesh before attempting hole filling
-            decimated_vertices = vertices.copy()
-            decimated_faces = faces.copy()
-            try:
-                vertices_t = torch.tensor(vertices).cuda()
-                faces_t = torch.tensor(faces.astype(np.int32)).cuda()
-                vertices_t, faces_t = _fill_holes(
-                    vertices_t, faces_t,
-                    max_hole_size=fill_holes_max_hole_size,
-                    max_hole_nbe=fill_holes_max_hole_nbe,
-                    resolution=fill_holes_resolution,
-                    num_views=fill_holes_num_views,
-                    debug=debug,
-                    verbose=verbose,
-                )
-                vertices, faces = vertices_t.cpu().numpy(), faces_t.cpu().numpy()
-                if verbose:
-                    tqdm.write(f'After remove invisible faces: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
-            except Exception as e:
-                # If hole filling fails (e.g., nvdiffrast missing), continue with decimated mesh
-                tqdm.write(f'Error in hole filling (continuing with decimated mesh): {e}')
-                # Restore decimated mesh
-                vertices, faces = decimated_vertices, decimated_faces
-    except Exception as e:
-        tqdm.write(f'Error in postprocess_mesh: {e}')
-        # If decimation also failed, return original mesh
-        # Otherwise, the decimated mesh should have been preserved above
-        return None, None
+    # Remove invisible faces and fill small holes
+    # This can work independently of decimation
+    if fill_holes:
+        # Save current mesh before attempting hole filling
+        mesh_before_holes = (vertices.copy(), faces.copy())
+        try:
+            vertices_t = torch.tensor(vertices).cuda()
+            faces_t = torch.tensor(faces.astype(np.int32)).cuda()
+            vertices_t, faces_t = _fill_holes(
+                vertices_t, faces_t,
+                max_hole_size=fill_holes_max_hole_size,
+                max_hole_nbe=fill_holes_max_hole_nbe,
+                resolution=fill_holes_resolution,
+                num_views=fill_holes_num_views,
+                debug=debug,
+                verbose=verbose,
+            )
+            vertices, faces = vertices_t.cpu().numpy(), faces_t.cpu().numpy()
+            if verbose:
+                tqdm.write(f'After hole filling: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+        except Exception as e:
+            # If hole filling fails, continue with mesh before hole filling
+            if verbose:
+                tqdm.write(f'Warning: Hole filling failed ({e}), continuing without hole filling')
+            # Restore mesh before hole filling
+            vertices, faces = mesh_before_holes
 
     return vertices, faces
 
@@ -340,8 +424,12 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     
     Properly converts OpenGL-style view and projection matrices to PyTorch3D camera format.
     """
-    if not PYTORCH3D_AVAILABLE:
-        raise ImportError("PyTorch3D is required for texture baking without nvdiffrast")
+    # Try importing PyTorch3D at runtime if not available at module load
+    try:
+        from pytorch3d.renderer import MeshRasterizer, RasterizationSettings, PerspectiveCameras, TexturesUV
+        from pytorch3d.structures import Meshes
+    except ImportError as e:
+        raise ImportError(f"PyTorch3D is required for texture baking without nvdiffrast. Import error: {e}")
     
     device = vertices.device
     batch_size = vertices.shape[0]
@@ -399,15 +487,21 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     # Create mesh with UV coordinates
     # PyTorch3D needs vertices and faces, and can handle UVs via TexturesUV
     # TexturesUV expects:
+    # - maps: (N, H, W, C) - texture maps, not (N, H, W, D, C)
     # - faces_uvs: (N, F, 3) - batch dimension required
     # - verts_uvs: (N, V, 2) - batch dimension required
+    # For rasterization, we need a dummy texture map of proper shape
+    # Use a minimal 1x1 texture map: (N, 1, 1, 3)
+    faces_uvs_batch = faces.unsqueeze(0) if len(faces.shape) == 2 else faces  # (F, 3) -> (1, F, 3)
+    verts_uvs_batch = uvs.unsqueeze(0) if len(uvs.shape) == 2 else uvs  # (V, 2) -> (1, V, 2)
+    
     meshes = Meshes(
         verts=vertices,
         faces=faces,
         textures=TexturesUV(
-            maps=torch.zeros((batch_size, 1, 1, 1, 3), device=device),  # Dummy texture
-            faces_uvs=faces.unsqueeze(0) if len(faces.shape) == 2 else faces,  # Add batch dim if needed: (F, 3) -> (1, F, 3)
-            verts_uvs=uvs.unsqueeze(0) if len(uvs.shape) == 2 else uvs  # Add batch dim if needed: (V, 2) -> (1, V, 2)
+            maps=torch.zeros((batch_size, 1, 1, 3), device=device),  # (N, H, W, C) - proper shape
+            faces_uvs=faces_uvs_batch,
+            verts_uvs=verts_uvs_batch
         )
     )
     
@@ -529,17 +623,25 @@ def bake_texture(
 
     if mode == 'fast':
         # Fast texture baking - weighted average of observed colors
-        # Check if we have a rasterization backend available
-        if not NVDIFFRAST_AVAILABLE and not PYTORCH3D_AVAILABLE:
-            raise ImportError("Either nvdiffrast or PyTorch3D is required for texture baking. Please install one of them.")
-        
+        # Try to use utils3d's rasterization (may work even without explicit nvdiffrast import)
+        # Fall back to PyTorch3D if available, otherwise try utils3d anyway
         texture = torch.zeros((texture_size * texture_size, 3), dtype=torch.float32).cuda()
         texture_weights = torch.zeros((texture_size * texture_size), dtype=torch.float32).cuda()
         
-        # Use PyTorch3D if nvdiffrast is not available, otherwise use nvdiffrast
+        # Use PyTorch3D if nvdiffrast is not available and PyTorch3D works, otherwise try utils3d
         use_pytorch3d = not NVDIFFRAST_AVAILABLE and PYTORCH3D_AVAILABLE
-        if not use_pytorch3d and NVDIFFRAST_AVAILABLE:
-            rastctx = utils3d.torch.RastContext(backend='cuda')
+        use_utils3d = not use_pytorch3d  # Use utils3d if not using PyTorch3D
+        
+        if use_utils3d:
+            try:
+                rastctx = utils3d.torch.RastContext(backend='cuda')
+            except Exception as e:
+                # If utils3d also fails, try PyTorch3D as last resort
+                if PYTORCH3D_AVAILABLE:
+                    use_pytorch3d = True
+                    use_utils3d = False
+                else:
+                    raise ImportError(f"Rasterization backend unavailable. utils3d error: {e}. PyTorch3D also unavailable.")
         
         # Iterate through each observation and accumulate colors
         for observation, view, projection in tqdm(zip(observations, views, projections), total=len(observations), disable=not verbose, desc='Texture baking (fast)'):
@@ -821,12 +923,27 @@ def to_glb(
     uvs = None
     if textured:
         # Check if texture baking is possible
-        if not NVDIFFRAST_AVAILABLE and not PYTORCH3D_AVAILABLE:
+        # Try to use utils3d's rasterization - it may work even without explicit nvdiffrast import
+        # Only disable texture baking if utils3d also fails
+        try:
+            # Test if utils3d rasterization works
+            test_ctx = utils3d.torch.RastContext(backend='cuda')
+            del test_ctx
+            # If we get here, utils3d works - enable texture baking
             if verbose:
-                print("[WARN] Neither nvdiffrast nor PyTorch3D is available. Texture baking disabled.")
-                print("[INFO] Install PyTorch3D with: pip install pytorch3d")
-                print("[INFO] Or install nvdiffrast for texture baking support.")
-            textured = False
+                print("[INFO] Using utils3d for texture baking")
+        except Exception as e:
+            # utils3d doesn't work, check if PyTorch3D is available
+            if not PYTORCH3D_AVAILABLE:
+                if verbose:
+                    print("[WARN] Neither utils3d rasterization nor PyTorch3D is available. Texture baking disabled.")
+                    if PYTORCH3D_IMPORT_ERROR:
+                        print(f"[INFO] PyTorch3D import error: {PYTORCH3D_IMPORT_ERROR}")
+                    print("[INFO] utils3d rasterization error:", str(e))
+                textured = False
+            else:
+                if verbose:
+                    print("[INFO] Using PyTorch3D for texture baking (utils3d unavailable)")
         else:
             # Create UV mapping for the mesh
             vertices, faces, uvs = parametrize_mesh(vertices, faces)
