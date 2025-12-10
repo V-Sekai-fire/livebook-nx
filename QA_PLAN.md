@@ -160,7 +160,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ## 6. Audio Processing
 
 ### 6.1 kvoicewalk_generation.exs
-- [ ] Test basic voice generation: `elixir kvoicewalk_generation.exs --target-audio "thirdparty/kvoicewalk/example/target.wav" --target-text "Hello world"`
+- [ ] Test basic voice generation: `elixir kvoicewalk_generation.exs --target-audio "thirdparty\young_adult_feminine_clips\344bf332f298134d\young_female_twenties_3286d30306fc.mp3" --target-text "The new population needed to be supported by an improved infrastructure."`
 - [ ] Test with folder: `--target-folder "thirdparty/young_adult_feminine_clips/344bf332f298134d"`
 - [ ] Test with custom starting voice: `--starting-voice "thirdparty/kvoicewalk/voices/af_bella.pt"`
 - [ ] Test with interpolation: `--interpolate-start`
