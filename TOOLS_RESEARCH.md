@@ -37,6 +37,31 @@ Your Elixir scripts follow a consistent pattern:
 - **Script Name**: `ultrazoom_upscaling.exs`
 - **Features**: Fast and scalable, controllable enhancements (denoising, deblurring, deartifacting), full RGB support
 
+### 3. Image Customization
+
+#### DreamO
+
+- **Repository**: https://github.com/bytedance/DreamO
+- **Paper**: SIGGRAPH Asia 2025
+- **Published**: May 2025 (v1.1 released June 2025)
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
+- **Style Match**: ✅ High - Unified framework for image customization
+- **Integration**: Image customization with multiple condition support
+- **Script Name**: `dreamo_customization.exs`
+- **Features**:
+  - **IP Task**: IP-Adapter-like functionality with higher fidelity using VAE-based feature encoding
+  - **ID Task**: Facial identity preservation (similar to InstantID/PuLID) with higher facial fidelity
+  - **Try-On**: Virtual try-on for tops, bottoms, glasses, hats, supports multiple garments
+  - **Style**: Style transfer (similar to Style-Adapter/InstantStyle)
+  - **Multi-Condition**: Combine multiple conditions (ID, IP, Try-On) with feature routing to mitigate conflicts
+  - Based on FLUX model with Turbo LoRA support (12 steps vs 25+)
+  - Supports quantization (int8, Nunchaku) for consumer GPUs (8GB, 16GB, 24GB)
+  - CPU offloading support for low-memory GPUs
+  - macOS Apple Silicon (MPS) support
+  - Native ComfyUI implementation available
+  - Gradio demo included
+- **Note**: SIGGRAPH Asia 2025, unified framework outperforms specialized methods in their respective tasks
+
 ### 4. Text Generation (LLMs)
 
 #### Qwen3 (Alibaba)
@@ -189,27 +214,30 @@ Your Elixir scripts follow a consistent pattern:
   - Mobile-optimized
   - Fully open-source (Apache 2.0)
 
-### 12. 3D Texture Inpainting / Generation
+### 12. 3D Shape Generation
 
-#### TEXGen
+#### OmniPart
 
-- **Script Pattern**: Follow the Integration Pattern Template (see below) for `texgen_texture_inpainting.exs`
-- **Model**: `Andyx/TEXGen`
-- **Hugging Face**: https://huggingface.co/Andyx/TEXGen
-- **Repository**: https://github.com/CVMI-Lab/TEXGen
-- **Paper**: https://arxiv.org/abs/2411.14740
-- **Published**: November 2024 (SIGGRAPH Asia 2024)
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Generative diffusion model for mesh textures
-- **Integration**: 3D texture inpainting, completion, and synthesis
-- **Script Name**: `texgen_texture_inpainting.exs`
+- **Repository**: https://github.com/HKU-MMLab/OmniPart
+- **Project Page**: https://omnipart.github.io/
+- **Paper**: arXiv:2507.06165
+- **Published**: October 2025 (SIGGRAPH Asia 2025)
+- **License**: MIT ✅ FOSS (OSI-approved)
+- **Style Match**: ✅ High - Part-aware 3D generation with semantic decoupling
+- **Integration**: 3D shape generation with part-level control
+- **Script Name**: `omnipart_generation.exs`
 - **Features**:
-  - High-resolution texture map generation in UV space
-  - Supports inpainting, completion, and synthesis
-  - Text and image-guided texture generation
-  - 700M parameter diffusion model
-  - Direct generation in UV texture space (feed-forward)
-- **Note**: SIGGRAPH Asia 2024, Best Paper Honorable Mention
+  - Part-aware 3D generation with semantic decoupling and structural cohesion
+  - Input: image + segmentation mask (2D part IDs)
+  - Generates 3D shapes with part-level semantic control
+  - Based on TRELLIS framework
+  - Interactive Gradio demo included
+  - Supports training on custom datasets
+  - Automatic model weight download
+  - Part-level voxelization and feature extraction
+  - DINO feature extraction for parts and overall shapes
+  - SLat encoding and merging for part-aware generation
+- **Note**: SIGGRAPH Asia 2025, enables fine-grained part-level control in 3D generation
 
 ## Integration Pattern Template
 
