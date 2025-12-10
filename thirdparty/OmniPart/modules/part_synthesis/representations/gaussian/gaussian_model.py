@@ -183,9 +183,13 @@ class Gaussian:
         if transform is not None:
             transform = np.array(transform)
             xyz = np.matmul(xyz, transform)
-            # Skip rotation transformation for now - it's complex and may not be critical for texture baking
-            # The rotation transformation requires careful handling of batched quaternion-to-matrix conversions
-            # which can cause tensor shape mismatches. For texture baking, the rotation transform is less critical.
+            # Transform rotations: convert quaternions to matrices, apply transform, convert back
+            # rots shape: (N, 4) - batch of quaternions
+            rotation_matrices = utils3d.numpy.quaternion_to_matrix(rots)  # (N, 3, 3)
+            # Apply transform to each rotation matrix: (N, 3, 3) @ (3, 3) -> (N, 3, 3)
+            # Use einsum for batched matrix multiplication
+            rotation_matrices = np.einsum('nij,jk->nik', rotation_matrices, transform)
+            rots = utils3d.numpy.matrix_to_quaternion(rotation_matrices)  # (N, 4)
             
         # convert to actual gaussian attributes
         xyz = torch.tensor(xyz, dtype=torch.float, device=self.device)
