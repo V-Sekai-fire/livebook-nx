@@ -67,7 +67,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Test help message: `--help`
 
 ### 2.2 partcrafter_generation.exs
-- [ ] Test basic generation: `elixir partcrafter_generation.exs "image.jpg"`
+- [ ] Test basic generation: `elixir partcrafter_generation.exs "thirdparty/9zs80jkckhrma0ctz4as2vw900.jpeg"`
 - [ ] Test with custom parts: `--num-parts 4`
 - [ ] Test with custom steps: `--num-steps 10`
 - [ ] Test with custom tokens: `--num-tokens 512`
@@ -75,7 +75,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `partcrafter.download_weights`, `partcrafter.generation`
 - [ ] Verify output GLB files are created
-- [ ] Test error handling with invalid image path
+- [ ] Test error handling with invalid image path: `elixir partcrafter_generation.exs "nonexistent.jpg"`
 - [ ] Test help message: `--help`
 
 ---
@@ -83,7 +83,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ## 3. Vision-Language Inference
 
 ### 3.1 qwen3vl_inference.exs
-- [ ] Test basic inference: `elixir qwen3vl_inference.exs "image.jpg" "What is in this image?"`
+- [ ] Test basic inference: `elixir qwen3vl_inference.exs "thirdparty/9zs80jkckhrma0ctz4as2vw900.jpeg" "What is in this image?"`
 - [ ] Test with custom max tokens: `--max-tokens 2048`
 - [ ] Test with custom temperature: `--temperature 0.8`
 - [ ] Test with output file: `--output response.txt`
@@ -92,8 +92,8 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `qwen3vl.download_weights`, `qwen3vl.inference`
 - [ ] Verify response is generated correctly
-- [ ] Test error handling with invalid image path
-- [ ] Test error handling with missing prompt
+- [ ] Test error handling with invalid image path: `elixir qwen3vl_inference.exs "nonexistent.jpg" "What is this?"`
+- [ ] Test error handling with missing prompt: `elixir qwen3vl_inference.exs "thirdparty/9zs80jkckhrma0ctz4as2vw900.jpeg"`
 - [ ] Test help message: `--help`
 
 ---
@@ -101,7 +101,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ## 4. Video Processing
 
 ### 4.1 sam3_video_segmentation.exs
-- [ ] Test basic segmentation: `elixir sam3_video_segmentation.exs "video.mp4"`
+- [ ] Test basic segmentation: `elixir sam3_video_segmentation.exs "thirdparty/rhy08tw6k9rma0ctz7m9y0xmgr.mp4"`
 - [ ] Test with custom prompt: `--prompt "person"`
 - [ ] Test with custom mask color: `--mask-color "red"`
 - [ ] Test with custom opacity: `--mask-opacity 0.7`
@@ -111,7 +111,7 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `sam3.segmentation`
 - [ ] Verify output video is created
-- [ ] Test error handling with invalid video path
+- [ ] Test error handling with invalid video path: `elixir sam3_video_segmentation.exs "nonexistent.mp4"`
 - [ ] Test help message: `--help`
 
 ---
@@ -121,10 +121,10 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ### 5.1 tris_to_quads_converter.exs
 - [x] Test basic conversion: `elixir tris_to_quads_converter.exs "thirdparty/monkey.usdc"`
 - [x] Test with custom output: `--output "output.usdc"`
-- [ ] Test with GLB input
-- [ ] Test with GLTF input
-- [ ] Test with USD input
-- [ ] Test with FBX input
+- [ ] Test with GLB input: `elixir tris_to_quads_converter.exs "thirdparty/UniRig/examples/bird.glb"`
+- [ ] Test with GLTF input: `elixir tris_to_quads_converter.exs "thirdparty/UniRig/examples/giraffe.glb"`
+- [ ] Test with USD input: `elixir tris_to_quads_converter.exs "thirdparty/monkey.usdc"`
+- [ ] Test with FBX input: `elixir tris_to_quads_converter.exs "thirdparty/UniRig/examples/skeleton/example.fbx"` (if exists)
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `tris_to_quads.conversion`
 - [ ] Verify output USDC file is created
@@ -133,9 +133,10 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 
 ### 5.2 unirig_generation.exs
 - [x] Test basic rigging: `elixir unirig_generation.exs "thirdparty/monkey.usdc"`
-- [ ] Test skeleton-only: `--skeleton-only`
-- [ ] Test skin-only: `--skin-only`
-- [ ] Test with custom seed: `--seed 123`
+- [ ] Test skeleton-only: `elixir unirig_generation.exs "thirdparty/monkey.usdc" --skeleton-only`
+- [ ] Test skin-only: `elixir unirig_generation.exs "thirdparty/monkey.usdc" --skin-only`
+- [ ] Test with GLB input: `elixir unirig_generation.exs "thirdparty/UniRig/examples/bird.glb"`
+- [ ] Test with custom seed: `elixir unirig_generation.exs "thirdparty/monkey.usdc" --seed 123`
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `unirig.generation`
 - [ ] Verify output USDC file is created
@@ -143,15 +144,15 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Test help message: `--help`
 
 ### 5.3 corrective_smooth_baker.exs
-- [x] Test basic baking: `elixir corrective_smooth_baker.exs "output\20251209_16_34_24\rigged.usdc"`
-- [ ] Test with custom output: `--output "baked.usdc"`
-- [ ] Test with custom bake range: `--bake-range "Selected"`
-- [ ] Test with custom deviation threshold: `--deviation-threshold 0.05`
-- [ ] Test with custom bake quality: `--bake-quality 2.0`
+- [x] Test basic baking: `elixir corrective_smooth_baker.exs "output/20251209_16_34_24/rigged.usdc"` (or use output from unirig_generation)
+- [ ] Test with custom output: `elixir corrective_smooth_baker.exs "output/.../rigged.usdc" --output "baked.usdc"`
+- [ ] Test with custom bake range: `elixir corrective_smooth_baker.exs "output/.../rigged.usdc" --bake-range "Selected"`
+- [ ] Test with custom deviation threshold: `elixir corrective_smooth_baker.exs "output/.../rigged.usdc" --deviation-threshold 0.05`
+- [ ] Test with custom bake quality: `elixir corrective_smooth_baker.exs "output/.../rigged.usdc" --bake-quality 2.0`
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `corrective_smooth.baking`
 - [ ] Verify output USDC file is created
-- [ ] Test error handling with invalid input file
+- [ ] Test error handling with invalid input file: `elixir corrective_smooth_baker.exs "nonexistent.usdc"`
 - [ ] Test help message: `--help`
 
 ---
@@ -159,9 +160,9 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 ## 6. Audio Processing
 
 ### 6.1 kvoicewalk_generation.exs
-- [ ] Test basic voice generation: `kvoicewalk_generation.exs --target-audio "audio.wav" --target-text "text"`
-- [ ] Test with folder: `--target-folder "audio_folder"`
-- [ ] Test with custom starting voice: `--starting-voice "voice.pt"`
+- [ ] Test basic voice generation: `elixir kvoicewalk_generation.exs --target-audio "thirdparty/kvoicewalk/example/target.wav" --target-text "Hello world"`
+- [ ] Test with folder: `--target-folder "thirdparty/young_adult_feminine_clips/344bf332f298134d"`
+- [ ] Test with custom starting voice: `--starting-voice "thirdparty/kvoicewalk/voices/af_bella.pt"`
 - [ ] Test with interpolation: `--interpolate-start`
 - [ ] Test with transcription: `--transcribe-start`
 - [ ] Test with custom population limit: `--population-limit 20`
@@ -169,15 +170,15 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 - [ ] Verify OpenTelemetry trace displays at end
 - [ ] Verify trace shows: `kvoicewalk.generation`
 - [ ] Verify output voice tensor is created
-- [ ] Test error handling with invalid audio path
+- [ ] Test error handling with invalid audio path: `elixir kvoicewalk_generation.exs --target-audio "nonexistent.wav" --target-text "test"`
 - [ ] Test help message: `--help`
 
 ### 6.2 kokoro_tts_generation.exs
 - [ ] Test basic TTS: `elixir kokoro_tts_generation.exs "Hello world"`
-- [ ] Test with input file: `--input-file "text.txt"`
+- [ ] Test with input file: `--input-file "text.txt"` (create a test file with sample text)
 - [ ] Test with custom language: `--lang-code "j"` (Japanese)
 - [ ] Test with custom voice: `--voice "af_bella"`
-- [ ] Test with custom voice file: `--voice-file "voice.pt"`
+- [ ] Test with custom voice file: `--voice-file "thirdparty/kvoicewalk/voices/af_bella.pt"`
 - [ ] Test with custom speed: `--speed 1.5`
 - [ ] Test with custom output format: `--output-format "mp3"`
 - [ ] Test with custom sample rate: `--sample-rate 44100`
@@ -278,8 +279,15 @@ This QA plan covers manual testing of all Elixir CLI scripts after standardizati
 
 ### 11.1 Workflow Testing
 - [ ] Test complete workflow: zimage → qwen3vl (image to description)
+  - Generate image: `elixir zimage_generation.exs "a cat"`
+  - Describe image: `elixir qwen3vl_inference.exs "output/.../zimage_*.png" "What is in this image?"`
 - [ ] Test workflow: partcrafter → unirig (parts to rigged model)
-- [ ] Test workflow: tris_to_quads → corrective_smooth (convert then bake)
+  - Generate parts: `elixir partcrafter_generation.exs "thirdparty/9zs80jkckhrma0ctz4as2vw900.jpeg"`
+  - Rig model: `elixir unirig_generation.exs "output/.../partcrafter_*.glb"`
+- [ ] Test workflow: tris_to_quads → unirig → corrective_smooth (convert then rig then bake)
+  - Convert: `elixir tris_to_quads_converter.exs "thirdparty/monkey.usdc"`
+  - Rig: `elixir unirig_generation.exs "output/.../monkey_quads.usdc"`
+  - Bake: `elixir corrective_smooth_baker.exs "output/.../rigged.usdc"`
 - [ ] Verify intermediate files are handled correctly
 
 ### 11.2 Concurrent Execution
