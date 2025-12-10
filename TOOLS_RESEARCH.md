@@ -142,50 +142,16 @@ Your Elixir scripts follow a consistent pattern:
 
 ### 4. Text Generation (LLMs)
 
-#### Mistral-7B
-
-- **Model**: `mistralai/Mistral-7B-v0.1` or `Open-Orca/Mistral-7B-OpenOrca`
-- **Hugging Face**: https://huggingface.co/mistralai/Mistral-7B-v0.1
-- **Published**: September 2023
+#### Qwen3 (Alibaba)
+- **Model**: `Qwen/Qwen3-8B` or variants
+- **Hugging Face**: https://huggingface.co/Qwen/Qwen3-8B
+- **Paper**: https://arxiv.org/abs/2505.09388
+- **Published**: May 2025
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Popular open-source LLM
-- **Integration**: Text generation, chat, instruction following
-- **Script Name**: `mistral_text_generation.exs`
-- **Features**: 7B parameters, efficient inference, multiple fine-tuned variants
-
-#### Phi-3.5
-
-- **Model**: `microsoft/Phi-3.5-mini-instruct`
-- **Hugging Face**: https://huggingface.co/microsoft/Phi-3.5-mini-instruct
-- **Published**: August 2024
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Small, efficient LLM
-- **Integration**: Instruction-tuned for chat
-- **Script Name**: `phi3_text_generation.exs`
-- **Features**: Small model size (3.8B), high quality outputs, good for resource-constrained environments
-
-#### Gemma (Google)
-
-- **Model**: `google/gemma-2b` or `google/gemma-7b`
-- **Hugging Face**: https://huggingface.co/google/gemma-2b
-- **Published**: February 2024
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Google's fully open-source LLM
-- **Integration**: Text generation, chat
-- **Script Name**: `gemma_text_generation.exs`
-- **Note**: Multiple sizes available
-
-#### Qwen2.5 (Alibaba)
-
-- **Model**: `Qwen/Qwen2.5-7B-Instruct` or variants
-- **Hugging Face**: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
-- **Paper**: https://arxiv.org/abs/2412.15115
-- **Published**: September 2024
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Fully open-source LLM
-- **Integration**: Text generation, chat
-- **Script Name**: `qwen2_text_generation.exs`
-- **Note**: Strong performance
+- **Style Match**: ✅ High - Latest generation open-source LLM
+- **Integration**: Text generation, chat, reasoning, agent capabilities
+- **Script Name**: `qwen3_text_generation.exs`
+- **Features**: Seamless switching between thinking mode (complex reasoning, math, coding) and non-thinking mode (efficient dialogue), superior reasoning capabilities, enhanced human preference alignment, multilingual support, multiple sizes available
 
 ### 5. Code Generation
 
@@ -201,18 +167,6 @@ Your Elixir scripts follow a consistent pattern:
 - **Integration**: Code generation, completion, understanding
 - **Script Name**: `qwen_coder_generation.exs`
 - **Features**: High performance, multiple programming languages, instruction-tuned, better than StarCoder2
-
-#### DeepSeek Coder
-
-- **Model**: `deepseek-ai/deepseek-coder-1.3b-base` or larger variants
-- **Hugging Face**: https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-base
-- **Paper**: https://arxiv.org/abs/2406.11931 (V2)
-- **Published**: June 2024 (V2)
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Fully open-source code generation model
-- **Integration**: General code synthesis and understanding
-- **Script Name**: `deepseek_coder_generation.exs`
-- **Variants**: Base models (1.3B, 6.7B, 33B), instruction-tuned variants
 
 ### 6. Speech Recognition / Transcription
 
@@ -245,29 +199,6 @@ Your Elixir scripts follow a consistent pattern:
 - **Script Name**: `vit_classification.exs`
 - **Note**: Multiple variants and sizes available, fully open-source
 
-#### YOLO (Object Detection)
-
-- **Model**: Various YOLO models (YOLOv8, YOLOv9, etc.)
-- **License**: AGPL-3.0 ✅ FOSS
-- **Style Match**: ✅ High - Real-time object detection
-- **Integration**: Detect and locate objects in images
-- **Script Name**: `yolo_detection.exs`
-- **Features**:
-  - Bounding box detection
-  - Multiple object classes
-  - Real-time performance
-  - Fully open-source (AGPL-3.0)
-
-#### DETR (Detection Transformer)
-
-- **Model**: `facebook/detr-resnet-50` or variants
-- **Hugging Face**: https://huggingface.co/facebook/detr-resnet-50
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Transformer-based detection
-- **Integration**: End-to-end object detection
-- **Script Name**: `detr_detection.exs`
-- **Note**: Fully open-source (Apache 2.0)
-
 #### RF-DETR (Roboflow)
 
 - **Model**: `roboflow/rfdetr-base` or variants (nano, small, medium, base)
@@ -279,13 +210,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - SOTA real-time object detection and segmentation
 - **Integration**: Real-time transformer-based detection and instance segmentation
 - **Script Name**: `rfdetr_detection.exs`
-- **Features**:
-  - First real-time model to exceed 60 AP on COCO
-  - State-of-the-art on RF100-VL benchmark
-  - Instance segmentation support (RF-DETR Seg)
-  - Faster and more accurate than YOLO at similar sizes
-  - Multiple model sizes (Nano, Small, Medium, Base)
-  - Fully open-source (Apache 2.0)
+- **Features**: First real-time model to exceed 60 AP on COCO, state-of-the-art on RF100-VL benchmark, instance segmentation support (RF-DETR Seg), faster and more accurate than YOLO at similar sizes, multiple model sizes (Nano, Small, Medium, Base)
 - **Note**: Based on DETR architecture, optimized for real-time performance
 
 ### 8. Image Segmentation
@@ -329,30 +254,6 @@ Your Elixir scripts follow a consistent pattern:
   - Fast inference (2.25MP depth map in 0.3s on GPU)
   - State-of-the-art performance on in-the-wild scenes
   - Fully open-source (Apache 2.0)
-
-#### DPT (Dense Prediction Transformer)
-
-- **Model**: `Intel/dpt-large` or variants
-- **Hugging Face**: https://huggingface.co/Intel/dpt-large
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Monocular depth estimation
-- **Integration**: Estimate depth from single images
-- **Script Name**: `dpt_depth_estimation.exs`
-- **Features**:
-  - High accuracy
-  - Transformer-based
-  - Multiple variants
-  - Fully permissive MIT license
-
-#### MiDaS
-
-- **Model**: `Intel/MiDaS` or variants
-- **Hugging Face**: https://huggingface.co/Intel/MiDaS
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Popular depth estimation
-- **Integration**: Monocular depth estimation
-- **Script Name**: `midas_depth_estimation.exs`
-- **Note**: Well-established model, fully permissive MIT license
 
 ### 10. Face Recognition / Detection
 
@@ -442,25 +343,6 @@ Your Elixir scripts follow a consistent pattern:
   - Direct generation in UV texture space (feed-forward)
 - **Note**: SIGGRAPH Asia 2024, Best Paper Honorable Mention
 
-#### TEXTure
-
-- **Model**: TEXTurePaper/TEXTure
-- **Hugging Face Space**: https://huggingface.co/spaces/TEXTurePaper/TEXTure
-- **Repository**: https://github.com/TEXTurePaper/TEXTurePaper
-- **Paper**: https://arxiv.org/abs/2302.01721
-- **Published**: 2023 (SIGGRAPH 2023)
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Text-guided texturing of 3D shapes
-- **Integration**: Text-guided texture generation, editing, and transfer
-- **Script Name**: `texture_texturing.exs`
-- **Features**:
-  - Iterative diffusion-based texturing process
-  - Multi-view consistent texturing
-  - Texture editing and refinement
-  - Texture transfer to new geometries
-  - SIGGRAPH 2023 publication
-- **Note**: Uses depth-to-image diffusion models
-
 ## Integration Pattern Template
 
 All new tools should follow this pattern:
@@ -532,43 +414,3 @@ end)
 # Display trace
 SpanCollector.display_trace()
 ```
-
-## Priority Recommendations (NEW Categories Only - FOSS Only)
-
-**All recommendations below are for fully FOSS models with permissive licenses (MIT, Apache 2.0, BSD, or similar).**
-
-### High Priority (Best Style Match & Popularity)
-
-1. **Distil-Whisper** (`distil_whisper_transcription.exs`) - MIT ✅ FOSS - 6x faster, 50% smaller than Whisper, similar accuracy, multilingual
-2. **DeepSeek-OCR** (`deepseek_ocr.exs`) - Apache 2.0 ✅ FOSS - High-accuracy OCR, extracts text from documents/screenshots/receipts, multilingual, production-ready
-3. **Qwen Coder** (`qwen_coder_generation.exs`) - Apache 2.0 ✅ FOSS - SOTA code generation, better than StarCoder2, multiple languages, well-documented
-4. **UltraZoom-2X** (`ultrazoom_upscaling.exs`) - Fast image super-resolution, controllable enhancements, good for post-processing
-5. **LanPaint** (`lanpaint_inpainting.exs`) - Universal inpainting, works with any diffusion model, superior quality
-
-### Medium Priority
-
-6. **DeepSeek Coder** (`deepseek_coder_generation.exs`) - MIT ✅ FOSS - Multiple variants (1.3B, 6.7B, 33B), well-documented
-7. **MediaPipe Pose** (`mediapipe_pose_estimation.exs`) - Real-time pose estimation, mobile-optimized
-8. **RF-DETR** (`rfdetr_detection.exs`) - Apache 2.0 ✅ FOSS - SOTA real-time object detection/segmentation, first to exceed 60 AP on COCO, faster than YOLO, instance segmentation support - https://github.com/roboflow/rf-detr
-9. **DPT Depth Estimation** (`dpt_depth_estimation.exs`) - High-accuracy depth estimation, transformer-based, useful for 3D applications
-
-## Quick Reference: Model Links
-
-**Note:** Full details, URIs, and publishing dates are in the main sections above. This is a quick index.
-
-- **Image-to-Image**: `charrywhite/LanPaint`, `paint-by-inpaint`, Stable Diffusion variants
-- **Super-Resolution**: Real-ESRGAN, `andrewdalpino/UltraZoom-2X`, `wangkanai/flux-upscale`
-- **OCR**: `deepseek-ai/DeepSeek-OCR`, `lightonai/LightOnOCR-1B-1025`, `microsoft/trocr-base-printed`, PaddleOCR
-- **Speech**: `distil-whisper/distil-large-v3`
-- **Object Detection**: `roboflow/rfdetr-base`
-- **Depth**: `apple/DepthPro`, `Intel/dpt-large`, `Intel/MiDaS`
-- **Pose**: YOLO-NAS-POSE, `qualcomm/MediaPipe-Pose-Estimation`, ViTPose
-- **3D Texture**: `Andyx/TEXGen`, TEXTurePaper/TEXTure
-
-## Next Steps
-
-1. Prioritize based on use case
-2. Create new `.exs` scripts following the template
-3. Integrate with existing `shared_utils.exs`
-4. Add OpenTelemetry tracing
-5. Test with actual model downloads
