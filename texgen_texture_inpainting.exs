@@ -48,6 +48,12 @@ OtelSetup.configure()
 # TEXGen uses PyTorch Lightning, diffusers, and various 3D processing libraries
 # All dependencies managed by uv (no pip)
 # Based on official requirements: https://github.com/CVMI-Lab/TEXGen
+
+# Get absolute path to thirdparty/torchsparse for local build
+base_dir = Path.expand(".")
+torchsparse_path = Path.join([base_dir, "thirdparty", "torchsparse"])
+torchsparse_abs_path = Path.expand(torchsparse_path)
+
 Pythonx.uv_init("""
 [project]
 name = "texgen-texture-inpainting"
@@ -95,19 +101,25 @@ dependencies = [
   # Updated to match nvdiffrast wheel requirements
   "torch==2.3.0",
   "torchvision==0.18.0",
-  # torch-cluster: platform-specific wheel URLs for PyTorch 2.2.0+cu121
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.3.0%2Bcpu/torch_cluster-1.6.3%2Bpt23cpu-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
-  "torch-cluster @ https://data.pyg.org/whl/torch-2.3.0%2Bcpu/torch_cluster-1.6.3%2Bpt23cpu-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
-  # torch-sparse: platform-specific wheel URLs for PyTorch 2.2.0+cu121
+  # torch-cluster: platform-specific wheel URLs for PyTorch 2.3.0+cu121
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.3.0%2Bcu121/torch_cluster-1.6.3%2Bpt23cu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+  "torch-cluster @ https://data.pyg.org/whl/torch-2.3.0%2Bcu121/torch_cluster-1.6.3%2Bpt23cu121-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
+  # torch-sparse: platform-specific wheel URLs for PyTorch 2.3.0+cu121
+  "torch-sparse @ https://data.pyg.org/whl/torch-2.3.0%2Bcu121/torch_sparse-0.6.18%2Bpt23cu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+  "torch-sparse @ https://data.pyg.org/whl/torch-2.3.0%2Bcu121/torch_sparse-0.6.18%2Bpt23cu121-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
   #"torchsparse @ https://github.com/Deathdadev/torchsparse/releases/download/v2.1.0-windows/torchsparse-2.1.0-cp310-cp310-win_amd64.whl", 
   # nvdiffrast: use pre-built wheel from Hugging Face (no build required)
   # Note: This wheel may require PyTorch 2.3+ due to ExchangeDevice symbol
   "nvdiffrast @ https://huggingface.co/spaces/microsoft/TRELLIS/resolve/main/wheels/nvdiffrast-0.3.3-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
+  # torchsparse: build from local thirdparty/torchsparse directory
+  # torchsparse now has torch in build-system.requires, so it can be built during uv_init
+  "torchsparse @ file:///#{String.replace(torchsparse_abs_path, "\\", "/")}",
   # Note: TEXGen is used from local thirdparty/TEXGen directory
   # Additional dependencies that may need manual installation:
-  "xformers==0.0.22.post7+cu121",
+  # xformers: install from PyTorch index (commented out - may not be available for all platforms)
+  "xformers",
   #"Pointcept @ https://github.com/Pointcept/Pointcept.git#subdirectory=libs/pointops.git",
-  "spconv-cu121",
+  # "spconv-cu121",
   # - flash-attn (may require manual build)
 ]
 
@@ -369,70 +381,16 @@ if not model_obj.exists():
 if not model_png.exists():
     raise FileNotFoundError(f"model.png not found in {model_dir}")
 
-print("\n=== Step 2: Install torchsparse ===")
-# Install torchsparse from GitHub (requires torch during build, so install after uv_init)
+print("\n=== Step 2: Verify torchsparse ===")
+# Check if torchsparse is available (should be installed via uv_init from local thirdparty/torchsparse)
 try:
     import torchsparse
-    print("[OK] torchsparse is already available")
-except ImportError:
-    print("Installing torchsparse from GitHub...")
-    import subprocess
-    import sys
-    import os
-    
-    # Use Pythonx to run pip install via subprocess
-    # First, ensure pip is available in the environment
-    python_exe = sys.executable
-    
-    # Try using uv to add the package
-    # Find the project directory from the venv path
-    venv_path = os.path.dirname(os.path.dirname(python_exe))
-    project_dir = os.path.dirname(venv_path)
-    
-    # Use uv pip sync or uv pip install
-    # Since we're in a uv-managed environment, we can use uv directly
-    import shutil
-    uv_cmd = shutil.which("uv")
-    
-    if uv_cmd:
-        # Use uv pip install
-        result = subprocess.run(
-            [uv_cmd, "pip", "install", "--no-build-isolation", "git+https://github.com/mit-han-lab/torchsparse.git"],
-            capture_output=True,
-            text=True,
-            env=dict(os.environ, PYTHON=python_exe)
-        )
-    else:
-        # Fallback: try to install using python -m ensurepip first, then pip
-        result = subprocess.run(
-            [python_exe, "-m", "ensurepip", "--upgrade"],
-            capture_output=True,
-            text=True
-        )
-        if result.returncode == 0:
-            result = subprocess.run(
-                [python_exe, "-m", "pip", "install", "--no-build-isolation", "git+https://github.com/mit-han-lab/torchsparse.git"],
-                capture_output=True,
-                text=True
-            )
-        else:
-            result = type('obj', (object,), {'returncode': 1, 'stdout': '', 'stderr': 'pip not available'})()
-    
-    if result.returncode == 0:
-        print("[OK] torchsparse installed successfully")
-        # Verify
-        try:
-            import torchsparse
-            print("[OK] torchsparse import verified")
-        except ImportError:
-            print("[WARN] torchsparse installed but import failed")
-    else:
-        print(f"[WARN] torchsparse installation failed:")
-        if result.stdout:
-            print(f"stdout: {result.stdout[-500:]}")  # Last 500 chars
-        if result.stderr:
-            print(f"stderr: {result.stderr[-500:]}")  # Last 500 chars
-        print("Continuing anyway - TEXGen will fail without torchsparse.")
+    print("[OK] torchsparse is available")
+    print(f"TorchSparse version: {torchsparse.__version__}")
+except ImportError as e:
+    print(f"[WARN] torchsparse not found: {e}")
+    print("Note: torchsparse should be built from thirdparty/torchsparse during uv_init")
+    print("Continuing anyway - TEXGen will fail without torchsparse.")
 
 print("\n=== Step 3: Verify nvdiffrast ===")
 # Check if nvdiffrast is available (should be installed via uv_init)
