@@ -96,7 +96,6 @@ dependencies = [
   "plyfile",
   "psutil",
   "transparent-background>=1.3.4",  # Free open-source background removal using InSPyReNet (ACCV 2022)
-  "nvdiffrast @ https://huggingface.co/spaces/microsoft/TRELLIS/resolve/main/wheels/nvdiffrast-0.3.3-cp310-cp310-linux_x86_64.whl",
   "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
   "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
@@ -105,6 +104,7 @@ dependencies = [
   "detectron2 @ https://github.com/MiroPsota/torch_packages_builder/releases/download/detectron2-0.6%2Bfd27788/detectron2-0.6%2Bfd27788pt2.3.0cu118-cp310-cp310-win_amd64.whl  ; sys_platform == 'win32'",
   "detectron2 @ https://github.com/MiroPsota/torch_packages_builder/releases/download/detectron2-0.6%2Bfd27788/detectron2-0.6%2Bfd27788pt2.3.0cu118-cp310-cp310-linux_x86_64.whl  ; sys_platform == 'linux'",
   "diff_gaussian_rasterization @ https://huggingface.co/spaces/JeffreyXiang/TRELLIS/resolve/main/wheels/diff_gaussian_rasterization-0.0.0-cp310-cp310-linux_x86_64.whl?download=true",
+  "pytorch3d @ https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.9/pytorch3d-0.7.9+pt2.3.0cpu-cp310-cp310-linux_x86_64.whl",  # Alternative to nvdiffrast for texture baking - easier to install
 ]
 
 [tool.uv.sources]
@@ -269,7 +269,7 @@ defmodule ArgsParser do
       merge_groups: Keyword.get(opts, :merge_groups),
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
-      simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
+        simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
     }
@@ -889,74 +889,12 @@ os.chmod(str(torch_ext_dir), 0o755)
 torch_ext_dir_abs = str(torch_ext_dir.resolve())
 print(f"[INFO] torch_extensions cache directory: {torch_ext_dir_abs}")
 
-# Remove empty nvdiffrast_plugin directory if it exists (forces recompilation)
-nvdiffrast_cache = torch_ext_dir / "py310_cu121" / "nvdiffrast_plugin"
-nvdiffrast_so = nvdiffrast_cache / "nvdiffrast_plugin.so"
-if nvdiffrast_cache.exists() and not nvdiffrast_so.exists():
-    print(f"[INFO] Removing empty nvdiffrast cache to force recompilation: {nvdiffrast_cache}")
-    import shutil
-    shutil.rmtree(nvdiffrast_cache, ignore_errors=True)
-
 # Set environment variable with absolute path (for subprocess)
 env["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
 os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
 
-# Fix CUDA_HOME for nvdiffrast compilation
-# nvdiffrast needs CUDA_HOME to compile its CUDA extension
-if torch.cuda.is_available() and "CUDA_HOME" not in os.environ:
-    # Try to detect CUDA_HOME from PyTorch
-    try:
-        import torch.utils.cpp_extension
-        # PyTorch might have CUDA path info
-        cuda_home_candidates = [
-            os.environ.get("CUDA_HOME"),
-            os.environ.get("CUDA_PATH"),
-            "/usr/local/cuda",
-            "/usr/local/cuda-12.1",
-            "/usr/local/cuda-12.0",
-            "/usr/local/cuda-11.8",
-        ]
-        # Check if nvcc exists in candidate paths
-        cuda_home = None
-        for candidate in cuda_home_candidates:
-            if candidate and os.path.exists(candidate):
-                nvcc_path = os.path.join(candidate, "bin", "nvcc")
-                if os.path.exists(nvcc_path):
-                    cuda_home = candidate
-                    break
-        
-        if cuda_home:
-            env["CUDA_HOME"] = cuda_home
-            os.environ["CUDA_HOME"] = cuda_home
-            print(f"[INFO] Detected CUDA_HOME: {cuda_home}")
-        else:
-            print("[WARN] CUDA_HOME not found. nvdiffrast compilation may fail.")
-            print("[INFO] Try setting CUDA_HOME environment variable manually")
-    except Exception as e:
-        print(f"[WARN] Failed to detect CUDA_HOME: {e}")
-
-# Pre-compile nvdiffrast CUDA extension to avoid runtime errors
-# This must happen in the same Python process that will use it
-if torch.cuda.is_available():
-    print("[INFO] Pre-compiling nvdiffrast CUDA extension...")
-    try:
-        import nvdiffrast.torch as dr
-        # Create a context to trigger compilation
-        # This will compile the extension if it doesn't exist
-        test_ctx = dr.RasterizeCudaContext()
-        print("[OK] nvdiffrast CUDA extension compiled successfully")
-        # Verify the .so file was created
-        if nvdiffrast_so.exists():
-            print(f"[OK] Verified nvdiffrast extension exists: {nvdiffrast_so}")
-        else:
-            print(f"[WARN] nvdiffrast context created but .so file not found at: {nvdiffrast_so}")
-    except Exception as e:
-        print(f"[WARN] nvdiffrast pre-compilation failed: {e}")
-        print("[INFO] Will attempt compilation during inference (may be slower)")
-        if "CUDA_HOME" in str(e):
-            print("[INFO] Note: CUDA_HOME may need to be set manually for nvdiffrast compilation")
-        import traceback
-        traceback.print_exc()
+# Note: nvdiffrast is not needed since texture baking is disabled (textured=False)
+# GLB files will be exported without baked textures, avoiding nvdiffrast dependency
 
 # Set up checkpoint directory
 # OmniPart expects checkpoints in ckpt/ directory relative to the OmniPart directory

@@ -1,5 +1,12 @@
 import torch
-import nvdiffrast.torch as dr
+# nvdiffrast is optional - only needed for mesh rendering
+try:
+    import nvdiffrast.torch as dr
+    NVDIFFRAST_AVAILABLE = True
+except ImportError:
+    NVDIFFRAST_AVAILABLE = False
+    dr = None
+
 from easydict import EasyDict as edict
 from ..representations.mesh import MeshExtractResult
 import torch.nn.functional as F
@@ -42,6 +49,9 @@ class MeshRenderer:
         glctx (nvdiffrast.torch.RasterizeGLContext): RasterizeGLContext object for CUDA/OpenGL interop.
         """
     def __init__(self, rendering_options={}, device='cuda'):
+        if not NVDIFFRAST_AVAILABLE:
+            raise ImportError("nvdiffrast is required for MeshRenderer. Please install nvdiffrast or use a different renderer.")
+        
         self.rendering_options = edict({
             "resolution": None,
             "near": None,

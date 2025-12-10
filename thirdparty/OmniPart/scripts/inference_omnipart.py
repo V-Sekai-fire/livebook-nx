@@ -161,8 +161,8 @@ if __name__ == "__main__":
         output_dir=output_dir, 
         simplify_ratio=args.simplify_ratio, 
         save_video=False,  # Video creation disabled
-        save_glb=True,  # Enable GLB export with texture baking
-        textured=True,  # Enable texture baking for photogrammetry quality
+        save_glb=True,  # Enable GLB export
+        textured=True,  # Enable texture baking (uses PyTorch3D if nvdiffrast unavailable)
     )
     print("[DEBUG] save_parts_outputs completed")
     

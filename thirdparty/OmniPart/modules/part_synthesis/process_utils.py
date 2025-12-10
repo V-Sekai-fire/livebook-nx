@@ -46,7 +46,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                 outputs['gaussian'][i],
                 outputs['mesh'][i],
                 simplify=simplify_ratio,  # Mesh simplification factor
-                texture_size=2048,  # Photogrammetry quality: 2048 (or 4096 for highest quality)
+                texture_size=1024,
                 textured=textured,
             )
             # If textured failed, try untextured
