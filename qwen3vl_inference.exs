@@ -244,8 +244,8 @@ SpanCollector.track_span("qwen3vl.download_weights", fn ->
   # Qwen3-VL repository on Hugging Face
   repo_id = "huihui-ai/Huihui-Qwen3-VL-4B-Instruct-abliterated"
 
-  # Download model weights
-  case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL") do
+  # Download model weights (using OpenTelemetry integration)
+  case HuggingFaceDownloader.download_repo(repo_id, model_weights_dir, "Qwen3-VL", true) do
     {:ok, _} -> :ok
     {:error, _} ->
       IO.puts("[WARN] Qwen3-VL download had errors, but continuing...")

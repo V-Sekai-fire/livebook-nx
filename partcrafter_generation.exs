@@ -254,8 +254,8 @@ SpanCollector.track_span("partcrafter.download_weights", fn ->
 
   IO.puts("Using weights directory: #{partcrafter_weights_dir}")
 
-  # Download PartCrafter weights
-  case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weights_dir, "PartCrafter") do
+  # Download PartCrafter weights (using OpenTelemetry integration)
+  case HuggingFaceDownloader.download_repo("wgsxm/PartCrafter", partcrafter_weights_dir, "PartCrafter", true) do
     {:ok, _} -> :ok
     {:error, _} -> IO.puts("[WARN] PartCrafter download had errors, but continuing...")
   end

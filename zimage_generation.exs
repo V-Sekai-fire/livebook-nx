@@ -842,9 +842,6 @@ if failed_count == 0 do
   results
   |> Enum.filter(fn r -> match?({:ok, _}, r) end)
   |> Enum.each(fn {:ok, path} -> IO.puts("  • #{path}") end)
-
-  # Display OpenTelemetry trace summary for performance debugging
-  SpanCollector.display_trace()
 else
   IO.puts("=== PARTIAL SUCCESS (#{success_count}/#{prompt_count} succeeded) ===")
   if success_count > 0 do
@@ -863,8 +860,8 @@ else
     |> Enum.each(fn {{:error, reason}, idx} -> IO.puts("  [#{idx}] #{inspect(reason)}") end)
   end
 
-  # Display OpenTelemetry trace summary for performance debugging
-  SpanCollector.display_trace()
-
   System.halt(1)
 end
+
+# Display OpenTelemetry trace summary for performance debugging
+SpanCollector.display_trace()
