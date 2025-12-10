@@ -38,7 +38,12 @@ def my_voxelization(features, coords, resolution):
 
     indices = indices.unsqueeze(dim=1).expand(-1, result.shape[1], -1)
     features = torch.cat([features, torch.ones(features.shape[0], 1, features.shape[2], device=features.device, dtype=features.dtype)], dim=1)
-    out_feature = result.scatter_(index=indices.long(), src=features, dim=2, reduce='add')
+    # Use scatter_reduce instead of deprecated scatter_ with reduce
+    try:
+        out_feature = result.scatter_reduce_(index=indices.long(), src=features, dim=2, reduce='sum')
+    except AttributeError:
+        # Fallback for older PyTorch versions
+        out_feature = result.scatter_(index=indices.long(), src=features, dim=2, reduce='add')
     cnt = out_feature[:, -1:, :]
     zero_mask = (cnt == 0).to(features.dtype)
     cnt = cnt * (1 - zero_mask) + zero_mask * 1e-5

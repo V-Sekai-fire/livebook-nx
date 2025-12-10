@@ -101,3 +101,5 @@ thirdparty/blender-meshoptimizer/meshoptimizer/
 thirdparty/UniRig/logs/
 thirdparty/UniRig/lightning_logs/
 thirdparty/UniRig/erl_crash.dump
+
+outputs/*

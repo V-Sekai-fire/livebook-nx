@@ -16,16 +16,16 @@ if __name__ == "__main__":
     device = "cuda"
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--image_input", type=str, required=True)
-    parser.add_argument("--mask_input", type=str, required=True)
-    parser.add_argument("--output_root", type=str, default="./output")
+    parser.add_argument("--image-input", "--image_input", type=str, required=True, dest="image_input")
+    parser.add_argument("--mask-input", "--mask_input", type=str, required=True, dest="mask_input")
+    parser.add_argument("--output-root", "--output_root", type=str, default="./output", dest="output_root")
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_inference_steps", type=int, default=25)
-    parser.add_argument("--guidance_scale", type=float, default=7.5)
-    parser.add_argument("--simplify_ratio", type=float, default=0.3)
-    parser.add_argument("--partfield_encoder_path", type=str, default="ckpt/model_objaverse.ckpt")
-    parser.add_argument("--bbox_gen_ckpt", type=str, default="ckpt/bbox_gen.ckpt")
-    parser.add_argument("--part_synthesis_ckpt", type=str, default="omnipart/OmniPart")
+    parser.add_argument("--num-inference-steps", "--num_inference_steps", type=int, default=25, dest="num_inference_steps")
+    parser.add_argument("--guidance-scale", "--guidance_scale", type=float, default=7.5, dest="guidance_scale")
+    parser.add_argument("--simplify-ratio", "--simplify_ratio", type=float, default=0.3, dest="simplify_ratio")
+    parser.add_argument("--partfield-encoder-path", "--partfield_encoder_path", type=str, default="ckpt/model_objaverse.ckpt", dest="partfield_encoder_path")
+    parser.add_argument("--bbox-gen-ckpt", "--bbox_gen_ckpt", type=str, default="ckpt/bbox_gen.ckpt", dest="bbox_gen_ckpt")
+    parser.add_argument("--part-synthesis-ckpt", "--part_synthesis_ckpt", type=str, default="omnipart/OmniPart", dest="part_synthesis_ckpt")
     args = parser.parse_args()
 
     if not os.path.exists(args.partfield_encoder_path):
@@ -71,23 +71,64 @@ if __name__ == "__main__":
     print("[INFO] BboxGen output saved")
 
     part_synthesis_input = prepare_part_synthesis_input(os.path.join(output_dir, "voxel_coords.npy"), os.path.join(output_dir, "bboxes.npy"), ordered_mask_input)
-    part_synthesis_output = part_synthesis_pipeline.get_slat(
-        img_black_bg, 
-        part_synthesis_input['coords'], 
-        [part_synthesis_input['part_layouts']], 
-        part_synthesis_input['masks'],
-        seed=args.seed,
-        slat_sampler_params={"steps": args.num_inference_steps, "cfg_strength": args.guidance_scale},
-        formats=['mesh', 'gaussian', 'radiance_field'],
-        preprocess_image=False,
-    )
-    save_parts_outputs(
-        part_synthesis_output, 
-        output_dir=output_dir, 
-        simplify_ratio=args.simplify_ratio, 
-        save_video=False,
-        save_glb=True,
-        textured=False,
-    )
-    merge_parts(output_dir)
-    print("[INFO] PartSynthesis output saved")
+    
+    # Validate inputs before processing
+    print(f"[INFO] Validating inputs...")
+    print(f"  Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
+    print(f"  Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
+    print(f"  Masks shape: {part_synthesis_input['masks'].shape}")
+    print(f"  Mask value range: [{part_synthesis_input['masks'].min().item()}, {part_synthesis_input['masks'].max().item()}]")
+    
+    # Enable error handling for numerical issues
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False  # Disable benchmark to avoid numerical issues
+    
+    # Try to generate all formats together first (most efficient)
+    # If SIGFPE occurs, it will crash the process, but that's a CUDA/driver issue
+    print("[INFO] Generating mesh, gaussian, and radiance_field formats...")
+    print("[DEBUG] Clearing CUDA cache...")
+    torch.cuda.empty_cache()
+    print("[DEBUG] CUDA cache cleared")
+    
+    print("[DEBUG] Starting get_slat call...")
+    print(f"[DEBUG] Image shape: {img_black_bg.shape if hasattr(img_black_bg, 'shape') else type(img_black_bg)}")
+    print(f"[DEBUG] Coords shape: {part_synthesis_input['coords'].shape}")
+    print(f"[DEBUG] Part layouts count: {len(part_synthesis_input['part_layouts'])}")
+    print(f"[DEBUG] Masks shape: {part_synthesis_input['masks'].shape}")
+    print(f"[DEBUG] Seed: {args.seed}, Steps: {args.num_inference_steps}, Guidance: {args.guidance_scale}")
+    
+    try:
+        part_synthesis_output = part_synthesis_pipeline.get_slat(
+            img_black_bg, 
+            part_synthesis_input['coords'], 
+            [part_synthesis_input['part_layouts']], 
+            part_synthesis_input['masks'],
+            seed=args.seed,
+            slat_sampler_params={"steps": args.num_inference_steps, "cfg_strength": args.guidance_scale},
+            formats=['mesh', 'gaussian', 'radiance_field'],
+            preprocess_image=False,
+        )
+        print("[DEBUG] get_slat completed successfully")
+        print(f"[DEBUG] Output keys: {list(part_synthesis_output.keys())}")
+        
+        print("[DEBUG] Starting save_parts_outputs...")
+        save_parts_outputs(
+            part_synthesis_output, 
+            output_dir=output_dir, 
+            simplify_ratio=args.simplify_ratio, 
+            save_video=False,
+            save_glb=True,
+            textured=False,
+        )
+        print("[DEBUG] save_parts_outputs completed")
+        
+        print("[DEBUG] Starting merge_parts...")
+        merge_parts(output_dir)
+        print("[DEBUG] merge_parts completed")
+        
+        print(f"[INFO] PartSynthesis output saved (formats: {', '.join(part_synthesis_output.keys())})")
+    except Exception as e:
+        print(f"[ERROR] Exception during part synthesis: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise

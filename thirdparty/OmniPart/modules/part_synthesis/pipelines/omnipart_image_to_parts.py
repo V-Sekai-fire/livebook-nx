@@ -337,10 +337,19 @@ class OmniPartImageTo3DPipeline(Pipeline):
         if isinstance(image, Image.Image):
             if preprocess_image:
                 image = self.preprocess_image(image)
+            print("[DEBUG] get_slat: Getting condition...")
             cond = self.get_cond([image])
+            print(f"[DEBUG] get_slat: Condition shape: {cond.shape if hasattr(cond, 'shape') else type(cond)}")
             torch.manual_seed(seed)
+            print("[DEBUG] get_slat: Starting sample_slat...")
             slat = self.sample_slat(cond, coords, part_layouts, masks, slat_sampler_params)
-            return self.decode_slat(self.divide_slat(slat, part_layouts), formats)
+            print("[DEBUG] get_slat: sample_slat completed, dividing SLAT...")
+            divided_slat = self.divide_slat(slat, part_layouts)
+            print(f"[DEBUG] get_slat: Divided into {len(divided_slat)} parts")
+            print("[DEBUG] get_slat: Starting decode_slat...")
+            result = self.decode_slat(divided_slat, formats)
+            print("[DEBUG] get_slat: decode_slat completed")
+            return result
         elif isinstance(image, list):
             if preprocess_image:
                 image = [self.preprocess_image(i) for i in image]
@@ -358,26 +367,62 @@ class OmniPartImageTo3DPipeline(Pipeline):
     
     def decode_slat(
         self,
-        slat: sp.SparseTensor,
+        slat: Union[sp.SparseTensor, List[sp.SparseTensor]],
         formats: List[str] = ['mesh', 'gaussian', 'radiance_field'],
     ) -> dict:
         """
         Decode the structured latent.
 
         Args:
-            slat (sp.SparseTensor): The structured latent
+            slat (sp.SparseTensor or List[sp.SparseTensor]): The structured latent(s)
             formats (List[str]): The formats to decode to
             
         Returns:
             dict: Decoded outputs in requested formats
         """
         ret = {}
+        print(f"[DEBUG] decode_slat: Starting decode for formats: {formats}")
+        if isinstance(slat, list):
+            print(f"[DEBUG] decode_slat: Received list of {len(slat)} SLAT tensors")
+            for i, s in enumerate(slat):
+                print(f"[DEBUG] decode_slat: SLAT[{i}] - feats: {s.feats.shape if hasattr(s, 'feats') else 'N/A'}, coords: {s.coords.shape if hasattr(s, 'coords') else 'N/A'}")
+        else:
+            print(f"[DEBUG] decode_slat: SLAT - feats: {slat.feats.shape if hasattr(slat, 'feats') else 'N/A'}, coords: {slat.coords.shape if hasattr(slat, 'coords') else 'N/A'}")
+        
         if 'mesh' in formats:
-            ret['mesh'] = self.models['slat_decoder_mesh'](slat)
+            print("[DEBUG] decode_slat: Decoding mesh format...")
+            try:
+                ret['mesh'] = self.models['slat_decoder_mesh'](slat)
+                print("[DEBUG] decode_slat: Mesh format decoded successfully")
+            except Exception as e:
+                print(f"[ERROR] decode_slat: Mesh format failed: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+                
         if 'gaussian' in formats:
-            ret['gaussian'] = self.models['slat_decoder_gs'](slat)
+            print("[DEBUG] decode_slat: Decoding gaussian format...")
+            try:
+                ret['gaussian'] = self.models['slat_decoder_gs'](slat)
+                print("[DEBUG] decode_slat: Gaussian format decoded successfully")
+            except Exception as e:
+                print(f"[ERROR] decode_slat: Gaussian format failed: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+                
         if 'radiance_field' in formats:
-            ret['radiance_field'] = self.models['slat_decoder_rf'](slat)
+            print("[DEBUG] decode_slat: Decoding radiance_field format...")
+            try:
+                ret['radiance_field'] = self.models['slat_decoder_rf'](slat)
+                print("[DEBUG] decode_slat: Radiance_field format decoded successfully")
+            except Exception as e:
+                print(f"[ERROR] decode_slat: Radiance_field format failed: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                raise
+                
+        print(f"[DEBUG] decode_slat: Completed. Returning {len(ret)} formats")
         return ret
     
     def divide_slat(

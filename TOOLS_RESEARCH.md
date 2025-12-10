@@ -62,6 +62,27 @@ Your Elixir scripts follow a consistent pattern:
   - Gradio demo included
 - **Note**: SIGGRAPH Asia 2025, unified framework outperforms specialized methods in their respective tasks
 
+#### Qwen-Image-Edit-2509
+
+- **Model**: `Qwen/Qwen-Image-Edit-2509`
+- **Hugging Face**: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
+- **Paper**: https://arxiv.org/abs/2508.02324
+- **Published**: September 2025
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
+- **Style Match**: ✅ High - Advanced image-to-image editing with multi-image support
+- **Integration**: Image editing with text prompts, multi-image composition, ControlNet support
+- **Script Name**: `qwen_image_edit.exs`
+- **Features**:
+  - **Multi-image Editing**: Supports 1-3 input images with combinations like "person + person", "person + product", "person + scene"
+  - **Enhanced Consistency**: Improved person editing (facial identity preservation, portrait styles, pose transformations), product editing (product poster generation), and text editing (content, fonts, colors, materials)
+  - **Native ControlNet Support**: Depth maps, edge maps, keypoint maps, and more
+  - **Text Rendering**: Unique text rendering capability for meme images and long text with identity preservation
+  - **Old Photo Restoration**: Enhanced person consistency for restoration tasks
+  - **Precise Text Editing**: Significantly enhanced text editing capabilities
+  - Based on Qwen-Image-Edit architecture with further training
+  - Uses `QwenImageEditPlusPipeline` from diffusers
+- **Note**: Monthly iteration of Qwen-Image-Edit, significant improvements over August 2025 release
+
 ### 4. Text Generation (LLMs)
 
 #### Qwen3 (Alibaba)
