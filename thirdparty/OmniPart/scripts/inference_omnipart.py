@@ -160,9 +160,9 @@ if __name__ == "__main__":
         part_synthesis_output, 
         output_dir=output_dir, 
         simplify_ratio=args.simplify_ratio, 
-        save_video=True,  # Enable Gaussian splat video export
-        save_glb=False,  # Disable GLB to speed up (texture baking is slow)
-        textured=False,  # Not needed if save_glb=False
+        save_video=False,  # Video creation disabled
+        save_glb=True,  # Enable GLB export with texture baking
+        textured=True,  # Enable texture baking for photogrammetry quality
     )
     print("[DEBUG] save_parts_outputs completed")
     

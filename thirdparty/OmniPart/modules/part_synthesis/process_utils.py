@@ -5,7 +5,7 @@ from modules.part_synthesis.utils import render_utils, postprocessing_utils
 from modules.part_synthesis.representations.gaussian.gaussian_model import Gaussian
 
 
-def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, save_glb=True, textured=True):
+def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, save_glb=True, textured=True):
     os.makedirs(output_dir, exist_ok=True)
     
     # Debug: Print settings
