@@ -398,13 +398,16 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     
     # Create mesh with UV coordinates
     # PyTorch3D needs vertices and faces, and can handle UVs via TexturesUV
+    # TexturesUV expects:
+    # - faces_uvs: (N, F, 3) - batch dimension required
+    # - verts_uvs: (N, V, 2) - batch dimension required
     meshes = Meshes(
         verts=vertices,
         faces=faces,
         textures=TexturesUV(
             maps=torch.zeros((batch_size, 1, 1, 1, 3), device=device),  # Dummy texture
-            faces_uvs=faces,
-            verts_uvs=uvs
+            faces_uvs=faces.unsqueeze(0) if len(faces.shape) == 2 else faces,  # Add batch dim if needed: (F, 3) -> (1, F, 3)
+            verts_uvs=uvs.unsqueeze(0) if len(uvs.shape) == 2 else uvs  # Add batch dim if needed: (V, 2) -> (1, V, 2)
         )
     )
     
