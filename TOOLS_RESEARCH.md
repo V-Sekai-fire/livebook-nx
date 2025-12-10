@@ -37,10 +37,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Training-free diffusion inpainting
 - **Integration**: Universal inpainting sampler with "think mode"
 - **Script Name**: `lanpaint_inpainting.exs`
-- **Features**:
-  - Multiple iterations before denoising
-  - Works with any diffusion model
-  - Superior inpainting quality
+- **Features**: Multiple iterations before denoising, works with any diffusion model, superior quality
 
 #### Paint-by-Inpaint
 
@@ -70,10 +67,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Fast single image super-resolution
 - **Integration**: Two-stage "zoom in and enhance" mechanism
 - **Script Name**: `ultrazoom_upscaling.exs`
-- **Features**:
-  - Fast and scalable
-  - Controllable enhancements (denoising, deblurring, deartifacting)
-  - Full RGB support
+- **Features**: Fast and scalable, controllable enhancements (denoising, deblurring, deartifacting), full RGB support
 
 #### FLUX Upscale
 
@@ -82,10 +76,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Real-ESRGAN upscale models
 - **Integration**: 2x and 4x upscaling with detail enhancement
 - **Script Name**: `flux_upscale.exs`
-- **Features**:
-  - Post-processing for AI-generated images
-  - Noise reduction and artifact removal
-  - CPU and GPU compatible
+- **Features**: Post-processing for AI-generated images, noise reduction, CPU and GPU compatible
 
 #### Real-ESRGAN
 
@@ -111,11 +102,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - High-accuracy OCR model
 - **Integration**: Extracts text from complex visual inputs
 - **Script Name**: `deepseek_ocr.exs`
-- **Features**:
-  - Documents, screenshots, receipts, natural scenes
-  - Multilingual support
-  - High accuracy
-  - Fully open-source (Apache 2.0)
+- **Features**: Documents, screenshots, receipts, natural scenes, multilingual support, high accuracy
 
 #### LightOnOCR-1B
 
@@ -164,11 +151,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Popular open-source LLM
 - **Integration**: Text generation, chat, instruction following
 - **Script Name**: `mistral_text_generation.exs`
-- **Features**:
-  - 7B parameters
-  - Efficient inference
-  - Multiple fine-tuned variants
-  - Fully permissive Apache 2.0 license
+- **Features**: 7B parameters, efficient inference, multiple fine-tuned variants
 
 #### Phi-3.5
 
@@ -179,11 +162,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Small, efficient LLM
 - **Integration**: Instruction-tuned for chat
 - **Script Name**: `phi3_text_generation.exs`
-- **Features**:
-  - Small model size (3.8B)
-  - High quality outputs
-  - Good for resource-constrained environments
-  - Fully permissive MIT license
+- **Features**: Small model size (3.8B), high quality outputs, good for resource-constrained environments
 
 #### Gemma (Google)
 
@@ -194,7 +173,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Google's fully open-source LLM
 - **Integration**: Text generation, chat
 - **Script Name**: `gemma_text_generation.exs`
-- **Note**: Fully permissive Apache 2.0 license, multiple sizes available
+- **Note**: Multiple sizes available
 
 #### Qwen2.5 (Alibaba)
 
@@ -206,7 +185,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Fully open-source LLM
 - **Integration**: Text generation, chat
 - **Script Name**: `qwen2_text_generation.exs`
-- **Note**: Apache 2.0 license, strong performance
+- **Note**: Strong performance
 
 ### 5. Code Generation
 
@@ -221,12 +200,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - State-of-the-art code LLM
 - **Integration**: Code generation, completion, understanding
 - **Script Name**: `qwen_coder_generation.exs`
-- **Features**:
-  - High performance on code generation tasks
-  - Multiple programming languages
-  - Instruction-tuned for code tasks
-  - Fully permissive Apache 2.0 license
-  - Better performance than StarCoder2
+- **Features**: High performance, multiple programming languages, instruction-tuned, better than StarCoder2
 
 #### DeepSeek Coder
 
@@ -238,10 +212,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Fully open-source code generation model
 - **Integration**: General code synthesis and understanding
 - **Script Name**: `deepseek_coder_generation.exs`
-- **Variants**:
-  - Base models (1.3B, 6.7B, 33B)
-  - Instruction-tuned variants
-  - Fully permissive MIT license
+- **Variants**: Base models (1.3B, 6.7B, 33B), instruction-tuned variants
 
 ### 6. Speech Recognition / Transcription
 
@@ -568,127 +539,31 @@ SpanCollector.display_trace()
 
 ### High Priority (Best Style Match & Popularity)
 
-1. **Distil-Whisper** (`distil_whisper_transcription.exs`)
-
-   - **License**: MIT ✅ FOSS
-   - Faster, smaller version of Whisper (6x faster, 50% smaller)
-   - Complements Kokoro TTS (transcription vs generation)
-   - Similar accuracy to Whisper, multilingual
-   - Multiple size variants
-
-2. **DeepSeek-OCR** (`deepseek_ocr.exs`)
-
-   - **License**: Apache 2.0 ✅ FOSS
-   - High-accuracy OCR
-   - Extracts text from documents, screenshots, receipts
-   - Multilingual support
-   - Production-ready
-
-3. **Qwen Coder** (`qwen_coder_generation.exs`)
-
-   - **License**: Apache 2.0 ✅ FOSS
-   - State-of-the-art code generation
-   - Better performance than StarCoder2
-   - Multiple programming languages
-   - Fully permissive Apache 2.0 license
-   - Well-documented
-
-4. **UltraZoom-2X** (`ultrazoom_upscaling.exs`)
-
-   - Fast image super-resolution
-   - Controllable enhancements
-   - Good for post-processing
-
-5. **LanPaint** (`lanpaint_inpainting.exs`)
-   - Universal inpainting
-   - Works with any diffusion model
-   - Superior quality
+1. **Distil-Whisper** (`distil_whisper_transcription.exs`) - MIT ✅ FOSS - 6x faster, 50% smaller than Whisper, similar accuracy, multilingual
+2. **DeepSeek-OCR** (`deepseek_ocr.exs`) - Apache 2.0 ✅ FOSS - High-accuracy OCR, extracts text from documents/screenshots/receipts, multilingual, production-ready
+3. **Qwen Coder** (`qwen_coder_generation.exs`) - Apache 2.0 ✅ FOSS - SOTA code generation, better than StarCoder2, multiple languages, well-documented
+4. **UltraZoom-2X** (`ultrazoom_upscaling.exs`) - Fast image super-resolution, controllable enhancements, good for post-processing
+5. **LanPaint** (`lanpaint_inpainting.exs`) - Universal inpainting, works with any diffusion model, superior quality
 
 ### Medium Priority
 
-6. **DeepSeek Coder** (`deepseek_coder_generation.exs`)
+6. **DeepSeek Coder** (`deepseek_coder_generation.exs`) - MIT ✅ FOSS - Multiple variants (1.3B, 6.7B, 33B), well-documented
+7. **MediaPipe Pose** (`mediapipe_pose_estimation.exs`) - Real-time pose estimation, mobile-optimized
+8. **RF-DETR** (`rfdetr_detection.exs`) - Apache 2.0 ✅ FOSS - SOTA real-time object detection/segmentation, first to exceed 60 AP on COCO, faster than YOLO, instance segmentation support - https://github.com/roboflow/rf-detr
+9. **DPT Depth Estimation** (`dpt_depth_estimation.exs`) - High-accuracy depth estimation, transformer-based, useful for 3D applications
 
-   - Fully open-source code generation (MIT)
-   - Multiple variants (1.3B, 6.7B, 33B)
-   - Well-documented
+## Quick Reference: Model Links
 
-7. **MediaPipe Pose** (`mediapipe_pose_estimation.exs`)
+**Note:** Full details, URIs, and publishing dates are in the main sections above. This is a quick index.
 
-   - Real-time pose estimation
-   - Mobile-optimized
-   - Good for applications
-
-8. **RF-DETR** (`rfdetr_detection.exs`)
-
-   - **License**: Apache 2.0 ✅ FOSS
-   - SOTA real-time object detection and segmentation
-   - First real-time model to exceed 60 AP on COCO
-   - Faster and more accurate than YOLO at similar sizes
-   - Instance segmentation support
-   - Repository: https://github.com/roboflow/rf-detr
-
-9. **DPT Depth Estimation** (`dpt_depth_estimation.exs`)
-
-   - High-accuracy depth estimation
-   - Transformer-based
-   - Useful for 3D applications
-
-10. **RF-DETR** (`rfdetr_detection.exs`)
-    - **License**: Apache 2.0 ✅ FOSS
-    - SOTA real-time object detection and segmentation
-    - First real-time model to exceed 60 AP on COCO
-    - Faster and more accurate than YOLO at similar sizes
-    - Instance segmentation support
-    - Repository: https://github.com/roboflow/rf-detr
-
-## Model Repository Links (NEW Categories)
-
-### Image-to-Image (Inpainting/Outpainting)
-
-- `charrywhite/LanPaint`
-- `paint-by-inpaint`
-- Various Stable Diffusion inpainting models
-
-### Image Super-Resolution
-
-1. Various Real-ESRGAN models (BSD-3-Clause) - Most established, multiple variants for different content types
-2. `andrewdalpino/UltraZoom-2X` - Fast, scalable, controllable enhancements
-3. `wangkanai/flux-upscale` - Real-ESRGAN based, optimized for AI-generated images
-
-### OCR / Document Processing
-
-- `deepseek-ai/DeepSeek-OCR` (Apache 2.0)
-- `lightonai/LightOnOCR-1B-1025` (Apache 2.0)
-- `microsoft/trocr-base-printed` (MIT)
-- Various PaddleOCR models (Apache 2.0)
-
-### Speech Recognition
-
-- `distil-whisper/distil-large-v3`
-
-### Image Classification / Object Detection
-
-- `roboflow/rfdetr-base` (Apache 2.0) - https://github.com/roboflow/rf-detr
-
-### Depth Estimation
-
-- `apple/DepthPro` or `apple/DepthPro-hf` (Apache 2.0) - Sharp monocular metric depth, fast inference
-
-### Face Recognition / Detection
-
-- Various AuraFace models
-- Various RetinaFace models
-
-### Pose Estimation
-
-- YOLO-NAS-POSE (Deci-AI) - https://github.com/Deci-AI/super-gradients/blob/master/YOLONAS-POSE.md
-- `qualcomm/MediaPipe-Pose-Estimation`
-- Various ViTPose models
-
-### 3D Texture Inpainting / Generation
-
-- `Andyx/TEXGen` (Apache 2.0 ✅ OSI) - https://huggingface.co/Andyx/TEXGen | https://github.com/CVMI-Lab/TEXGen | https://arxiv.org/abs/2411.14740
-- TEXTurePaper/TEXTure (MIT ✅ OSI) - https://huggingface.co/spaces/TEXTurePaper/TEXTure | https://github.com/TEXTurePaper/TEXTurePaper | https://arxiv.org/abs/2302.01721
+- **Image-to-Image**: `charrywhite/LanPaint`, `paint-by-inpaint`, Stable Diffusion variants
+- **Super-Resolution**: Real-ESRGAN, `andrewdalpino/UltraZoom-2X`, `wangkanai/flux-upscale`
+- **OCR**: `deepseek-ai/DeepSeek-OCR`, `lightonai/LightOnOCR-1B-1025`, `microsoft/trocr-base-printed`, PaddleOCR
+- **Speech**: `distil-whisper/distil-large-v3`
+- **Object Detection**: `roboflow/rfdetr-base`
+- **Depth**: `apple/DepthPro`, `Intel/dpt-large`, `Intel/MiDaS`
+- **Pose**: YOLO-NAS-POSE, `qualcomm/MediaPipe-Pose-Estimation`, ViTPose
+- **3D Texture**: `Andyx/TEXGen`, TEXTurePaper/TEXTure
 
 ## Next Steps
 
