@@ -113,7 +113,20 @@ class BBoxOPT(OPTForCausalLM):
         batch_size, cur_len = input_ids.shape
         this_peer_finished = False
         unfinished_sequences = torch.ones(batch_size, dtype=torch.long, device=input_ids.device)
-        model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+        # Initialize cache position - handle different transformers versions
+        # Note: _get_initial_cache_position signature changed in transformers 4.40.0+
+        # It now requires generation_config as well: _get_initial_cache_position(input_ids, generation_config, model_kwargs)
+        try:
+            # Try new signature with generation_config (transformers >= 4.40.0)
+            model_kwargs = self._get_initial_cache_position(input_ids, generation_config, model_kwargs)
+        except TypeError:
+            # Fallback: try older signature (transformers < 4.40.0)
+            try:
+                model_kwargs = self._get_initial_cache_position(input_ids, model_kwargs)
+            except (TypeError, AttributeError):
+                # If method doesn't exist or signature changed, skip - cache position will be handled automatically
+                # by prepare_inputs_for_generation in newer versions
+                pass
 
         while self._has_unfinished_sequences(
             this_peer_finished, synced_gpus, device=input_ids.device
