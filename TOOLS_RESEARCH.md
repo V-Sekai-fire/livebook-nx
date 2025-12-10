@@ -390,6 +390,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Hugging Face**: https://huggingface.co/Andyx/TEXGen
 - **Repository**: https://github.com/CVMI-Lab/TEXGen
 - **Paper**: https://arxiv.org/abs/2411.14740
+- **Published**: November 2024 (SIGGRAPH Asia 2024)
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Generative diffusion model for mesh textures
 - **Integration**: 3D texture inpainting, completion, and synthesis
@@ -407,6 +408,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Hugging Face Space**: https://huggingface.co/spaces/TEXTurePaper/TEXTure
 - **Repository**: https://github.com/TEXTurePaper/TEXTurePaper
 - **Paper**: https://arxiv.org/abs/2302.01721
+- **Published**: 2023 (SIGGRAPH 2023)
 - **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Text-guided texturing of 3D shapes
 - **Integration**: Text-guided texture generation, editing, and transfer
@@ -418,22 +420,6 @@ Your Elixir scripts follow a consistent pattern:
   - Texture transfer to new geometries
   - SIGGRAPH 2023 publication
 - **Note**: Uses depth-to-image diffusion models
-
-#### Meta 3D TextureGen
-- **Model**: Meta's 3D TextureGen (check for model release)
-- **Paper**: https://huggingface.co/papers/2407.02430
-- **arXiv**: https://arxiv.org/abs/2407.02430
-- **License**: ⚠️ **Custom Non-OSI License** (likely Meta Research License - research/non-commercial use only, check actual release terms)
-- **Style Match**: ✅ High - Fast and consistent texture generation
-- **Integration**: Feedforward texture generation for 3D objects
-- **Script Name**: `meta_texturegen.exs`
-- **Features**:
-  - Fast generation (< 20 seconds)
-  - Globally consistent textures
-  - High-resolution UV texture maps
-  - Texture enhancement network (4K resolution)
-  - Works with arbitrary geometries
-- **Note**: Check Hugging Face for model availability
 
 ## Integration Pattern Template
 
@@ -613,7 +599,6 @@ SpanCollector.display_trace()
 ### 3D Texture Inpainting / Generation
 - `Andyx/TEXGen` (Apache 2.0 ✅ OSI) - https://huggingface.co/Andyx/TEXGen | https://github.com/CVMI-Lab/TEXGen | https://arxiv.org/abs/2411.14740
 - TEXTurePaper/TEXTure (MIT ✅ OSI) - https://huggingface.co/spaces/TEXTurePaper/TEXTure | https://github.com/TEXTurePaper/TEXTurePaper | https://arxiv.org/abs/2302.01721
-- Meta 3D TextureGen (⚠️ Custom Non-OSI License) - https://huggingface.co/papers/2407.02430 | https://arxiv.org/abs/2407.02430 (check for model release)
 
 ## Next Steps
 
