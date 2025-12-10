@@ -888,8 +888,39 @@ torch_ext_dir.mkdir(parents=True, exist_ok=True)
 os.chmod(str(torch_ext_dir), 0o755)
 torch_ext_dir_abs = str(torch_ext_dir.resolve())
 print(f"[INFO] torch_extensions cache directory: {torch_ext_dir_abs}")
-# Set environment variable with absolute path
+
+# Remove empty nvdiffrast_plugin directory if it exists (forces recompilation)
+nvdiffrast_cache = torch_ext_dir / "py310_cu121" / "nvdiffrast_plugin"
+nvdiffrast_so = nvdiffrast_cache / "nvdiffrast_plugin.so"
+if nvdiffrast_cache.exists() and not nvdiffrast_so.exists():
+    print(f"[INFO] Removing empty nvdiffrast cache to force recompilation: {nvdiffrast_cache}")
+    import shutil
+    shutil.rmtree(nvdiffrast_cache, ignore_errors=True)
+
+# Set environment variable with absolute path (for subprocess)
 env["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
+os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
+
+# Pre-compile nvdiffrast CUDA extension to avoid runtime errors
+# This must happen in the same Python process that will use it
+if torch.cuda.is_available():
+    print("[INFO] Pre-compiling nvdiffrast CUDA extension...")
+    try:
+        import nvdiffrast.torch as dr
+        # Create a context to trigger compilation
+        # This will compile the extension if it doesn't exist
+        test_ctx = dr.RasterizeCudaContext()
+        print("[OK] nvdiffrast CUDA extension compiled successfully")
+        # Verify the .so file was created
+        if nvdiffrast_so.exists():
+            print(f"[OK] Verified nvdiffrast extension exists: {nvdiffrast_so}")
+        else:
+            print(f"[WARN] nvdiffrast context created but .so file not found at: {nvdiffrast_so}")
+    except Exception as e:
+        print(f"[WARN] nvdiffrast pre-compilation failed: {e}")
+        print("[INFO] Will attempt compilation during inference (may be slower)")
+        import traceback
+        traceback.print_exc()
 
 # Set up checkpoint directory
 # OmniPart expects checkpoints in ckpt/ directory relative to the OmniPart directory

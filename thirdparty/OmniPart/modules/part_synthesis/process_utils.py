@@ -7,6 +7,9 @@ from modules.part_synthesis.representations.gaussian.gaussian_model import Gauss
 
 def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, save_glb=True, textured=True):
     os.makedirs(output_dir, exist_ok=True)
+    
+    # Debug: Print settings
+    print(f"[DEBUG] save_parts_outputs settings: save_video={save_video}, save_glb={save_glb}, textured={textured}")
 
     # num_parts = min(len(outputs['gaussian']), len(outputs['radiance_field']), len(outputs['mesh']))
     num_parts = min(len(outputs['gaussian']), len(outputs['mesh']))
@@ -16,17 +19,28 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
         if i == 0:
             continue
         if save_video:
-            # For photogrammetry: Only render radiance field videos (final textured result)
-            # Skip Gaussian splat and mesh videos to save time and storage
-            if 'radiance_field' in outputs and i < len(outputs['radiance_field']):
-                video = render_utils.render_video(outputs['radiance_field'][i], resolution=2048, ssaa=4)['color']
-                rf_video_path = f"{output_dir}/part{i}_rf_text.mp4"
-                if os.path.exists(rf_video_path):
-                    os.remove(rf_video_path)
-                imageio.mimsave(rf_video_path, video, fps=30)
-                print(f"[OK] Radiance field video saved: {rf_video_path}")
-            
+            # Render Gaussian splat videos with photogrammetry quality
+            # Photogrammetry quality: 2048 resolution, SSAA=2 for anti-aliasing, 300 frames for smooth rotation
+            if 'gaussian' in outputs and i < len(outputs['gaussian']):
+                print(f"[INFO] Rendering Gaussian splat video for part {i} (photogrammetry quality: 2048px, SSAA=2)...")
+                try:
+                    video = render_utils.render_video(
+                        outputs['gaussian'][i], 
+                        resolution=2048,  # Photogrammetry quality: 2048 (matches texture size)
+                        ssaa=2,  # Supersampling anti-aliasing for smooth edges
+                        num_frames=300  # Smooth rotation (300 frames)
+                    )['color']
+                    gs_video_path = f"{output_dir}/part{i}_gs.mp4"
+                    if os.path.exists(gs_video_path):
+                        os.remove(gs_video_path)
+                    imageio.mimsave(gs_video_path, video, fps=30)
+                    print(f"[OK] Gaussian splat video saved (photogrammetry quality): {gs_video_path}")
+                except Exception as e:
+                    print(f"[WARN] Failed to render Gaussian splat video for part {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
         if save_glb:
+            print(f"[DEBUG] Generating GLB for part {i} (save_glb=True)")
             # Try with textured first, fall back to untextured if it fails
             glb = postprocessing_utils.to_glb(
                 outputs['gaussian'][i],
