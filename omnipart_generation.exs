@@ -19,7 +19,7 @@
 #   --output-dir, -o <path>       Output directory (default: outputs)
 #   --segment-only                 Only generate segmentation, don't generate 3D model
 #   --apply-merge                  Apply merge groups to existing segmentation state
-#   --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
+#   --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 600)
 #   --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
 #   --num-inference-steps <int>   Number of inference steps (default: 25)
 #   --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
@@ -146,7 +146,7 @@ defmodule ArgsParser do
       --output-dir, -o <path>       Output directory (default: output)
       --segment-only                 Only generate segmentation, don't generate 3D model
       --apply-merge                  Apply merge groups to existing segmentation state
-      --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
+      --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 600)
       --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
       --num-inference-steps <int>   Number of inference steps (default: 25)
       --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
@@ -264,7 +264,7 @@ defmodule ArgsParser do
       segment_only: segment_only,
       apply_merge: apply_merge,
       output_dir: Keyword.get(opts, :output_dir, "output"),
-      size_threshold: Keyword.get(opts, :size_threshold, 2000),
+      size_threshold: Keyword.get(opts, :size_threshold, 600),
       merge_groups: Keyword.get(opts, :merge_groups),
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
@@ -371,7 +371,7 @@ auto_generate_mask = config.get('auto_generate_mask', False)
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
 output_dir = config.get('output_dir', 'output')
-size_threshold = config.get('size_threshold', 2000)
+size_threshold = config.get('size_threshold', 600)
 merge_groups_str = config.get('merge_groups')
 num_inference_steps = config.get('num_inference_steps', 25)
 guidance_scale = config.get('guidance_scale', 7.5)
