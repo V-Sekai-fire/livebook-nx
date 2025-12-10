@@ -306,6 +306,20 @@ Your Elixir scripts follow a consistent pattern:
 
 ### 9. Depth Estimation
 
+#### DepthPro (Apple)
+- **Model**: `apple/DepthPro` or `apple/DepthPro-hf`
+- **License**: Apache 2.0 ✅ FOSS
+- **Style Match**: ✅ High - Sharp monocular metric depth estimation
+- **Integration**: Zero-shot metric monocular depth estimation
+- **Script Name**: `depthpro_estimation.exs`
+- **Features**:
+  - High-resolution depth maps with sharp boundaries
+  - Metric depth with absolute scale (no camera intrinsics needed)
+  - Fast inference (2.25MP depth map in 0.3s on GPU)
+  - State-of-the-art performance on in-the-wild scenes
+  - Fully open-source (Apache 2.0)
+- **Repository**: https://github.com/apple/ml-depth-pro
+
 #### DPT (Dense Prediction Transformer)
 - **Model**: `Intel/dpt-large` or variants
 - **License**: MIT ✅ FOSS
@@ -517,21 +531,15 @@ SpanCollector.display_trace()
 - Various Stable Diffusion inpainting models
 
 ### Image Super-Resolution
-- `andrewdalpino/UltraZoom-2X`
-- `wangkanai/flux-upscale`
-- Various Real-ESRGAN models
+1. Various Real-ESRGAN models (BSD-3-Clause) - Most established, multiple variants for different content types
+2. `andrewdalpino/UltraZoom-2X` - Fast, scalable, controllable enhancements
+3. `wangkanai/flux-upscale` - Real-ESRGAN based, optimized for AI-generated images
 
 ### OCR / Document Processing
 - `deepseek-ai/DeepSeek-OCR` (Apache 2.0)
 - `lightonai/LightOnOCR-1B-1025` (Apache 2.0)
 - `microsoft/trocr-base-printed` (MIT)
 - Various PaddleOCR models (Apache 2.0)
-
-### Text Generation (LLMs)
-- `mistralai/Mistral-7B-v0.1` (Apache 2.0)
-- `microsoft/Phi-3.5-mini-instruct` (MIT)
-- `google/gemma-2b` (Apache 2.0)
-- `Qwen/Qwen2.5-7B-Instruct` (Apache 2.0)
 
 ### Code Generation
 - `Qwen/Qwen2.5-Coder-7B-Instruct` (Apache 2.0)
@@ -549,13 +557,10 @@ SpanCollector.display_trace()
 - `facebook/detr-resnet-50`
 - `roboflow/rfdetr-base` (Apache 2.0) - https://github.com/roboflow/rf-detr
 
-### Image Segmentation
-- `facebook/sam-vit-base`
-- `nvidia/segformer-b0-finetuned-ade-640-640`
-
 ### Depth Estimation
-- `Intel/dpt-large`
-- `Intel/MiDaS`
+- `apple/DepthPro` or `apple/DepthPro-hf` (Apache 2.0) - Sharp monocular metric depth, fast inference
+- `Intel/dpt-large` (MIT)
+- `Intel/MiDaS` (MIT)
 
 ### Face Recognition / Detection
 - Various AuraFace models
