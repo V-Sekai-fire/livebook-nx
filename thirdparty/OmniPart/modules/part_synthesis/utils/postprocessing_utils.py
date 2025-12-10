@@ -577,7 +577,8 @@ def to_glb(
         vertices, faces, uvs = parametrize_mesh(vertices, faces)
 
         # Render multi-view images from the appearance representation for texturing
-        observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=100)
+        # Photogrammetry quality: 2048 resolution, 120 views for better coverage
+        observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=2048, nviews=120)
         # Create masks from the rendered images
         masks = [np.any(observation > 0, axis=-1) for observation in observations]
         # Convert camera parameters to numpy

@@ -16,23 +16,15 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
         if i == 0:
             continue
         if save_video:
-            video = render_utils.render_video(outputs['gaussian'][i])['color']
-            gaussian_video_path = f"{output_dir}/part{i}_gs_text.mp4"
-            if os.path.exists(gaussian_video_path):
-                os.remove(gaussian_video_path)
-            imageio.mimsave(gaussian_video_path, video, fps=30)
-            
-            video = render_utils.render_video(outputs['radiance_field'][i])['color']
-            rf_video_path = f"{output_dir}/part{i}_rf_text.mp4"
-            if os.path.exists(rf_video_path):
-                os.remove(rf_video_path)
-            imageio.mimsave(rf_video_path, video, fps=30)
-            
-            video = render_utils.render_video(outputs['mesh'][i])['normal']
-            mesh_video_path = f"{output_dir}/part{i}_mesh_text.mp4"
-            if os.path.exists(mesh_video_path):
-                os.remove(mesh_video_path)
-            imageio.mimsave(mesh_video_path, video, fps=30)
+            # For photogrammetry: Only render radiance field videos (final textured result)
+            # Skip Gaussian splat and mesh videos to save time and storage
+            if 'radiance_field' in outputs and i < len(outputs['radiance_field']):
+                video = render_utils.render_video(outputs['radiance_field'][i], resolution=2048, ssaa=4)['color']
+                rf_video_path = f"{output_dir}/part{i}_rf_text.mp4"
+                if os.path.exists(rf_video_path):
+                    os.remove(rf_video_path)
+                imageio.mimsave(rf_video_path, video, fps=30)
+                print(f"[OK] Radiance field video saved: {rf_video_path}")
             
         if save_glb:
             # Try with textured first, fall back to untextured if it fails
@@ -40,7 +32,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
                 outputs['gaussian'][i],
                 outputs['mesh'][i],
                 simplify=simplify_ratio,  # Mesh simplification factor
-                texture_size=1024,
+                texture_size=2048,  # Photogrammetry quality: 2048 (or 4096 for highest quality)
                 textured=textured,
             )
             # If textured failed, try untextured
@@ -50,7 +42,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
                     outputs['gaussian'][i],
                     outputs['mesh'][i],
                     simplify=simplify_ratio,
-                    texture_size=1024,
+                    texture_size=2048,  # Photogrammetry quality: 2048
                     textured=False,  # Disable texture baking
                 )
             if glb is None:

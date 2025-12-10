@@ -160,9 +160,9 @@ if __name__ == "__main__":
         part_synthesis_output, 
         output_dir=output_dir, 
         simplify_ratio=args.simplify_ratio, 
-        save_video=False,
+        save_video=True,  # Enable video export (including radiance field videos)
         save_glb=True,
-        textured=False,
+        textured=True,  # Enable texturing for better quality
     )
     print("[DEBUG] save_parts_outputs completed")
     

@@ -104,6 +104,7 @@ dependencies = [
   "torch_scatter @ https://data.pyg.org/whl/torch-2.4.0%2Bcu121/torch_scatter-2.1.2%2Bpt24cu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "detectron2 @ https://github.com/MiroPsota/torch_packages_builder/releases/download/detectron2-0.6%2Bfd27788/detectron2-0.6%2Bfd27788pt2.3.0cu118-cp310-cp310-win_amd64.whl  ; sys_platform == 'win32'",
   "detectron2 @ https://github.com/MiroPsota/torch_packages_builder/releases/download/detectron2-0.6%2Bfd27788/detectron2-0.6%2Bfd27788pt2.3.0cu118-cp310-cp310-linux_x86_64.whl  ; sys_platform == 'linux'",
+  "diff_gaussian_rasterization @ https://huggingface.co/spaces/JeffreyXiang/TRELLIS/resolve/main/wheels/diff_gaussian_rasterization-0.0.0-cp310-cp310-linux_x86_64.whl?download=true",
 ]
 
 [tool.uv.sources]
