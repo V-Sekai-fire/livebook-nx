@@ -212,20 +212,6 @@ Your Elixir scripts follow a consistent pattern:
   - Fully permissive Apache 2.0 license
   - Better performance than StarCoder2
 
-#### StarCoder2
-- **Model**: `bigcode/starcoder2-15b` or variants
-- **Hugging Face**: https://huggingface.co/bigcode/starcoder2-15b
-- **Published**: February 2024
-- **License**: BigCode Open RAIL-M ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - State-of-the-art code LLM
-- **Integration**: Code generation, completion, understanding
-- **Script Name**: `starcoder2_generation.exs`
-- **Features**:
-  - Trained on permissively licensed code
-  - 80+ programming languages
-  - Git commits, GitHub issues, Jupyter notebooks
-  - Open RAIL-M license (permissive with use restrictions)
-
 #### DeepSeek Coder
 - **Model**: `deepseek-ai/deepseek-coder-1.3b-base` or larger variants
 - **Hugging Face**: https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-base
@@ -240,37 +226,7 @@ Your Elixir scripts follow a consistent pattern:
   - Instruction-tuned variants
   - Fully permissive MIT license
 
-#### WizardCoder
-- **Model**: `WizardLMTeam/WizardCoder-15B-V1.0` or variants
-- **Hugging Face**: https://huggingface.co/WizardLMTeam/WizardCoder-15B-V1.0
-- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Evol-Instruct fine-tuned
-- **Integration**: Complex coding instructions
-- **Script Name**: `wizardcoder_generation.exs`
-- **Features**:
-  - High HumanEval scores
-  - Follows complex instructions
-  - Multiple size variants
-  - Fully open-source (Apache 2.0)
-
 ### 6. Speech Recognition / Transcription
-
-#### Whisper (OpenAI)
-- **Model**: `openai/whisper-large-v3` or smaller variants
-- **Hugging Face**: https://huggingface.co/openai/whisper-large-v3
-- **Repository**: https://github.com/openai/whisper
-- **Paper**: https://cdn.openai.com/papers/whisper.pdf
-- **Published**: September 2022
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - State-of-the-art speech recognition
-- **Integration**: Audio → Text transcription
-- **Script Name**: `whisper_transcription.exs`
-- **Features**:
-  - Multilingual ASR
-  - Speech translation
-  - Multiple sizes (tiny to large)
-  - High accuracy
-  - Fully permissive MIT license
 
 #### Distil-Whisper
 - **Model**: `distil-whisper/distil-large-v3` or variants
