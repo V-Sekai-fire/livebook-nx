@@ -289,7 +289,7 @@ except Exception as e:
     print(f"⚠ Unexpected error during kernel setup: {e}")
 
 def download_weights(url, dest):
-    \"\"\"Download model weights\"\"\"
+    # Download model weights
     start = time.time()
     print(f"Downloading model weights from: {url}")
     print(f"Destination: {dest}")

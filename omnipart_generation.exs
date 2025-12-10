@@ -77,7 +77,7 @@ dependencies = [
   "xformers==0.0.27.post2",
   "numpy==1.26.4",  # Pin to 1.26.4 to fix spconv SIGFPE with CUDA 12.1 (NumPy 2.0+ incompatible)
   "spconv-cu120==2.3.6",
-  "transformers==4.50.3",
+  "transformers @ git+https://github.com/huggingface/transformers.git@ff13eb668aa03f151ded71636d723f2e490ad967",
   "pydantic==2.10.6",
   "diffusers==0.32.0",
   "lightning==2.2",
@@ -666,48 +666,227 @@ if auto_generate_mask:
             )
             sam_ckpt_path = Path(sam_ckpt_path)
     
-    # Load SAM model
-    print("Loading SAM model...")
+    # Load SAM 3 model for background removal with text prompts
+    # Reuse SAM3 setup from sam3_video_segmentation.exs (same model path)
+    print("Loading SAM 3 model for background removal...")
+    try:
+        from transformers import Sam3VideoModel, Sam3VideoProcessor
+        import torch
+        import os
+        import time
+        import tarfile
+        
+        # Find SAM3 model path - check multiple locations
+        # Priority: workspace root (where sam3_video_segmentation.exs stores it)
+        workspace_root = Path(omnipart_dir).parent.parent.resolve()  # Go up from thirdparty/OmniPart to workspace root
+        sam3_model_path = workspace_root / "checkpoints"
+        print(f"[DEBUG] Checking SAM3 path 1 (workspace root): {sam3_model_path} (exists: {sam3_model_path.exists()})")
+        
+        # 2. Check current working directory
+        if not sam3_model_path.exists():
+            sam3_model_path = Path("checkpoints").resolve()
+            print(f"[DEBUG] Checking SAM3 path 2 (cwd): {sam3_model_path} (exists: {sam3_model_path.exists()})")
+        
+        # 3. Check checkpoint_dir as fallback
+        if not sam3_model_path.exists():
+            sam3_model_path = Path(checkpoint_dir) / "checkpoints"
+            print(f"[DEBUG] Checking SAM3 path 3 (checkpoint_dir): {sam3_model_path} (exists: {sam3_model_path.exists()})")
+        
+        # 4. Check for sam3-video-base in checkpoint_dir
+        if not sam3_model_path.exists():
+            sam3_model_path = Path(checkpoint_dir) / "sam3-video-base"
+            print(f"[DEBUG] Checking SAM3 path 4 (checkpoint_dir/sam3-video-base): {sam3_model_path} (exists: {sam3_model_path.exists()})")
+        
+        # 5. Try parent of checkpoint_dir
+        if not sam3_model_path.exists():
+            sam3_model_path = Path(checkpoint_dir).parent.parent / "checkpoints"
+            print(f"[DEBUG] Checking SAM3 path 5 (checkpoint_dir parent): {sam3_model_path} (exists: {sam3_model_path.exists()})")
+        
+        # 6. If still not found, download using same method as sam3_video_segmentation.exs
+        if not sam3_model_path.exists():
+            print("[INFO] SAM3 model not found, downloading...")
+            MODEL_URL = "https://weights.replicate.delivery/default/facebook/sam3/model.tar"
+            # Download to current working directory checkpoints (same as sam3_video_segmentation.exs)
+            workspace_root = Path(omnipart_dir).parent.parent.resolve() if 'omnipart_dir' in locals() else Path.cwd()
+            dest = str(workspace_root)
+            os.makedirs(dest, exist_ok=True)
+            temp_file = os.path.join(dest, "model.tar")
+            
+            # Download
+            try:
+                import requests
+                response = requests.get(MODEL_URL, stream=True)
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
+                downloaded = 0
+                with open(temp_file, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                percent = (downloaded / total_size) * 100
+                                print(f"\rDownloading: {percent:.1f}%", end='', flush=True)
+                print()  # New line after progress
+            except ImportError:
+                import urllib.request
+                urllib.request.urlretrieve(MODEL_URL, temp_file)
+            
+            # Extract
+            print("Extracting model archive...")
+            with tarfile.open(temp_file, 'r:*') as tar:
+                tar.extractall(dest)
+            
+            # Clean up
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+            
+            sam3_model_path = workspace_root / "checkpoints"
+        
+        # Resolve to absolute path
+        sam3_model_path = sam3_model_path.resolve()
+        print(f"Using SAM3 model path: {sam3_model_path}")
+        
+        # Verify model files exist
+        if not sam3_model_path.exists():
+            raise ValueError(f"SAM3 model path does not exist: {sam3_model_path}")
+        
+        # Check for model files
+        model_files = list(sam3_model_path.glob("*.safetensors")) + list(sam3_model_path.glob("*.bin"))
+        if not model_files:
+            raise ValueError(f"No model files found in {sam3_model_path}")
+        
+        # Setup device and dtype (same as sam3_video_segmentation.exs)
+        sam3_device = "cuda" if torch.cuda.is_available() else "cpu"
+        sam3_dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else torch.float16
+        
+        # Load SAM3 model
+        print(f"Loading SAM3 model from {sam3_model_path}...")
+        sam3_model = Sam3VideoModel.from_pretrained(str(sam3_model_path)).to(sam3_device, dtype=sam3_dtype).eval()
+        sam3_processor = Sam3VideoProcessor.from_pretrained(str(sam3_model_path))
+        
+        # Process image as single-frame video
+        print("Removing background using SAM3 with text prompt...")
+        img = Image.open(image_path).convert("RGB")
+        img_array = np.array(img)
+        frames = [Image.fromarray(img_array)]
+        
+        # Initialize inference session
+        inference_session = sam3_processor.init_video_session(
+            video=frames,
+            inference_device=sam3_device,
+            processing_device="cpu",
+            video_storage_device="cpu",
+            dtype=sam3_dtype
+        )
+        
+        # Add text prompt for foreground object (exclude background and shadows)
+        text_prompt = "object, foreground, main subject"
+        print(f"Using text prompt: '{text_prompt}'")
+        inference_session = sam3_processor.add_text_prompt(
+            inference_session=inference_session,
+            text=text_prompt
+        )
+        
+        # Run inference
+        print("Running SAM3 segmentation for background removal...")
+        foreground_mask = None
+        for model_outputs in sam3_model.propagate_in_video_iterator(
+            inference_session=inference_session,
+            max_frame_num_to_track=1
+        ):
+            processed_outputs = sam3_processor.postprocess_outputs(inference_session, model_outputs)
+            masks = processed_outputs.get('masks', None)
+            
+            if masks is not None:
+                if isinstance(masks, torch.Tensor):
+                    masks = masks.cpu().numpy()
+                
+                if len(masks) > 0:
+                    # Combine all masks to create foreground mask
+                    combined_mask = np.zeros((img_array.shape[0], img_array.shape[1]), dtype=bool)
+                    for mask in masks:
+                        if mask.ndim == 3 and mask.shape[0] == 1:
+                            mask = mask.squeeze(0)
+                        elif mask.ndim == 2:
+                            pass
+                        else:
+                            mask = mask.squeeze()
+                        
+                        if mask.shape != (img_array.shape[0], img_array.shape[1]):
+                            mask = cv2.resize(mask.astype(np.uint8), 
+                                            (img_array.shape[1], img_array.shape[0]), 
+                                            interpolation=cv2.INTER_NEAREST)
+                        
+                        combined_mask = np.logical_or(combined_mask, mask > 0.0)
+                    
+                    foreground_mask = combined_mask
+                    break
+        
+        # Clean up SAM3 model from memory
+        del sam3_model, sam3_processor, inference_session
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
+        
+        if foreground_mask is None:
+            raise ValueError("SAM3 failed to generate foreground mask")
+        
+        # Apply morphological operations to clean up the mask
+        kernel = np.ones((5, 5), np.uint8)
+        foreground_mask = cv2.morphologyEx(foreground_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
+        foreground_mask = cv2.morphologyEx(foreground_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        foreground_mask = foreground_mask.astype(bool)
+        
+        # Create RGBA image with transparent background
+        processed_image = Image.fromarray(img_array).convert("RGBA")
+        alpha_channel = np.array(processed_image.split()[3])
+        alpha_channel[~foreground_mask] = 0  # Set background to transparent
+        # Smooth alpha channel edges to reduce aliasing
+        alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (5, 5), 1.0).astype(np.uint8)
+        processed_image.putalpha(Image.fromarray(alpha_channel))
+        
+    except Exception as e:
+        print(f"[WARN] SAM3 background removal failed: {e}")
+        print("[INFO] Falling back to SAM-based background removal...")
+        
+        # Fallback to original SAM
+        from segment_anything import SamAutomaticMaskGenerator, build_sam
+        sam_model = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device)
+        sam_mask_generator = SamAutomaticMaskGenerator(sam_model)
+        
+        # Process image
+        print("Removing background using SAM...")
+        img = Image.open(image_path).convert("RGB")
+        img_array = np.array(img)
+        
+        # Generate SAM masks
+        print("Generating SAM masks for background removal...")
+        masks = sam_mask_generator.generate(img_array)
+        
+        # Sort masks by area (largest first) and combine
+        sorted_masks = sorted(masks, key=lambda x: x["area"], reverse=True)
+        foreground_mask = np.zeros((img_array.shape[0], img_array.shape[1]), dtype=bool)
+        
+        for mask_data in sorted_masks:
+            mask = mask_data["segmentation"]
+            foreground_mask = np.logical_or(foreground_mask, mask)
+        
+        # Apply morphological operations
+        kernel = np.ones((5, 5), np.uint8)
+        foreground_mask = cv2.morphologyEx(foreground_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
+        foreground_mask = cv2.morphologyEx(foreground_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        foreground_mask = foreground_mask.astype(bool)
+        
+        # Create RGBA image
+        processed_image = Image.fromarray(img_array).convert("RGBA")
+        alpha_channel = np.array(processed_image.split()[3])
+        alpha_channel[~foreground_mask] = 0
+        alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (5, 5), 1.0).astype(np.uint8)
+        processed_image.putalpha(Image.fromarray(alpha_channel))
+    
+    # Also load SAM for later segmentation (still needed for part segmentation)
+    print("Loading SAM model for part segmentation...")
     sam_model = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device)
     sam_mask_generator = SamAutomaticMaskGenerator(sam_model)
-    
-    # Use SAM for background removal (no registration required, already loaded)
-    print("Removing background using SAM...")
-    
-    # Process image
-    print("Processing image...")
-    img = Image.open(image_path).convert("RGB")
-    img_array = np.array(img)
-    
-    # Generate SAM masks to identify foreground objects
-    print("Generating SAM masks for background removal...")
-    masks = sam_mask_generator.generate(img_array)
-    
-    # Sort masks by area (largest first) and combine to create foreground mask
-    sorted_masks = sorted(masks, key=lambda x: x["area"], reverse=True)
-    
-    # Create combined foreground mask
-    foreground_mask = np.zeros((img_array.shape[0], img_array.shape[1]), dtype=bool)
-    
-    # Combine all masks to create foreground mask
-    for mask_data in sorted_masks:
-        mask = mask_data["segmentation"]
-        foreground_mask = np.logical_or(foreground_mask, mask)
-    
-    # Apply morphological operations to clean up the mask
-    # Remove small holes and smooth edges
-    kernel = np.ones((5, 5), np.uint8)
-    foreground_mask = cv2.morphologyEx(foreground_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
-    foreground_mask = cv2.morphologyEx(foreground_mask, cv2.MORPH_OPEN, kernel, iterations=1)
-    foreground_mask = foreground_mask.astype(bool)
-    
-    # Create RGBA image with transparent background
-    processed_image = Image.fromarray(img_array).convert("RGBA")
-    alpha_channel = np.array(processed_image.split()[3])
-    alpha_channel[~foreground_mask] = 0  # Set background to transparent
-    # Smooth alpha channel edges to reduce aliasing
-    alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (5, 5), 1.0).astype(np.uint8)
-    processed_image.putalpha(Image.fromarray(alpha_channel))
     
     # Resize and pad to square
     processed_image = resize_and_pad_to_square(processed_image)
