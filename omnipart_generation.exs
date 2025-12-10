@@ -869,7 +869,6 @@ env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
 env["CUDA_LAUNCH_BLOCKING"] = "0"  # Set to 1 for debugging, 0 for performance
 # Disable some optimizations that might cause numerical issues
 env["TORCH_USE_CUDA_DSA"] = "0"
-
 # Verify CUDA is available
 if torch.cuda.is_available():
     print(f"CUDA available: {torch.cuda.is_available()}")
@@ -878,6 +877,19 @@ if torch.cuda.is_available():
         print(f"Using GPU {gpu}: {torch.cuda.get_device_name(0)}")
 else:
     print("[WARN] CUDA is not available. Inference will be slower on CPU.")
+
+# Fix nvdiffrast path issue: ensure torch_extensions directory exists with absolute path
+# nvdiffrast needs to compile its CUDA extension on first use, and it uses torch.utils.cpp_extension
+# which stores compiled extensions in ~/.cache/torch_extensions/
+# Use absolute path to avoid path resolution issues
+torch_ext_dir = Path.home().resolve() / ".cache" / "torch_extensions"
+torch_ext_dir.mkdir(parents=True, exist_ok=True)
+# Ensure the directory is writable
+os.chmod(str(torch_ext_dir), 0o755)
+torch_ext_dir_abs = str(torch_ext_dir.resolve())
+print(f"[INFO] torch_extensions cache directory: {torch_ext_dir_abs}")
+# Set environment variable with absolute path
+env["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
 
 # Set up checkpoint directory
 # OmniPart expects checkpoints in ckpt/ directory relative to the OmniPart directory
