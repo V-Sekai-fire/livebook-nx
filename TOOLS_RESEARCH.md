@@ -383,6 +383,58 @@ Your Elixir scripts follow a consistent pattern:
 - **Script Name**: `vitpose_estimation.exs`
 - **Note**: Fully open-source (Apache 2.0)
 
+### 12. 3D Texture Inpainting / Generation
+
+#### TEXGen
+- **Model**: `Andyx/TEXGen`
+- **Hugging Face**: https://huggingface.co/Andyx/TEXGen
+- **Repository**: https://github.com/CVMI-Lab/TEXGen
+- **Paper**: https://arxiv.org/abs/2411.14740
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
+- **Style Match**: ✅ High - Generative diffusion model for mesh textures
+- **Integration**: 3D texture inpainting, completion, and synthesis
+- **Script Name**: `texgen_texture_inpainting.exs`
+- **Features**:
+  - High-resolution texture map generation in UV space
+  - Supports inpainting, completion, and synthesis
+  - Text and image-guided texture generation
+  - 700M parameter diffusion model
+  - Direct generation in UV texture space (feed-forward)
+- **Note**: SIGGRAPH Asia 2024, Best Paper Honorable Mention
+
+#### TEXTure
+- **Model**: TEXTurePaper/TEXTure
+- **Hugging Face Space**: https://huggingface.co/spaces/TEXTurePaper/TEXTure
+- **Repository**: https://github.com/TEXTurePaper/TEXTurePaper
+- **Paper**: https://arxiv.org/abs/2302.01721
+- **License**: MIT ✅ FOSS (OSI-approved)
+- **Style Match**: ✅ High - Text-guided texturing of 3D shapes
+- **Integration**: Text-guided texture generation, editing, and transfer
+- **Script Name**: `texture_texturing.exs`
+- **Features**:
+  - Iterative diffusion-based texturing process
+  - Multi-view consistent texturing
+  - Texture editing and refinement
+  - Texture transfer to new geometries
+  - SIGGRAPH 2023 publication
+- **Note**: Uses depth-to-image diffusion models
+
+#### Meta 3D TextureGen
+- **Model**: Meta's 3D TextureGen (check for model release)
+- **Paper**: https://huggingface.co/papers/2407.02430
+- **arXiv**: https://arxiv.org/abs/2407.02430
+- **License**: ⚠️ **Custom Non-OSI License** (likely Meta Research License - research/non-commercial use only, check actual release terms)
+- **Style Match**: ✅ High - Fast and consistent texture generation
+- **Integration**: Feedforward texture generation for 3D objects
+- **Script Name**: `meta_texturegen.exs`
+- **Features**:
+  - Fast generation (< 20 seconds)
+  - Globally consistent textures
+  - High-resolution UV texture maps
+  - Texture enhancement network (4K resolution)
+  - Works with arbitrary geometries
+- **Note**: Check Hugging Face for model availability
+
 ## Integration Pattern Template
 
 All new tools should follow this pattern:
@@ -541,26 +593,14 @@ SpanCollector.display_trace()
 - `microsoft/trocr-base-printed` (MIT)
 - Various PaddleOCR models (Apache 2.0)
 
-### Code Generation
-- `Qwen/Qwen2.5-Coder-7B-Instruct` (Apache 2.0)
-- `bigcode/starcoder2-15b` (BigCode Open RAIL-M)
-- `deepseek-ai/deepseek-coder-1.3b-base` (MIT)
-- `WizardLMTeam/WizardCoder-15B-V1.0` (Apache 2.0)
-
 ### Speech Recognition
-- `openai/whisper-large-v3`
 - `distil-whisper/distil-large-v3`
 
 ### Image Classification / Object Detection
-- `google/vit-base-patch16-224`
-- Various YOLO models
-- `facebook/detr-resnet-50`
 - `roboflow/rfdetr-base` (Apache 2.0) - https://github.com/roboflow/rf-detr
 
 ### Depth Estimation
 - `apple/DepthPro` or `apple/DepthPro-hf` (Apache 2.0) - Sharp monocular metric depth, fast inference
-- `Intel/dpt-large` (MIT)
-- `Intel/MiDaS` (MIT)
 
 ### Face Recognition / Detection
 - Various AuraFace models
@@ -569,6 +609,11 @@ SpanCollector.display_trace()
 ### Pose Estimation
 - `qualcomm/MediaPipe-Pose-Estimation`
 - Various ViTPose models
+
+### 3D Texture Inpainting / Generation
+- `Andyx/TEXGen` (Apache 2.0 ✅ OSI) - https://huggingface.co/Andyx/TEXGen | https://github.com/CVMI-Lab/TEXGen | https://arxiv.org/abs/2411.14740
+- TEXTurePaper/TEXTure (MIT ✅ OSI) - https://huggingface.co/spaces/TEXTurePaper/TEXTure | https://github.com/TEXTurePaper/TEXTurePaper | https://arxiv.org/abs/2302.01721
+- Meta 3D TextureGen (⚠️ Custom Non-OSI License) - https://huggingface.co/papers/2407.02430 | https://arxiv.org/abs/2407.02430 (check for model release)
 
 ## Next Steps
 
