@@ -27,6 +27,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### LanPaint (Universal Inpainting)
 - **Model**: `charrywhite/LanPaint`
+- **Hugging Face**: https://huggingface.co/charrywhite/LanPaint
+- **Repository**: https://github.com/scraed/LanPaint
+- **Paper**: https://arxiv.org/abs/2502.03491
+- **Published**: February 2025
+- **License**: GPL-3.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Training-free diffusion inpainting
 - **Integration**: Universal inpainting sampler with "think mode"
 - **Script Name**: `lanpaint_inpainting.exs`
@@ -37,6 +42,7 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Paint-by-Inpaint
 - **Model**: `paint-by-inpaint`
+- **Hugging Face**: https://huggingface.co/paint-by-inpaint
 - **Style Match**: ✅ High - Advanced inpainting model
 - **Integration**: Fine-tuned for inpainting tasks
 - **Script Name**: `paint_by_inpaint.exs`
@@ -53,6 +59,9 @@ Your Elixir scripts follow a consistent pattern:
 
 #### UltraZoom-2X
 - **Model**: `andrewdalpino/UltraZoom-2X`
+- **Hugging Face**: https://huggingface.co/andrewdalpino/UltraZoom-2X
+- **Paper**: https://arxiv.org/abs/2506.13756
+- **Published**: June 2025
 - **Style Match**: ✅ High - Fast single image super-resolution
 - **Integration**: Two-stage "zoom in and enhance" mechanism
 - **Script Name**: `ultrazoom_upscaling.exs`
@@ -63,6 +72,7 @@ Your Elixir scripts follow a consistent pattern:
 
 #### FLUX Upscale
 - **Model**: `wangkanai/flux-upscale`
+- **Hugging Face**: https://huggingface.co/wangkanai/flux-upscale
 - **Style Match**: ✅ High - Real-ESRGAN upscale models
 - **Integration**: 2x and 4x upscaling with detail enhancement
 - **Script Name**: `flux_upscale.exs`
@@ -73,7 +83,10 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Real-ESRGAN
 - **Model**: Various Real-ESRGAN models
-- **License**: BSD-3-Clause ✅ FOSS
+- **Repository**: https://github.com/xinntao/Real-ESRGAN
+- **Paper**: https://arxiv.org/abs/2107.10833
+- **Published**: July 2021 (ICCV 2021)
+- **License**: BSD-3-Clause ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Popular upscaling solution
 - **Integration**: General purpose or specialized (anime, photo, text)
 - **Script Name**: `realesrgan_upscaling.exs`
@@ -83,7 +96,10 @@ Your Elixir scripts follow a consistent pattern:
 
 #### DeepSeek-OCR
 - **Model**: `deepseek-ai/DeepSeek-OCR`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/deepseek-ai/DeepSeek-OCR
+- **Repository**: https://github.com/deepseek-ai/DeepSeek-OCR
+- **Published**: October 2024
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - High-accuracy OCR model
 - **Integration**: Extracts text from complex visual inputs
 - **Script Name**: `deepseek_ocr.exs`
@@ -95,7 +111,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### LightOnOCR-1B
 - **Model**: `lightonai/LightOnOCR-1B-1025`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/lightonai/LightOnOCR-1B-1025
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Efficient OCR model
 - **Integration**: 1B parameter model for text extraction
 - **Script Name**: `lighton_ocr.exs`
@@ -103,7 +120,10 @@ Your Elixir scripts follow a consistent pattern:
 
 #### PaddleOCR
 - **Model**: Various PaddleOCR models
-- **License**: Apache 2.0 ✅ FOSS
+- **Repository**: https://github.com/PaddlePaddle/PaddleOCR
+- **Paper**: https://arxiv.org/abs/2507.05595
+- **Published**: May 2020 (initial release, ongoing development)
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Open-source OCR solution
 - **Integration**: End-to-end OCR with detector and recognizer
 - **Script Name**: `paddleocr.exs`
@@ -115,7 +135,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### TrOCR (Microsoft)
 - **Model**: `microsoft/trocr-base-printed` or variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/microsoft/trocr-base-printed
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Transformer-based OCR
 - **Integration**: Text recognition from images
 - **Script Name**: `trocrocr.exs`
@@ -125,7 +146,9 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Mistral-7B
 - **Model**: `mistralai/Mistral-7B-v0.1` or `Open-Orca/Mistral-7B-OpenOrca`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/mistralai/Mistral-7B-v0.1
+- **Published**: September 2023
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Popular open-source LLM
 - **Integration**: Text generation, chat, instruction following
 - **Script Name**: `mistral_text_generation.exs`
@@ -137,7 +160,9 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Phi-3.5
 - **Model**: `microsoft/Phi-3.5-mini-instruct`
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/microsoft/Phi-3.5-mini-instruct
+- **Published**: August 2024
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Small, efficient LLM
 - **Integration**: Instruction-tuned for chat
 - **Script Name**: `phi3_text_generation.exs`
@@ -149,7 +174,9 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Gemma (Google)
 - **Model**: `google/gemma-2b` or `google/gemma-7b`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/google/gemma-2b
+- **Published**: February 2024
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Google's fully open-source LLM
 - **Integration**: Text generation, chat
 - **Script Name**: `gemma_text_generation.exs`
@@ -157,7 +184,10 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Qwen2.5 (Alibaba)
 - **Model**: `Qwen/Qwen2.5-7B-Instruct` or variants
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
+- **Paper**: https://arxiv.org/abs/2412.15115
+- **Published**: September 2024
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Fully open-source LLM
 - **Integration**: Text generation, chat
 - **Script Name**: `qwen2_text_generation.exs`
@@ -167,7 +197,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Qwen Coder
 - **Model**: `Qwen/Qwen2.5-Coder-7B-Instruct` or variants
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct
+- **Repository**: https://github.com/QwenLM/Qwen2.5-Coder
+- **Paper**: https://arxiv.org/abs/2409.12186
+- **Published**: September 2024
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - State-of-the-art code LLM
 - **Integration**: Code generation, completion, understanding
 - **Script Name**: `qwen_coder_generation.exs`
@@ -180,7 +214,9 @@ Your Elixir scripts follow a consistent pattern:
 
 #### StarCoder2
 - **Model**: `bigcode/starcoder2-15b` or variants
-- **License**: BigCode Open RAIL-M ✅ FOSS
+- **Hugging Face**: https://huggingface.co/bigcode/starcoder2-15b
+- **Published**: February 2024
+- **License**: BigCode Open RAIL-M ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - State-of-the-art code LLM
 - **Integration**: Code generation, completion, understanding
 - **Script Name**: `starcoder2_generation.exs`
@@ -192,7 +228,10 @@ Your Elixir scripts follow a consistent pattern:
 
 #### DeepSeek Coder
 - **Model**: `deepseek-ai/deepseek-coder-1.3b-base` or larger variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-base
+- **Paper**: https://arxiv.org/abs/2406.11931 (V2)
+- **Published**: June 2024 (V2)
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Fully open-source code generation model
 - **Integration**: General code synthesis and understanding
 - **Script Name**: `deepseek_coder_generation.exs`
@@ -203,7 +242,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### WizardCoder
 - **Model**: `WizardLMTeam/WizardCoder-15B-V1.0` or variants
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/WizardLMTeam/WizardCoder-15B-V1.0
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Evol-Instruct fine-tuned
 - **Integration**: Complex coding instructions
 - **Script Name**: `wizardcoder_generation.exs`
@@ -217,7 +257,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Whisper (OpenAI)
 - **Model**: `openai/whisper-large-v3` or smaller variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/openai/whisper-large-v3
+- **Repository**: https://github.com/openai/whisper
+- **Paper**: https://cdn.openai.com/papers/whisper.pdf
+- **Published**: September 2022
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - State-of-the-art speech recognition
 - **Integration**: Audio → Text transcription
 - **Script Name**: `whisper_transcription.exs`
@@ -230,7 +274,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Distil-Whisper
 - **Model**: `distil-whisper/distil-large-v3` or variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/distil-whisper/distil-large-v3
+- **Repository**: https://github.com/huggingface/distil-whisper
+- **Paper**: https://arxiv.org/abs/2311.00430
+- **Published**: November 2023
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Faster, smaller Whisper
 - **Integration**: Distilled version of Whisper
 - **Script Name**: `distil_whisper_transcription.exs`
@@ -244,7 +292,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Vision Transformer (ViT)
 - **Model**: Various ViT models (e.g., `google/vit-base-patch16-224`)
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/google/vit-base-patch16-224
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Image classification
 - **Integration**: Classify images into categories
 - **Script Name**: `vit_classification.exs`
@@ -264,7 +313,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### DETR (Detection Transformer)
 - **Model**: `facebook/detr-resnet-50` or variants
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/facebook/detr-resnet-50
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Transformer-based detection
 - **Integration**: End-to-end object detection
 - **Script Name**: `detr_detection.exs`
@@ -272,8 +322,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### RF-DETR (Roboflow)
 - **Model**: `roboflow/rfdetr-base` or variants (nano, small, medium, base)
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/roboflow/rfdetr-base
 - **Repository**: https://github.com/roboflow/rf-detr
+- **Paper**: https://arxiv.org/abs/2511.09554
+- **Published**: March 2025
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - SOTA real-time object detection and segmentation
 - **Integration**: Real-time transformer-based detection and instance segmentation
 - **Script Name**: `rfdetr_detection.exs`
@@ -290,7 +343,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### Segment Anything Model (SAM)
 - **Model**: `facebook/sam-vit-base` or variants
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/facebook/sam-vit-base
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Image segmentation
 - **Integration**: Segment objects in images (different from SAM3 which is video)
 - **Script Name**: `sam_segmentation.exs`
@@ -298,7 +352,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### SegFormer
 - **Model**: `nvidia/segformer-b0-finetuned-ade-640-640`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/nvidia/segformer-b0-finetuned-ade-640-640
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Semantic segmentation
 - **Integration**: Segment images into semantic regions
 - **Script Name**: `segformer_segmentation.exs`
@@ -308,7 +363,11 @@ Your Elixir scripts follow a consistent pattern:
 
 #### DepthPro (Apple)
 - **Model**: `apple/DepthPro` or `apple/DepthPro-hf`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/apple/DepthPro
+- **Repository**: https://github.com/apple/ml-depth-pro
+- **Paper**: https://arxiv.org/abs/2410.02073
+- **Published**: October 2024
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Sharp monocular metric depth estimation
 - **Integration**: Zero-shot metric monocular depth estimation
 - **Script Name**: `depthpro_estimation.exs`
@@ -318,11 +377,11 @@ Your Elixir scripts follow a consistent pattern:
   - Fast inference (2.25MP depth map in 0.3s on GPU)
   - State-of-the-art performance on in-the-wild scenes
   - Fully open-source (Apache 2.0)
-- **Repository**: https://github.com/apple/ml-depth-pro
 
 #### DPT (Dense Prediction Transformer)
 - **Model**: `Intel/dpt-large` or variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/Intel/dpt-large
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Monocular depth estimation
 - **Integration**: Estimate depth from single images
 - **Script Name**: `dpt_depth_estimation.exs`
@@ -334,7 +393,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### MiDaS
 - **Model**: `Intel/MiDaS` or variants
-- **License**: MIT ✅ FOSS
+- **Hugging Face**: https://huggingface.co/Intel/MiDaS
+- **License**: MIT ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Popular depth estimation
 - **Integration**: Monocular depth estimation
 - **Script Name**: `midas_depth_estimation.exs`
@@ -365,7 +425,8 @@ Your Elixir scripts follow a consistent pattern:
 
 #### MediaPipe Pose
 - **Model**: `qualcomm/MediaPipe-Pose-Estimation`
-- **License**: Apache 2.0 ✅ FOSS
+- **Hugging Face**: https://huggingface.co/qualcomm/MediaPipe-Pose-Estimation
+- **License**: Apache 2.0 ✅ FOSS (OSI-approved)
 - **Style Match**: ✅ High - Real-time pose estimation
 - **Integration**: Detect and track human body poses
 - **Script Name**: `mediapipe_pose_estimation.exs`
