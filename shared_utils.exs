@@ -30,6 +30,7 @@ defmodule HuggingFaceDownloader do
   @moduledoc """
   Downloads model repositories from Hugging Face.
   """
+  @compile {:no_warn_undefined, [Req]}
   @base_url "https://huggingface.co"
   @api_base "https://huggingface.co/api"
 
@@ -135,7 +136,7 @@ defmodule HuggingFaceDownloader do
     end
   end
 
-  defp download_file(repo_id, path, local_dir, info, current, total, use_otel \\ false) do
+  defp download_file(repo_id, path, local_dir, info, current, total, use_otel) do
     url = "#{@base_url}/#{repo_id}/resolve/main/#{path}"
     local_path = Path.join(local_dir, path)
     file_size = info["size"] || 0
@@ -352,7 +353,9 @@ defmodule SpanCollector do
 
       Agent.update(__MODULE__, fn state ->
         spans = Enum.map(state.spans, fn span ->
-          if span.name == name && span.end_time == nil do
+          span_name = Map.get(span, :name)
+          span_end_time = Map.get(span, :end_time)
+          if span_name == name && span_end_time == nil do
             %{span | end_time: end_time, duration_ms: duration}
           else
             span
@@ -368,10 +371,23 @@ defmodule SpanCollector do
         end_time = System.monotonic_time(:millisecond)
         duration = end_time - start_time
 
+        # Extract a concise error message (first line only, max 200 chars)
+        error_msg = Exception.message(e)
+        error_msg = error_msg
+          |> String.split("\n")
+          |> List.first()
+          |> String.slice(0, 200)
+
         Agent.update(__MODULE__, fn state ->
           spans = Enum.map(state.spans, fn span ->
-            if span.name == name && span.end_time == nil do
-              %{span | end_time: end_time, duration_ms: duration, error: Exception.message(e)}
+            span_name = Map.get(span, :name)
+            span_end_time = Map.get(span, :end_time)
+            if span_name == name && span_end_time == nil do
+              Map.merge(span, %{
+                end_time: end_time,
+                duration_ms: duration,
+                error: error_msg
+              })
             else
               span
             end
@@ -422,11 +438,11 @@ defmodule SpanCollector do
       IO.puts("")
     else
       # Calculate total time from all spans for percentage calculation
-      total_span_time = Enum.sum(Enum.map(trace.spans, fn s -> s.duration_ms || 0 end))
+      total_span_time = Enum.sum(Enum.map(trace.spans, fn s -> Map.get(s, :duration_ms, 0) end))
 
       # Calculate total time from root spans for overhead calculation
-      root_spans = Enum.filter(trace.spans, fn span -> span.parent == :root end)
-      total_root_time = Enum.sum(Enum.map(root_spans, fn s -> s.duration_ms || 0 end))
+      root_spans = Enum.filter(trace.spans, fn span -> Map.get(span, :parent) == :root end)
+      total_root_time = Enum.sum(Enum.map(root_spans, fn s -> Map.get(s, :duration_ms, 0) end))
 
       IO.puts("  Total Execution Time: #{format_duration(trace.total_time_ms)}")
       IO.puts("  Total Span Time: #{format_duration(total_root_time)}")
@@ -445,19 +461,22 @@ defmodule SpanCollector do
   defp display_spans(spans, all_spans, total_span_time, indent) do
     Enum.each(spans, fn span ->
       indent_str = String.duplicate("  ", indent)
-      duration_str = if span.duration_ms, do: format_duration(span.duration_ms), else: "N/A"
-      error_str = if Map.has_key?(span, :error) && span.error, do: " [ERROR: #{span.error}]", else: ""
+      span_name = Map.get(span, :name, "unknown")
+      span_duration = Map.get(span, :duration_ms)
+      span_error = Map.get(span, :error)
+      duration_str = if span_duration, do: format_duration(span_duration), else: "N/A"
+      error_str = if span_error, do: " [ERROR: #{span_error}]", else: ""
 
-      percentage = if span.duration_ms && total_span_time > 0 do
-        Float.round(span.duration_ms / total_span_time * 100, 1)
+      percentage = if span_duration && total_span_time > 0 do
+        Float.round(span_duration / total_span_time * 100, 1)
       else
         0.0
       end
 
-      IO.puts("#{indent_str}├─ #{span.name}: #{duration_str} (#{percentage}%)#{error_str}")
+      IO.puts("#{indent_str}├─ #{span_name}: #{duration_str} (#{percentage}%)#{error_str}")
 
       # Display child spans - find all spans that have this span's name as parent
-      child_spans = Enum.filter(all_spans, fn s -> s.parent == span.name end)
+      child_spans = Enum.filter(all_spans, fn s -> Map.get(s, :parent) == span_name end)
       if child_spans != [] do
         display_spans(child_spans, all_spans, total_span_time, indent + 1)
       end

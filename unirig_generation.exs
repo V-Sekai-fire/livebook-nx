@@ -30,6 +30,7 @@ Application.put_env(:opentelemetry, :logs_exporter, :none)
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
+  {:req, "~> 0.5.0"},
   {:opentelemetry_api, "~> 1.3"},
   {:opentelemetry, "~> 1.3"},
   {:opentelemetry_exporter, "~> 1.0"},
@@ -216,17 +217,51 @@ Skin Only: #{config.skin_only}
 """)
 
 # Save config to JSON for Python to read (use temp file to avoid conflicts)
-config_json = Jason.encode!(config)
+# Convert atom keys to strings and filter out nil values for JSON encoding
+config_for_json = config
+  |> Map.new(fn {k, v} -> {Atom.to_string(k), v} end)
+  |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+# Ensure we have valid JSON
+config_json = case Jason.encode(config_for_json) do
+  {:ok, json} -> json
+  {:error, reason} ->
+    IO.puts("Error: Failed to encode config to JSON: #{inspect(reason)}")
+    IO.puts("Config: #{inspect(config_for_json)}")
+    System.halt(1)
+end
+
 # Use cross-platform temp directory
 tmp_dir = System.tmp_dir!()
 File.mkdir_p!(tmp_dir)
 config_file = Path.join(tmp_dir, "unirig_config_#{System.system_time(:millisecond)}.json")
-File.write!(config_file, config_json)
+
+# Write file using File.open to ensure proper flushing
+{:ok, file_handle} = File.open(config_file, [:write, :utf8])
+IO.binwrite(file_handle, config_json)
+File.close(file_handle)
+
+# Verify file was written correctly
+case File.read(config_file) do
+  {:ok, content} ->
+    if content == "" or content != config_json do
+      IO.puts("Error: Config file verification failed")
+      IO.puts("Expected length: #{String.length(config_json)}")
+      IO.puts("Actual length: #{String.length(content)}")
+      IO.puts("Config JSON: #{String.slice(config_json, 0, 200)}...")
+      System.halt(1)
+    end
+  {:error, reason} ->
+    IO.puts("Error: Failed to read config file: #{inspect(reason)}")
+    System.halt(1)
+end
+
 config_file_normalized = String.replace(config_file, "\\", "/")
 
 # Import libraries and process using UniRig
-SpanCollector.track_span("unirig.generation", fn ->
 try do
+  SpanCollector.track_span("unirig.generation", fn ->
+  try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
@@ -622,10 +657,15 @@ def run_unirig_inference(
 # Get configuration from JSON file
 """ <> """
 config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+print(f"Loading config from: {config_file_path}")
+if not os.path.exists(config_file_path):
+    raise FileNotFoundError(f"Config file not found: {config_file_path}")
 with open(config_file_path, 'r', encoding='utf-8') as f:
-    config = json.load(f)
+    config_content = f.read()
+    if not config_content or config_content.strip() == '':
+        raise ValueError(f"Config file is empty: {config_file_path}")
+    config = json.loads(config_content)
 """ <> ~S"""
-    config = json.load(f)
 
 mesh_path = config.get('mesh_path')
 output_format = config.get('output_format', 'usdc')
@@ -933,10 +973,14 @@ after
     File.rm(config_file)
   end
 end
-end)
+  end)
 
-IO.puts("\n=== Complete ===")
-IO.puts("3D model rigging completed successfully!")
-
-# Display OpenTelemetry trace
-SpanCollector.display_trace()
+  IO.puts("\n=== Complete ===")
+  IO.puts("3D model rigging completed successfully!")
+rescue
+  e ->
+    reraise e, __STACKTRACE__
+after
+  # Always display trace (even on errors)
+  SpanCollector.display_trace()
+end
