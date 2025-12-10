@@ -22,7 +22,7 @@
 #   --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
 #   --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
 #   --num-inference-steps <int>   Number of inference steps (default: 25)
-#   --guidance-scale <float>      Guidance scale for SLat sampler (default: 3.5)
+#   --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
 #   --simplify-ratio <float>      Mesh simplification ratio (default: 0.3)
 #   --gpu <int>                   GPU ID to use (default: 0)
 #   --seed <int>                  Random seed (default: 42)
@@ -68,7 +68,6 @@ dependencies = [
   "easydict==1.13",
   "opencv-python-headless==4.10.0.84",
   "scipy==1.14.1",
-  "rembg==2.0.60",
   "onnxruntime==1.20.1",
   "trimesh==4.5.3",
   "xatlas==0.0.9",
@@ -149,7 +148,7 @@ defmodule ArgsParser do
       --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
       --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
       --num-inference-steps <int>   Number of inference steps (default: 25)
-      --guidance-scale <float>      Guidance scale for SLat sampler (default: 3.5)
+      --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
       --simplify-ratio <float>      Mesh simplification ratio (default: 0.3)
       --gpu <int>                   GPU ID to use (default: 0)
       --seed <int>                  Random seed (default: 42)
@@ -267,7 +266,7 @@ defmodule ArgsParser do
       size_threshold: Keyword.get(opts, :size_threshold, 2000),
       merge_groups: Keyword.get(opts, :merge_groups),
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
-      guidance_scale: Keyword.get(opts, :guidance_scale, 3.5),
+      guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
       simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
@@ -374,7 +373,7 @@ output_dir = config.get('output_dir', 'output')
 size_threshold = config.get('size_threshold', 2000)
 merge_groups_str = config.get('merge_groups')
 num_inference_steps = config.get('num_inference_steps', 25)
-guidance_scale = config.get('guidance_scale', 3.5)
+guidance_scale = config.get('guidance_scale', 7.5)
 simplify_ratio = config.get('simplify_ratio', 0.3)
 gpu = config.get('gpu', 0)
 seed = config.get('seed', 42)
@@ -603,7 +602,6 @@ if auto_generate_mask:
     # Import required modules
     try:
         from segment_anything import SamAutomaticMaskGenerator, build_sam
-        import rembg
         from modules.label_2d_mask.label_parts import (
             get_sam_mask, 
             clean_segment_edges,
@@ -673,23 +671,43 @@ if auto_generate_mask:
     sam_model = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device)
     sam_mask_generator = SamAutomaticMaskGenerator(sam_model)
     
-    # Use rembg for background removal (simpler, no gated repo needed)
-    print("Removing background using rembg...")
-    rembg_session = rembg.new_session()
+    # Use SAM for background removal (no registration required, already loaded)
+    print("Removing background using SAM...")
     
-    # Process image with rembg
+    # Process image
     print("Processing image...")
     img = Image.open(image_path).convert("RGB")
+    img_array = np.array(img)
     
-    # Remove background using rembg
-    # Convert PIL Image to bytes
-    img_buffer = io.BytesIO()
-    img.save(img_buffer, format='PNG')
-    img_bytes = img_buffer.getvalue()
+    # Generate SAM masks to identify foreground objects
+    print("Generating SAM masks for background removal...")
+    masks = sam_mask_generator.generate(img_array)
     
-    # Remove background
-    output_bytes = rembg.remove(img_bytes, session=rembg_session)
-    processed_image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
+    # Sort masks by area (largest first) and combine to create foreground mask
+    sorted_masks = sorted(masks, key=lambda x: x["area"], reverse=True)
+    
+    # Create combined foreground mask
+    foreground_mask = np.zeros((img_array.shape[0], img_array.shape[1]), dtype=bool)
+    
+    # Combine all masks to create foreground mask
+    for mask_data in sorted_masks:
+        mask = mask_data["segmentation"]
+        foreground_mask = np.logical_or(foreground_mask, mask)
+    
+    # Apply morphological operations to clean up the mask
+    # Remove small holes and smooth edges
+    kernel = np.ones((5, 5), np.uint8)
+    foreground_mask = cv2.morphologyEx(foreground_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel, iterations=2)
+    foreground_mask = cv2.morphologyEx(foreground_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    foreground_mask = foreground_mask.astype(bool)
+    
+    # Create RGBA image with transparent background
+    processed_image = Image.fromarray(img_array).convert("RGBA")
+    alpha_channel = np.array(processed_image.split()[3])
+    alpha_channel[~foreground_mask] = 0  # Set background to transparent
+    # Smooth alpha channel edges to reduce aliasing
+    alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (5, 5), 1.0).astype(np.uint8)
+    processed_image.putalpha(Image.fromarray(alpha_channel))
     
     # Resize and pad to square
     processed_image = resize_and_pad_to_square(processed_image)

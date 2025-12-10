@@ -6,7 +6,7 @@ import torch.nn.functional as F
 import numpy as np
 from torchvision import transforms
 from PIL import Image
-import rembg
+# import rembg  # Removed - using SAM for background removal instead
 from transformers import AutoModel
 from .base import Pipeline
 from . import samplers
@@ -42,7 +42,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
         self.sparse_structure_sampler_params = {}
         self.slat_sampler_params = {}
         self.slat_normalization = slat_normalization
-        self.rembg_session = None
+        # self.rembg_session = None  # Removed - using SAM for background removal instead
         self._init_image_cond_model(image_cond_model)
 
     
