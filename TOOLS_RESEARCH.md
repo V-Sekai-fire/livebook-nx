@@ -386,6 +386,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 12. 3D Texture Inpainting / Generation
 
 #### TEXGen
+- **Script Pattern**: Follow the Integration Pattern Template (see below) for `texgen_texture_inpainting.exs`
 - **Model**: `Andyx/TEXGen`
 - **Hugging Face**: https://huggingface.co/Andyx/TEXGen
 - **Repository**: https://github.com/CVMI-Lab/TEXGen
