@@ -392,17 +392,19 @@ Process.put(:python_globals, python_globals)
 IO.puts("\n=== Step 2: Process Video ===")
 
 # Get configuration from JSON file and process video
-{_, python_globals} = Pythonx.eval(~S"""
+{_, python_globals} = Pythonx.eval("""
 # Get configuration from JSON file (created by Elixir)
 import json
 import os
 
 # Read from JSON file created by Elixir
-config_file = "config.json"
-if not os.path.exists(config_file):
-    raise ValueError("Config file not found")
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+""" <> ~S"""
+if not os.path.exists(config_file_path):
+    raise ValueError(f"Config file not found: {config_file_path}")
 
-with open(config_file, 'r') as f:
+with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
 
 prompt = config.get('prompt', 'person')
@@ -467,7 +469,7 @@ for model_outputs in model.propagate_in_video_iterator(
     output_frames_data[model_outputs.frame_idx] = processed_outputs
 
 print(f"✓ Processed {len(output_frames_data)} frames")
-""", python_globals)
+""", Process.get(:python_globals) || %{"config_file_normalized" => config_file_normalized})
 
 Process.put(:python_globals, python_globals)
 
