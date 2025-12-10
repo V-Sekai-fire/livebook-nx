@@ -95,7 +95,7 @@ dependencies = [
   "scikit-image",
   "plyfile",
   "psutil",
-  "rembg[new]>=2.0.50",  # Free open-source background removal (not the paywalled API)
+  "transparent-background>=1.3.4",  # Free open-source background removal using InSPyReNet (ACCV 2022)
   "nvdiffrast @ https://huggingface.co/spaces/trellis-community/TRELLIS/resolve/d94ecad589a3f36cf571c9581f9201c7bb7e0433/wheels/nvdiffrast-0.3.3-py3-none-any.whl?download=true",
   "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
@@ -330,8 +330,8 @@ SpanCollector.track_span("omnipart.download_weights", fn ->
       IO.puts("[INFO] Model weights will be downloaded automatically by Python if needed")
   end
   
-  # Note: Using rembg (free open-source library) for background removal
-  # This is the free Python library, not the paywalled API service
+  # Note: Using transparent-background (free open-source library) for background removal
+  # Powered by InSPyReNet (ACCV 2022) - research-backed, high-quality results
   
   IO.puts("[OK] Checkpoint directory ready: #{checkpoint_dir}")
 end)
@@ -667,39 +667,34 @@ if auto_generate_mask:
             )
             sam_ckpt_path = Path(sam_ckpt_path)
     
-    # Use rembg (free open-source library) for background removal
-    print("Removing background using rembg (free open-source)...")
+    # Use transparent-background (free open-source library) for background removal
+    # Powered by InSPyReNet (ACCV 2022) - research-backed, high-quality results
+    print("Removing background using transparent-background (InSPyReNet)...")
     try:
-        from rembg import remove, new_session
-        import io
+        from transparent_background import Remover
         
         # Load image
         img = Image.open(image_path).convert("RGB")
-        img_bytes = io.BytesIO()
-        img.save(img_bytes, format='PNG')
-        img_bytes.seek(0)
         
-        # Create rembg session (uses u2net model by default, which is free)
-        # 'new' model is the latest and best quality
-        print("Initializing rembg session...")
-        session = new_session('u2net')  # Free model, good quality
+        # Initialize remover with 'fast' mode for speed, or 'base' for better quality
+        # 'fast' mode is faster but 'base' provides better edge quality
+        print("Initializing transparent-background remover...")
+        remover = Remover(mode='base', device=device)  # Use 'base' for best quality
         
-        # Remove background
-        print("Processing image with rembg...")
-        output_bytes = remove(img_bytes.getvalue(), session=session)
+        # Remove background - returns RGBA image with transparent background
+        print("Processing image with transparent-background...")
+        processed_image = remover.process(img, type='rgba')
         
-        # Convert output to PIL Image
-        processed_image = Image.open(io.BytesIO(output_bytes)).convert("RGBA")
-        
-        # Apply slight edge smoothing to reduce aliasing
+        # Apply slight edge smoothing to reduce aliasing (if needed)
+        # transparent-background already produces clean edges, but we can smooth slightly
         alpha_channel = np.array(processed_image.split()[3])
         alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (3, 3), 0.5).astype(np.uint8)
         processed_image.putalpha(Image.fromarray(alpha_channel))
         
-        print("[OK] Background removed successfully using rembg")
+        print("[OK] Background removed successfully using transparent-background")
         
     except Exception as e:
-        print(f"[WARN] rembg background removal failed: {e}")
+        print(f"[WARN] transparent-background removal failed: {e}")
         print("[INFO] Falling back to SAM-based background removal...")
         
         # Fallback to original SAM
