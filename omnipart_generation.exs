@@ -143,7 +143,7 @@ defmodule ArgsParser do
     Options:
       --image, -i <path>            Input image path (required if not positional, RGBA PNG recommended)
       --mask, -m <path>             Segmentation mask path (.exr file) (optional)
-      --output-dir, -o <path>       Output directory (default: outputs)
+      --output-dir, -o <path>       Output directory (default: output)
       --segment-only                 Only generate segmentation, don't generate 3D model
       --apply-merge                  Apply merge groups to existing segmentation state
       --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
@@ -263,7 +263,7 @@ defmodule ArgsParser do
       auto_generate_mask: auto_generate_mask,
       segment_only: segment_only,
       apply_merge: apply_merge,
-      output_dir: Keyword.get(opts, :output_dir, "outputs"),
+      output_dir: Keyword.get(opts, :output_dir, "output"),
       size_threshold: Keyword.get(opts, :size_threshold, 2000),
       merge_groups: Keyword.get(opts, :merge_groups),
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
@@ -370,7 +370,7 @@ mask_path = config.get('mask_path')
 auto_generate_mask = config.get('auto_generate_mask', False)
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
-output_dir = config.get('output_dir', 'outputs')
+output_dir = config.get('output_dir', 'output')
 size_threshold = config.get('size_threshold', 2000)
 merge_groups_str = config.get('merge_groups')
 num_inference_steps = config.get('num_inference_steps', 25)
@@ -383,7 +383,7 @@ checkpoint_dir = config.get('checkpoint_dir')
 
 # Resolve paths to absolute
 image_path = str(Path(image_path).resolve())
-output_dir = str(Path(output_dir).resolve())
+output_dir_base = Path(output_dir).resolve()
 omnipart_dir = str(Path(omnipart_dir).resolve())
 checkpoint_dir = str(Path(checkpoint_dir).resolve())
 
@@ -413,7 +413,11 @@ if not Path(omnipart_dir).exists():
 print("\n=== Step 2: Prepare Input Data ===")
 print(f"Image: {image_path}")
 
-# Create output directory
+# Create output directory with timestamped subdirectory (matching other generation scripts)
+output_dir_base.mkdir(parents=True, exist_ok=True)
+import time
+tag = time.strftime("%Y%m%d_%H_%M_%S")
+output_dir = str(output_dir_base / tag)
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
 # State file for iterative workflow
@@ -929,7 +933,7 @@ except subprocess.CalledProcessError as e:
 
 # Find output files
 print("\n=== Step 4: Locate Output Files ===")
-# OmniPart creates a subdirectory based on image filename
+# OmniPart creates a subdirectory based on image filename within the timestamped output directory
 # and generates multiple outputs:
 # - mesh_segment.glb (merged parts)
 # - bboxes_vis.glb (bounding boxes visualization)
@@ -937,7 +941,7 @@ print("\n=== Step 4: Locate Output Files ===")
 # - merged_gs.ply (merged 3D Gaussians)
 # - exploded_gs.ply (exploded 3D Gaussians)
 image_name = Path(image_path).stem
-expected_subdir = Path(output_dir) / image_name
+expected_subdir = Path(output_dir) / f"{image_name}_processed"
 if expected_subdir.exists():
     search_dir = expected_subdir
     print(f"Found output subdirectory: {search_dir}")
