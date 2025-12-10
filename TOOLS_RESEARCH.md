@@ -165,6 +165,19 @@ Your Elixir scripts follow a consistent pattern:
 
 ### 5. Code Generation
 
+#### Qwen Coder
+- **Model**: `Qwen/Qwen2.5-Coder-7B-Instruct` or variants
+- **License**: Apache 2.0 ✅ FOSS
+- **Style Match**: ✅ High - State-of-the-art code LLM
+- **Integration**: Code generation, completion, understanding
+- **Script Name**: `qwen_coder_generation.exs`
+- **Features**:
+  - High performance on code generation tasks
+  - Multiple programming languages
+  - Instruction-tuned for code tasks
+  - Fully permissive Apache 2.0 license
+  - Better performance than StarCoder2
+
 #### StarCoder2
 - **Model**: `bigcode/starcoder2-15b` or variants
 - **License**: BigCode Open RAIL-M ✅ FOSS
@@ -448,12 +461,13 @@ SpanCollector.display_trace()
    - Multilingual support
    - Production-ready
 
-3. **StarCoder2** (`starcoder2_generation.exs`)
-   - **License**: BigCode Open RAIL-M ✅ FOSS
+3. **Qwen Coder** (`qwen_coder_generation.exs`)
+   - **License**: Apache 2.0 ✅ FOSS
    - State-of-the-art code generation
-   - 80+ programming languages
+   - Better performance than StarCoder2
+   - Multiple programming languages
+   - Fully permissive Apache 2.0 license
    - Well-documented
-   - Active development
 
 4. **UltraZoom-2X** (`ultrazoom_upscaling.exs`)
    - Fast image super-resolution
@@ -520,6 +534,7 @@ SpanCollector.display_trace()
 - `Qwen/Qwen2.5-7B-Instruct` (Apache 2.0)
 
 ### Code Generation
+- `Qwen/Qwen2.5-Coder-7B-Instruct` (Apache 2.0)
 - `bigcode/starcoder2-15b` (BigCode Open RAIL-M)
 - `deepseek-ai/deepseek-coder-1.3b-base` (MIT)
 - `WizardLMTeam/WizardCoder-15B-V1.0` (Apache 2.0)
