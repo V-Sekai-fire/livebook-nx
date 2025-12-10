@@ -3,6 +3,7 @@
 ## Script Style Analysis
 
 Your Elixir scripts follow a consistent pattern:
+
 - **Language**: Elixir CLI scripts using `Mix.install`
 - **Python Integration**: Via `Pythonx` for ML model execution
 - **Observability**: OpenTelemetry for tracing and performance monitoring
@@ -26,6 +27,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 1. Image-to-Image (Inpainting, Outpainting, Style Transfer)
 
 #### LanPaint (Universal Inpainting)
+
 - **Model**: `charrywhite/LanPaint`
 - **Hugging Face**: https://huggingface.co/charrywhite/LanPaint
 - **Repository**: https://github.com/scraed/LanPaint
@@ -35,12 +37,13 @@ Your Elixir scripts follow a consistent pattern:
 - **Style Match**: ✅ High - Training-free diffusion inpainting
 - **Integration**: Universal inpainting sampler with "think mode"
 - **Script Name**: `lanpaint_inpainting.exs`
-- **Features**: 
+- **Features**:
   - Multiple iterations before denoising
   - Works with any diffusion model
   - Superior inpainting quality
 
 #### Paint-by-Inpaint
+
 - **Model**: `paint-by-inpaint`
 - **Hugging Face**: https://huggingface.co/paint-by-inpaint
 - **Style Match**: ✅ High - Advanced inpainting model
@@ -48,6 +51,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Script Name**: `paint_by_inpaint.exs`
 
 #### Stable Diffusion Inpainting
+
 - **Model**: Various SD inpainting models via diffusers
 - **License**: CreativeML Open RAIL-M ✅ FOSS
 - **Style Match**: ✅ High - Industry standard inpainting
@@ -58,6 +62,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 2. Image Super-Resolution / Upscaling
 
 #### UltraZoom-2X
+
 - **Model**: `andrewdalpino/UltraZoom-2X`
 - **Hugging Face**: https://huggingface.co/andrewdalpino/UltraZoom-2X
 - **Paper**: https://arxiv.org/abs/2506.13756
@@ -71,6 +76,7 @@ Your Elixir scripts follow a consistent pattern:
   - Full RGB support
 
 #### FLUX Upscale
+
 - **Model**: `wangkanai/flux-upscale`
 - **Hugging Face**: https://huggingface.co/wangkanai/flux-upscale
 - **Style Match**: ✅ High - Real-ESRGAN upscale models
@@ -82,6 +88,7 @@ Your Elixir scripts follow a consistent pattern:
   - CPU and GPU compatible
 
 #### Real-ESRGAN
+
 - **Model**: Various Real-ESRGAN models
 - **Repository**: https://github.com/xinntao/Real-ESRGAN
 - **Paper**: https://arxiv.org/abs/2107.10833
@@ -95,6 +102,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 3. OCR / Document Processing
 
 #### DeepSeek-OCR
+
 - **Model**: `deepseek-ai/DeepSeek-OCR`
 - **Hugging Face**: https://huggingface.co/deepseek-ai/DeepSeek-OCR
 - **Repository**: https://github.com/deepseek-ai/DeepSeek-OCR
@@ -110,6 +118,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (Apache 2.0)
 
 #### LightOnOCR-1B
+
 - **Model**: `lightonai/LightOnOCR-1B-1025`
 - **Hugging Face**: https://huggingface.co/lightonai/LightOnOCR-1B-1025
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -119,6 +128,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: Smaller, faster alternative, fully open-source
 
 #### PaddleOCR
+
 - **Model**: Various PaddleOCR models
 - **Repository**: https://github.com/PaddlePaddle/PaddleOCR
 - **Paper**: https://arxiv.org/abs/2507.05595
@@ -134,6 +144,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (Apache 2.0)
 
 #### TrOCR (Microsoft)
+
 - **Model**: `microsoft/trocr-base-printed` or variants
 - **Hugging Face**: https://huggingface.co/microsoft/trocr-base-printed
 - **License**: MIT ✅ FOSS (OSI-approved)
@@ -145,6 +156,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 4. Text Generation (LLMs)
 
 #### Mistral-7B
+
 - **Model**: `mistralai/Mistral-7B-v0.1` or `Open-Orca/Mistral-7B-OpenOrca`
 - **Hugging Face**: https://huggingface.co/mistralai/Mistral-7B-v0.1
 - **Published**: September 2023
@@ -159,6 +171,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully permissive Apache 2.0 license
 
 #### Phi-3.5
+
 - **Model**: `microsoft/Phi-3.5-mini-instruct`
 - **Hugging Face**: https://huggingface.co/microsoft/Phi-3.5-mini-instruct
 - **Published**: August 2024
@@ -173,6 +186,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully permissive MIT license
 
 #### Gemma (Google)
+
 - **Model**: `google/gemma-2b` or `google/gemma-7b`
 - **Hugging Face**: https://huggingface.co/google/gemma-2b
 - **Published**: February 2024
@@ -183,6 +197,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: Fully permissive Apache 2.0 license, multiple sizes available
 
 #### Qwen2.5 (Alibaba)
+
 - **Model**: `Qwen/Qwen2.5-7B-Instruct` or variants
 - **Hugging Face**: https://huggingface.co/Qwen/Qwen2.5-7B-Instruct
 - **Paper**: https://arxiv.org/abs/2412.15115
@@ -196,6 +211,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 5. Code Generation
 
 #### Qwen Coder
+
 - **Model**: `Qwen/Qwen2.5-Coder-7B-Instruct` or variants
 - **Hugging Face**: https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct
 - **Repository**: https://github.com/QwenLM/Qwen2.5-Coder
@@ -213,6 +229,7 @@ Your Elixir scripts follow a consistent pattern:
   - Better performance than StarCoder2
 
 #### DeepSeek Coder
+
 - **Model**: `deepseek-ai/deepseek-coder-1.3b-base` or larger variants
 - **Hugging Face**: https://huggingface.co/deepseek-ai/deepseek-coder-1.3b-base
 - **Paper**: https://arxiv.org/abs/2406.11931 (V2)
@@ -229,6 +246,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 6. Speech Recognition / Transcription
 
 #### Distil-Whisper
+
 - **Model**: `distil-whisper/distil-large-v3` or variants
 - **Hugging Face**: https://huggingface.co/distil-whisper/distil-large-v3
 - **Repository**: https://github.com/huggingface/distil-whisper
@@ -247,6 +265,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 7. Image Classification / Object Detection
 
 #### Vision Transformer (ViT)
+
 - **Model**: Various ViT models (e.g., `google/vit-base-patch16-224`)
 - **Hugging Face**: https://huggingface.co/google/vit-base-patch16-224
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -256,6 +275,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: Multiple variants and sizes available, fully open-source
 
 #### YOLO (Object Detection)
+
 - **Model**: Various YOLO models (YOLOv8, YOLOv9, etc.)
 - **License**: AGPL-3.0 ✅ FOSS
 - **Style Match**: ✅ High - Real-time object detection
@@ -268,6 +288,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (AGPL-3.0)
 
 #### DETR (Detection Transformer)
+
 - **Model**: `facebook/detr-resnet-50` or variants
 - **Hugging Face**: https://huggingface.co/facebook/detr-resnet-50
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -277,6 +298,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: Fully open-source (Apache 2.0)
 
 #### RF-DETR (Roboflow)
+
 - **Model**: `roboflow/rfdetr-base` or variants (nano, small, medium, base)
 - **Hugging Face**: https://huggingface.co/roboflow/rfdetr-base
 - **Repository**: https://github.com/roboflow/rf-detr
@@ -298,6 +320,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 8. Image Segmentation
 
 #### Segment Anything Model (SAM)
+
 - **Model**: `facebook/sam-vit-base` or variants
 - **Hugging Face**: https://huggingface.co/facebook/sam-vit-base
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -307,6 +330,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: Different from SAM3 (video segmentation), fully open-source
 
 #### SegFormer
+
 - **Model**: `nvidia/segformer-b0-finetuned-ade-640-640`
 - **Hugging Face**: https://huggingface.co/nvidia/segformer-b0-finetuned-ade-640-640
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -318,6 +342,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 9. Depth Estimation
 
 #### DepthPro (Apple)
+
 - **Model**: `apple/DepthPro` or `apple/DepthPro-hf`
 - **Hugging Face**: https://huggingface.co/apple/DepthPro
 - **Repository**: https://github.com/apple/ml-depth-pro
@@ -335,6 +360,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (Apache 2.0)
 
 #### DPT (Dense Prediction Transformer)
+
 - **Model**: `Intel/dpt-large` or variants
 - **Hugging Face**: https://huggingface.co/Intel/dpt-large
 - **License**: MIT ✅ FOSS (OSI-approved)
@@ -348,6 +374,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully permissive MIT license
 
 #### MiDaS
+
 - **Model**: `Intel/MiDaS` or variants
 - **Hugging Face**: https://huggingface.co/Intel/MiDaS
 - **License**: MIT ✅ FOSS (OSI-approved)
@@ -359,6 +386,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 10. Face Recognition / Detection
 
 #### AuraFace
+
 - **Model**: Various AuraFace models
 - **License**: Apache 2.0 ✅ FOSS
 - **Style Match**: ✅ High - Open-source face recognition
@@ -370,6 +398,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (Apache 2.0)
 
 #### RetinaFace
+
 - **Model**: Various RetinaFace models
 - **License**: MIT ✅ FOSS
 - **Style Match**: ✅ High - Face detection
@@ -379,7 +408,26 @@ Your Elixir scripts follow a consistent pattern:
 
 ### 11. Pose Estimation
 
+#### YOLO-NAS-POSE
+
+- **Model**: YOLO-NAS-POSE (N, S, M, L variants)
+- **Repository**: https://github.com/Deci-AI/super-gradients
+- **Documentation**: https://github.com/Deci-AI/super-gradients/blob/master/YOLONAS-POSE.md
+- **License**: Open-source (pre-trained weights for non-commercial use) ⚠️ Custom license
+- **Style Match**: ✅ High - SOTA pose estimation with real-time performance
+- **Integration**: Keypoint detection and pose estimation
+- **Script Name**: `yolo_nas_pose_estimation.exs`
+- **Features**:
+  - State-of-the-art performance, outperforms YOLOv8-Pose and DEKR
+  - Real-time inference (2.35ms - 8.86ms on T4 GPU for 640x640 images)
+  - Multiple model sizes (N, S, M, L)
+  - Quantization-aware blocks for optimized performance
+  - Based on YOLO-NAS architecture with pose-optimized head
+  - Transfer learning from YOLO-NAS weights
+- **Note**: Generated by Deci's Neural Architecture Search (AutoNAC™) technology
+
 #### MediaPipe Pose
+
 - **Model**: `qualcomm/MediaPipe-Pose-Estimation`
 - **Hugging Face**: https://huggingface.co/qualcomm/MediaPipe-Pose-Estimation
 - **License**: Apache 2.0 ✅ FOSS (OSI-approved)
@@ -393,6 +441,7 @@ Your Elixir scripts follow a consistent pattern:
   - Fully open-source (Apache 2.0)
 
 #### ViTPose
+
 - **Model**: Various ViTPose models
 - **License**: Apache 2.0 ✅ FOSS
 - **Style Match**: ✅ High - Vision Transformer for pose
@@ -403,6 +452,7 @@ Your Elixir scripts follow a consistent pattern:
 ### 12. 3D Texture Inpainting / Generation
 
 #### TEXGen
+
 - **Script Pattern**: Follow the Integration Pattern Template (see below) for `texgen_texture_inpainting.exs`
 - **Model**: `Andyx/TEXGen`
 - **Hugging Face**: https://huggingface.co/Andyx/TEXGen
@@ -422,6 +472,7 @@ Your Elixir scripts follow a consistent pattern:
 - **Note**: SIGGRAPH Asia 2024, Best Paper Honorable Mention
 
 #### TEXTure
+
 - **Model**: TEXTurePaper/TEXTure
 - **Hugging Face Space**: https://huggingface.co/spaces/TEXTurePaper/TEXTure
 - **Repository**: https://github.com/TEXTurePaper/TEXTurePaper
@@ -517,14 +568,16 @@ SpanCollector.display_trace()
 
 ### High Priority (Best Style Match & Popularity)
 
-1. **Whisper** (`whisper_transcription.exs`)
+1. **Distil-Whisper** (`distil_whisper_transcription.exs`)
+
    - **License**: MIT ✅ FOSS
-   - State-of-the-art speech recognition
+   - Faster, smaller version of Whisper (6x faster, 50% smaller)
    - Complements Kokoro TTS (transcription vs generation)
-   - High accuracy, multilingual
+   - Similar accuracy to Whisper, multilingual
    - Multiple size variants
 
 2. **DeepSeek-OCR** (`deepseek_ocr.exs`)
+
    - **License**: Apache 2.0 ✅ FOSS
    - High-accuracy OCR
    - Extracts text from documents, screenshots, receipts
@@ -532,6 +585,7 @@ SpanCollector.display_trace()
    - Production-ready
 
 3. **Qwen Coder** (`qwen_coder_generation.exs`)
+
    - **License**: Apache 2.0 ✅ FOSS
    - State-of-the-art code generation
    - Better performance than StarCoder2
@@ -540,6 +594,7 @@ SpanCollector.display_trace()
    - Well-documented
 
 4. **UltraZoom-2X** (`ultrazoom_upscaling.exs`)
+
    - Fast image super-resolution
    - Controllable enhancements
    - Good for post-processing
@@ -552,21 +607,28 @@ SpanCollector.display_trace()
 ### Medium Priority
 
 6. **DeepSeek Coder** (`deepseek_coder_generation.exs`)
+
    - Fully open-source code generation (MIT)
    - Multiple variants (1.3B, 6.7B, 33B)
    - Well-documented
 
 7. **MediaPipe Pose** (`mediapipe_pose_estimation.exs`)
+
    - Real-time pose estimation
    - Mobile-optimized
    - Good for applications
 
-8. **YOLO** (`yolo_detection.exs`)
-   - Real-time object detection
-   - Popular and well-supported
-   - Multiple versions available
+8. **RF-DETR** (`rfdetr_detection.exs`)
+
+   - **License**: Apache 2.0 ✅ FOSS
+   - SOTA real-time object detection and segmentation
+   - First real-time model to exceed 60 AP on COCO
+   - Faster and more accurate than YOLO at similar sizes
+   - Instance segmentation support
+   - Repository: https://github.com/roboflow/rf-detr
 
 9. **DPT Depth Estimation** (`dpt_depth_estimation.exs`)
+
    - High-accuracy depth estimation
    - Transformer-based
    - Useful for 3D applications
@@ -582,39 +644,49 @@ SpanCollector.display_trace()
 ## Model Repository Links (NEW Categories)
 
 ### Image-to-Image (Inpainting/Outpainting)
+
 - `charrywhite/LanPaint`
 - `paint-by-inpaint`
 - Various Stable Diffusion inpainting models
 
 ### Image Super-Resolution
+
 1. Various Real-ESRGAN models (BSD-3-Clause) - Most established, multiple variants for different content types
 2. `andrewdalpino/UltraZoom-2X` - Fast, scalable, controllable enhancements
 3. `wangkanai/flux-upscale` - Real-ESRGAN based, optimized for AI-generated images
 
 ### OCR / Document Processing
+
 - `deepseek-ai/DeepSeek-OCR` (Apache 2.0)
 - `lightonai/LightOnOCR-1B-1025` (Apache 2.0)
 - `microsoft/trocr-base-printed` (MIT)
 - Various PaddleOCR models (Apache 2.0)
 
 ### Speech Recognition
+
 - `distil-whisper/distil-large-v3`
 
 ### Image Classification / Object Detection
+
 - `roboflow/rfdetr-base` (Apache 2.0) - https://github.com/roboflow/rf-detr
 
 ### Depth Estimation
+
 - `apple/DepthPro` or `apple/DepthPro-hf` (Apache 2.0) - Sharp monocular metric depth, fast inference
 
 ### Face Recognition / Detection
+
 - Various AuraFace models
 - Various RetinaFace models
 
 ### Pose Estimation
+
+- YOLO-NAS-POSE (Deci-AI) - https://github.com/Deci-AI/super-gradients/blob/master/YOLONAS-POSE.md
 - `qualcomm/MediaPipe-Pose-Estimation`
 - Various ViTPose models
 
 ### 3D Texture Inpainting / Generation
+
 - `Andyx/TEXGen` (Apache 2.0 ✅ OSI) - https://huggingface.co/Andyx/TEXGen | https://github.com/CVMI-Lab/TEXGen | https://arxiv.org/abs/2411.14740
 - TEXTurePaper/TEXTure (MIT ✅ OSI) - https://huggingface.co/spaces/TEXTurePaper/TEXTure | https://github.com/TEXTurePaper/TEXTurePaper | https://arxiv.org/abs/2302.01721
 
