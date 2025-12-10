@@ -335,7 +335,7 @@ try:
         app_rep=gaussian,
         mesh=mesh_result,
         simplify=simplify,
-        fill_holes=True,
+        fill_holes=False,  # Disable hole filling - it's causing issues with visibility detection
         fill_holes_max_size=0.04,
         texture_size=texture_size,
         debug=False,

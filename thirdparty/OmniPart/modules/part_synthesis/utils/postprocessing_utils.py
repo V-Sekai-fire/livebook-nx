@@ -185,11 +185,16 @@ def _fill_holes(
             fragments = rasterizer(meshes)
             
             # Get face IDs from fragments
+            # PyTorch3D uses -1 for background, 0-indexed face IDs for valid faces
             pix_to_face = fragments.pix_to_face[0]  # (H, W, 1)
             mask = (pix_to_face >= 0).squeeze(-1)  # (H, W)
-            face_id = pix_to_face[mask] - 1  # Subtract 1 to get 0-indexed face IDs
-            face_id = torch.unique(face_id).long()
-            visblity[face_id] += 1
+            if mask.any():
+                face_id = pix_to_face[mask].squeeze(-1)  # Face IDs are already 0-indexed in PyTorch3D
+                face_id = torch.unique(face_id).long()
+                # Clamp to valid face range
+                face_id = face_id[(face_id >= 0) & (face_id < faces.shape[0])]
+                if face_id.numel() > 0:
+                    visblity[face_id] += 1
     else:
         # Use utils3d (nvdiffrast) for rasterization
         rastctx = utils3d.torch.RastContext(backend='cuda')
@@ -222,7 +227,13 @@ def _fill_holes(
     ## Identify inner faces (completely invisible)
     inner_face_indices = torch.nonzero(visblity == 0).reshape(-1)
     if verbose:
-        tqdm.write(f'Found {inner_face_indices.shape[0]} invisible faces')
+        tqdm.write(f'Found {inner_face_indices.shape[0]} invisible faces out of {faces.shape[0]} total')
+    
+    # Safety check: if ALL faces are invisible, something is wrong with visibility detection
+    # Fail explicitly rather than silently
+    if inner_face_indices.shape[0] == faces.shape[0]:
+        raise RuntimeError(f'Hole filling failed: All {faces.shape[0]} faces marked as invisible. This indicates a problem with visibility detection (likely camera setup or mesh orientation issue).')
+    
     if inner_face_indices.shape[0] == 0:
         return verts, faces
     
@@ -250,10 +261,19 @@ def _fill_holes(
     
     ### Connect outer faces to target with weight 1
     g.add_edges([(f, 't') for f in outer_face_indices], attributes={'weight': torch.ones(outer_face_indices.shape[0], dtype=torch.float32).cpu().numpy()})
+    
+    # Safety check: ensure we have both inner and outer faces
+    if inner_face_indices.shape[0] == 0 or outer_face_indices.shape[0] == 0:
+        raise RuntimeError(f'Hole filling failed: Missing inner faces ({inner_face_indices.shape[0]}) or outer faces ({outer_face_indices.shape[0]}). Cannot perform mincut.')
                 
     ### Solve mincut to separate inner from outer faces
     cut = g.mincut('s', 't', (np.array(g.es['weight']) * 1000).tolist())
     remove_face_indices = torch.tensor([v for v in cut.partition[0] if v < faces.shape[0]], dtype=torch.long, device=faces.device)
+    
+    # Safety check: don't remove all faces - fail explicitly
+    if remove_face_indices.shape[0] >= faces.shape[0]:
+        raise RuntimeError(f'Hole filling failed: Mincut would remove all {faces.shape[0]} faces. This indicates a problem with the mincut algorithm or mesh structure.')
+    
     if verbose:
         tqdm.write(f'Mincut solved, start checking the cut')
     
