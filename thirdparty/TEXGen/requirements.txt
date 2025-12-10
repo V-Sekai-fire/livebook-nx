@@ -1,0 +1,25 @@
+transformers==4.28.1
+diffusers==0.28.0
+omegaconf==2.3.0
+xformers==0.0.22.post7+cu118 --index-url https://download.pytorch.org/whl/cu118
+accelerate==0.24.1
+safetensors
+bitsandbytes
+wandb
+jaxtyping
+typeguard
+Pillow
+matplotlib
+opencv-python
+imageio
+torchdyn
+lpips
+torch-geometric
+git+https://github.com/Pointcept/Pointcept.git#subdirectory=libs/pointops
+spconv-cu118
+open3d
+openexr
+trimesh
+git+https://github.com/NVlabs/nvdiffrast.git
+git+https://github.com/mit-han-lab/torchsparse.git
+flash-attn --no-build-isolation

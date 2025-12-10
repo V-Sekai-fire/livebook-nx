@@ -1,0 +1,131 @@
+name: texgen_test
+tag: "test"
+exp_root_dir: "outputs"
+seed: 42
+input_length: 120000
+
+data_cls: spuv.data.mesh_uv.ObjaverseDataModule
+data:
+  mesh_name: "model.obj"
+  uv_name: "model.png"
+  repeat: 1
+  vertex_transformation: true
+  scene_list: ""
+  eval_scene_list: ""
+  cond_views: 1
+  sup_views: 4
+  camera_strategy: "strategy_1"
+  eval_cond_views: 1
+  eval_sup_views: 4
+  eval_batch_size: 1 # only support 1 for now
+  eval_camera_strategy: "strategy_test_1_to_4_90deg"
+
+  train_indices: [ 0, "${input_length}" ] # adjust the indices to your actual dataset
+  val_indices: [ 0, "${input_length}" ]
+  test_indices: [ 0, "${input_length}" ]
+
+  height: 512
+  width: 512
+  batch_size: 2
+  num_workers: 2
+
+
+system_cls: spuv.systems.texgen_test.TEXGenDiffusion
+system:
+  condition_drop_rate: 0.2
+  rescale_betas_zero_snr: true
+  use_ema: true
+  ema_decay: 0.9999
+  render_background_color: [0.0, 0.0, 0.0]
+  train_regression: false # True means only train t=1000
+  recon_warm_up_steps: 0
+  prediction_type: "v_prediction"
+  check_train_every_n_steps: 100
+  test_save_json: true
+
+  test_cfg_scale: 2.0
+  test_num_steps: 30
+  guidance_rescale: 0.0
+  guidance_interval: [0.0, 1.0]
+
+  #data augmentation
+  cond_rgb_perturb: false
+  cond_rgb_perturb_scale:
+    rotate: 2.
+    translate: [ 0.02, 0.02 ]
+    scale: [ 0.98, 1.02 ]
+
+  # image tokenizer transforms input images to tokens: for the condition image
+  image_tokenizer_cls: spuv.models.tokenizers.clip.ClipTokenizer
+  image_tokenizer:
+    pretrained_model_name_or_path: "lambdalabs/sd-image-variations-diffusers"
+
+  backbone_cls: spuv.models.sparse_networks.texgen_network.PointUVNet
+  backbone:
+    in_channels: 10 # +position map +bake map/weight
+    out_channels: 3
+    num_layers: [ 1, 1, 1, 1, 1]
+    point_block_num: [ 1, 1, 2, 4, 6]
+    block_out_channels: [ 32, 256, 1024, 1024, 2048] 
+    dropout: [ 0.0, 0.0, 0.0, 0.1, 0.1] 
+    use_uv_head: true
+    block_type: [ "uv", "point_uv", "uv_dit", "uv_dit", "uv_dit"] 
+    voxel_size: [ 0.01, 0.02, 0.05, 0.05, 0.05]
+    window_size: [ 0, 256, 256, 512, 1024] # in fact patch "length", not window size
+    num_heads: [ 4, 4, 16, 16, 16]
+    skip_input: true
+    skip_type: "adaptive"
+
+  scheduler:
+    name: SequentialLR
+    interval: step
+    schedulers:
+      - name: LinearLR
+        interval: step
+        args:
+          start_factor: 1e-6
+          end_factor: 1.0
+          total_iters: ${mul:${trainer.max_epochs},${idiv:10,${trainer.num_nodes}}}
+      - name: CosineAnnealingLR
+        interval: step
+        args:
+          T_max: ${calc_num_train_steps:${input_length},${data.batch_size},${trainer.max_epochs},${trainer.num_nodes}} 
+          eta_min: 0.0
+    milestones:
+      - ${mul:${trainer.max_epochs},${idiv:10,${trainer.num_nodes}}}
+
+  loss:
+    diffusion_loss_dict:
+        lambda_mse: 1.0
+        lambda_l1: 0.0
+    render_loss_dict:
+        lambda_render_lpips: 0.5
+        lambda_render_mse: 0.0
+        lambda_render_l1: 0.0
+    use_min_snr_weight: false
+    use_vgg: false
+
+  optimizer:
+    name: AdamW
+    args:
+      lr: 2e-4
+      betas: [0.9, 0.999]
+      weight_decay: 0.05
+
+trainer:
+  max_epochs: 300
+  check_val_every_n_epoch: 1 #1
+  num_sanity_val_steps: 0 #1
+  precision: bf16-mixed
+  strategy: ddp_find_unused_parameters_true
+  #log_every_n_steps: 50
+  gradient_clip_val: 1.0
+  num_nodes: 1
+
+checkpoint:
+  save_last: true # whether to save at each validation time
+  save_top_k: 10
+  every_n_epochs: 5 #${trainer.max_epochs} # do not save at all for debug purpose
+  monitor: "val_psnr"  # Replace with your actual metric name
+  mode: "max"
+

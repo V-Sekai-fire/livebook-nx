@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/CVMI-Lab/TEXGen
+	branch = main
+	commit = bbed677afd290dee103014a134609df01b3d6422
+	parent = 488e4b3b6a065ee2fabec55295cbc5c159386c7c
+	method = merge
+	cmdver = 0.4.9
