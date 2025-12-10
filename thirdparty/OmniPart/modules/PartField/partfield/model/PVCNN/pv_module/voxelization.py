@@ -38,16 +38,26 @@ def my_voxelization(features, coords, resolution):
 
     indices = indices.unsqueeze(dim=1).expand(-1, result.shape[1], -1)
     features = torch.cat([features, torch.ones(features.shape[0], 1, features.shape[2], device=features.device, dtype=features.dtype)], dim=1)
+    
+    # Clamp indices to valid range to prevent out-of-bounds access
+    max_index = result.shape[2] - 1
+    indices = torch.clamp(indices.long(), 0, max_index)
+    
     # Use scatter_reduce instead of deprecated scatter_ with reduce
     try:
-        out_feature = result.scatter_reduce_(index=indices.long(), src=features, dim=2, reduce='sum')
-    except AttributeError:
-        # Fallback for older PyTorch versions
-        out_feature = result.scatter_(index=indices.long(), src=features, dim=2, reduce='add')
+        # Use scatter_reduce with include_self=False for proper initialization
+        result.zero_()  # Initialize to zero first
+        out_feature = result.scatter_reduce_(dim=2, index=indices, src=features, reduce='sum', include_self=False)
+    except (AttributeError, TypeError):
+        # Fallback for older PyTorch versions or if include_self is not supported
+        result.zero_()  # Initialize to zero first
+        out_feature = result.scatter_(index=indices, src=features, dim=2, reduce='add')
+    
     cnt = out_feature[:, -1:, :]
+    # Add epsilon to prevent division by zero
     zero_mask = (cnt == 0).to(features.dtype)
-    cnt = cnt * (1 - zero_mask) + zero_mask * 1e-5
-    vox_feature = out_feature[:, :-1, :] / cnt
+    cnt = cnt * (1 - zero_mask) + zero_mask * torch.tensor(1e-5, device=cnt.device, dtype=cnt.dtype)
+    vox_feature = out_feature[:, :-1, :] / cnt.clamp(min=1e-8)  # Additional clamp for safety
     return vox_feature.view(b, c, resolution, resolution, resolution)
 
 class Voxelization(nn.Module):

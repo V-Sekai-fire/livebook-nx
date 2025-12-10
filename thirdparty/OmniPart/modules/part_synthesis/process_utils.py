@@ -35,6 +35,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
             imageio.mimsave(mesh_video_path, video, fps=30)
             
         if save_glb:
+            # Try with textured first, fall back to untextured if it fails
             glb = postprocessing_utils.to_glb(
                 outputs['gaussian'][i],
                 outputs['mesh'][i],
@@ -42,7 +43,18 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
                 texture_size=1024,
                 textured=textured,
             )
+            # If textured failed, try untextured
+            if glb is None and textured:
+                print(f"[WARN] Textured GLB generation failed for part {i}, trying untextured...")
+                glb = postprocessing_utils.to_glb(
+                    outputs['gaussian'][i],
+                    outputs['mesh'][i],
+                    simplify=simplify_ratio,
+                    texture_size=1024,
+                    textured=False,  # Disable texture baking
+                )
             if glb is None:
+                print(f"[WARN] GLB generation failed for part {i}, skipping...")
                 continue
             glb_path = f"{output_dir}/part{i}.glb"
             if os.path.exists(glb_path):
@@ -57,11 +69,15 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=True, sav
             else:
                 gs_list.append(outputs['gaussian'][i])
                 
-    merged_gaussian = merge_gaussians(gs_list)
-    merged_gaussian.save_ply(f"{output_dir}/merged_gs.ply")
-    
-    exploded_gs = exploded_gaussians(gs_list, explosion_scale=0.3)
-    exploded_gs.save_ply(f"{output_dir}/exploded_gs.ply")
+    # Only merge gaussians if we have any to merge
+    if gs_list:
+        merged_gaussian = merge_gaussians(gs_list)
+        merged_gaussian.save_ply(f"{output_dir}/merged_gs.ply")
+        
+        exploded_gs = exploded_gaussians(gs_list, explosion_scale=0.3)
+        exploded_gs.save_ply(f"{output_dir}/exploded_gs.ply")
+    else:
+        print("[WARN] No gaussians to merge (gs_list is empty). Skipping merged/exploded gaussian export.")
 
 
 def merge_gaussians(gaussians_list):

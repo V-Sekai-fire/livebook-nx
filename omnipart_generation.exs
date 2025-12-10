@@ -76,6 +76,7 @@ dependencies = [
   "pymeshfix==0.17.0",
   "igraph==0.11.8",
   "xformers==0.0.27.post2",
+  "numpy==1.26.4",  # Pin to 1.26.4 to fix spconv SIGFPE with CUDA 12.1 (NumPy 2.0+ incompatible)
   "spconv-cu120==2.3.6",
   "transformers==4.50.3",
   "pydantic==2.10.6",
@@ -847,13 +848,13 @@ if Path(omnipart_dir).exists():
     inference_cmd = [
         sys.executable,
         "-m", inference_script,
-        "--image-input", image_path,
-        "--mask-input", mask_path,
-        "--output-root", output_dir,
+        "--image_input", image_path,
+        "--mask_input", mask_path,
+        "--output_root", output_dir,
         "--seed", str(seed),
-        "--num-inference-steps", str(num_inference_steps),
-        "--guidance-scale", str(guidance_scale),
-        "--simplify-ratio", str(simplify_ratio),
+        "--num_inference_steps", str(num_inference_steps),
+        "--guidance_scale", str(guidance_scale),
+        "--simplify_ratio", str(simplify_ratio),
     ]
     cwd = omnipart_dir
 else:

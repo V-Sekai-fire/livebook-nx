@@ -365,6 +365,11 @@ def merge_parts(save_dir):
     part_list = glob.glob(os.path.join(save_dir, "*.glb"))
     part_list = [p for p in part_list if "part" in p and "parts" not in p and "part0" not in p] # part 0 is the overall model
     part_list.sort()
+    
+    if not part_list:
+        print(f"[WARN] No part GLB files found in {save_dir}. Skipping merge_parts.")
+        return
+    
     for i, part_path in enumerate(tqdm(part_list, desc="Merging parts")):
         part_mesh = trimesh.load(part_path, force='mesh')
         scene_list_texture.append(part_mesh)
@@ -377,7 +382,15 @@ def merge_parts(save_dir):
         )
         scene_list.append(part_mesh_color)
         os.remove(part_path)
-    scene_texture = trimesh.Scene(scene_list_texture)
-    scene_texture.export(os.path.join(save_dir, "mesh_textured.glb"))
-    scene = trimesh.Scene(scene_list)
-    scene.export(os.path.join(save_dir, "mesh_segment.glb"))
+    
+    if scene_list_texture:
+        scene_texture = trimesh.Scene(scene_list_texture)
+        scene_texture.export(os.path.join(save_dir, "mesh_textured.glb"))
+    else:
+        print("[WARN] No meshes to merge. Skipping mesh_textured.glb export.")
+    
+    if scene_list:
+        scene = trimesh.Scene(scene_list)
+        scene.export(os.path.join(save_dir, "mesh_segment.glb"))
+    else:
+        print("[WARN] No meshes to merge. Skipping mesh_segment.glb export.")

@@ -282,16 +282,21 @@ class OmniPartImageTo3DPipeline(Pipeline):
             kwargs['masks'] = masks
             
         # Generate samples
-        slat = self.slat_sampler.sample(
+        print("[DEBUG] sample_slat: Calling slat_sampler.sample...")
+        sampler_result = self.slat_sampler.sample(
             flow_model,
             noise,
             **cond,
             **sampler_params,
             verbose=True,
             **kwargs
-        ).samples
+        )
+        print("[DEBUG] sample_slat: Sampler returned, extracting samples...")
+        slat = sampler_result.samples
+        print(f"[DEBUG] sample_slat: Got samples, shape: {slat.shape if hasattr(slat, 'shape') else 'N/A'}")
         
         # Normalize the features
+        print("[DEBUG] sample_slat: Starting normalization...")
         feat_dim = slat.feats.shape[1]
         base_std = torch.tensor(self.slat_normalization['std']).to(slat.device)
         base_mean = torch.tensor(self.slat_normalization['mean']).to(slat.device)
@@ -317,7 +322,9 @@ class OmniPartImageTo3DPipeline(Pipeline):
             print(f"Warning: Feature dimensions mismatch. Using {copy_dim} dimensions for normalization")
             
         # Apply normalization
+        print("[DEBUG] sample_slat: Applying normalization...")
         slat = slat * std + mean
+        print("[DEBUG] sample_slat: Normalization complete, returning SLAT")
 
         return slat
     
@@ -345,7 +352,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
             slat = self.sample_slat(cond, coords, part_layouts, masks, slat_sampler_params)
             print("[DEBUG] get_slat: sample_slat completed, dividing SLAT...")
             divided_slat = self.divide_slat(slat, part_layouts)
-            print(f"[DEBUG] get_slat: Divided into {len(divided_slat)} parts")
+            print(f"[DEBUG] get_slat: Divided SLAT, shape: {divided_slat.shape if hasattr(divided_slat, 'shape') else 'N/A'}")
             print("[DEBUG] get_slat: Starting decode_slat...")
             result = self.decode_slat(divided_slat, formats)
             print("[DEBUG] get_slat: decode_slat completed")
@@ -382,18 +389,18 @@ class OmniPartImageTo3DPipeline(Pipeline):
         """
         ret = {}
         print(f"[DEBUG] decode_slat: Starting decode for formats: {formats}")
+        
+        # slat should be a single SparseTensor after divide_slat
         if isinstance(slat, list):
-            print(f"[DEBUG] decode_slat: Received list of {len(slat)} SLAT tensors")
-            for i, s in enumerate(slat):
-                print(f"[DEBUG] decode_slat: SLAT[{i}] - feats: {s.feats.shape if hasattr(s, 'feats') else 'N/A'}, coords: {s.coords.shape if hasattr(s, 'coords') else 'N/A'}")
-        else:
-            print(f"[DEBUG] decode_slat: SLAT - feats: {slat.feats.shape if hasattr(slat, 'feats') else 'N/A'}, coords: {slat.coords.shape if hasattr(slat, 'coords') else 'N/A'}")
+            print(f"[WARN] decode_slat: Received list, concatenating...")
+            slat = sparse_cat(slat)
+        print(f"[DEBUG] decode_slat: SLAT - feats: {slat.feats.shape if hasattr(slat, 'feats') else 'N/A'}, coords: {slat.coords.shape if hasattr(slat, 'coords') else 'N/A'}")
         
         if 'mesh' in formats:
             print("[DEBUG] decode_slat: Decoding mesh format...")
             try:
                 ret['mesh'] = self.models['slat_decoder_mesh'](slat)
-                print("[DEBUG] decode_slat: Mesh format decoded successfully")
+                print(f"[DEBUG] decode_slat: Mesh format decoded successfully, got {len(ret['mesh'])} meshes")
             except Exception as e:
                 print(f"[ERROR] decode_slat: Mesh format failed: {type(e).__name__}: {e}")
                 import traceback
@@ -404,7 +411,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
             print("[DEBUG] decode_slat: Decoding gaussian format...")
             try:
                 ret['gaussian'] = self.models['slat_decoder_gs'](slat)
-                print("[DEBUG] decode_slat: Gaussian format decoded successfully")
+                print(f"[DEBUG] decode_slat: Gaussian format decoded successfully, got {len(ret['gaussian'])} gaussians")
             except Exception as e:
                 print(f"[ERROR] decode_slat: Gaussian format failed: {type(e).__name__}: {e}")
                 import traceback
@@ -415,7 +422,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
             print("[DEBUG] decode_slat: Decoding radiance_field format...")
             try:
                 ret['radiance_field'] = self.models['slat_decoder_rf'](slat)
-                print("[DEBUG] decode_slat: Radiance_field format decoded successfully")
+                print(f"[DEBUG] decode_slat: Radiance_field format decoded successfully, got {len(ret['radiance_field'])} radiance fields")
             except Exception as e:
                 print(f"[ERROR] decode_slat: Radiance_field format failed: {type(e).__name__}: {e}")
                 import traceback
@@ -429,7 +436,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
         self,
         slat: sp.SparseTensor,
         part_layouts: List[slice],
-    ) -> List[sp.SparseTensor]:
+    ) -> sp.SparseTensor:
         """
         Divide the structured latent into parts.
         
@@ -458,13 +465,17 @@ class OmniPartImageTo3DPipeline(Pipeline):
         Remove noise from latent vectors by filtering out points with low confidence.
         
         Args:
-            z_batch: Latent vectors to process
+            z_batch: Latent vectors to process (SparseTensor or iterable of SparseTensor)
             
         Returns:
             sp.SparseTensor: Processed latent with noise removed
         """
         # Create a new list for processed tensors
         processed_batch = []
+        
+        # Handle both single SparseTensor and iterable of SparseTensor
+        if isinstance(z_batch, sp.SparseTensor):
+            z_batch = [z_batch]
         
         for i, z in enumerate(z_batch):
             coords = z.coords
@@ -500,7 +511,8 @@ class OmniPartImageTo3DPipeline(Pipeline):
                 processed_z = z
 
             processed_batch.append(processed_z)
-            
+        
+        # Concatenate all processed parts
         return sparse_cat(processed_batch)
 
     

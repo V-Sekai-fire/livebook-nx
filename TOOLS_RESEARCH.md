@@ -260,6 +260,55 @@ Your Elixir scripts follow a consistent pattern:
   - SLat encoding and merging for part-aware generation
 - **Note**: SIGGRAPH Asia 2025, enables fine-grained part-level control in 3D generation
 
+### 13. Mesh Remeshing / Quad Topology
+
+#### QRemeshify
+
+- **Repository**: https://github.com/ksami/QRemeshify
+- **Gumroad**: https://ksami.gumroad.com/l/QRemeshify
+- **License**: GPL-3.0 ✅ FOSS (OSI-approved)
+- **Published**: October 2024 (v1.1.0 released)
+- **Style Match**: ⚠️ Medium - Blender extension, not a Python library
+- **Integration**: Blender addon for quad remeshing, requires Blender Python API
+- **Script Name**: `qremeshify_remeshing.exs` (if integrated via Blender Python API)
+- **Features**:
+  - **High-Quality Quad Topology**: Produces clean and well-structured quad meshes suitable for further modeling and animation
+  - **Symmetry Support**: Allows for symmetrical remeshing along specified axes, reducing manual adjustments
+  - **Edge Flow Guidance**: Utilizes marked seams, sharp edges, material boundaries, and face set boundaries to guide edge flow
+  - **Advanced Fine-Tuning**: Offers options for detailed adjustments to meet specific modeling requirements
+  - **Integrated Solution**: Operates entirely within Blender, eliminating the need for external software
+  - Based on QuadWild algorithm with Bi-MDF solver for efficient and effective remeshing
+  - Preprocessing option for decimation, triangulation, and geometry fixes
+  - Post-processing smoothing option
+  - Sharp feature detection from edge angles and marked edges
+  - Cache support for faster iteration when tweaking settings
+  - Debug mode for intermediate mesh visualization
+  - Scale factor (density) option for controlling mesh resolution
+- **Requirements**:
+  - Blender 4.2 and above
+  - Windows (Linux and macOS support being tested)
+- **Installation**:
+  1. Download the zip file from GitHub repository or Gumroad page
+  2. In Blender, navigate to `Edit > Preferences > Add-ons`
+  3. Click on `Install from Disk...` and select the downloaded zip file
+  4. Ensure the checkbox is ticked to enable QRemeshify
+- **Usage**: Access QRemeshify from the 3D view N-Panel (press `N` in the 3D view) while in Object mode. Remeshing time depends on various factors and may take longer for complex models.
+- **Pipeline**:
+  1. Optional: Cut mesh in half for symmetry
+  2. Calculate sharp features
+  3. QuadWild preprocessing and field calculation
+  4. QuadWild field tracing and patch splitting
+  5. Quadrangulation and smoothing
+  6. Optional: Add mirror modifier for symmetry
+- **Changelog Highlights**:
+  - **v1.1.0**: Performance improvements, added guidance of edge flow using material and face set boundaries, increased visibility of scale factor (density) option
+  - **v1.0.2**: Set object back to original location
+  - **v1.0.1**: Fixed issues with special characters in object names, resolved problems with edges marked as sharp not being recognized
+- **Note**: This is a Blender extension, not a standalone Python library. Integration would require using Blender's Python API (`bpy` module) or extracting the underlying QuadWild library. For Elixir integration, would need to either:
+  - Call Blender via command-line with Python scripts
+  - Extract and use the underlying QuadWild library directly
+  - Use Blender's Python API through subprocess calls
+
 ## Integration Pattern Template
 
 All new tools should follow this pattern:

@@ -282,21 +282,33 @@ def postprocess_mesh(
 
         # Remove invisible faces and fill small holes
         if fill_holes:
-            vertices, faces = torch.tensor(vertices).cuda(), torch.tensor(faces.astype(np.int32)).cuda()
-            vertices, faces = _fill_holes(
-                vertices, faces,
-                max_hole_size=fill_holes_max_hole_size,
-                max_hole_nbe=fill_holes_max_hole_nbe,
-                resolution=fill_holes_resolution,
-                num_views=fill_holes_num_views,
-                debug=debug,
-                verbose=verbose,
-            )
-            vertices, faces = vertices.cpu().numpy(), faces.cpu().numpy()
-            if verbose:
-                tqdm.write(f'After remove invisible faces: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+            # Save decimated mesh before attempting hole filling
+            decimated_vertices = vertices.copy()
+            decimated_faces = faces.copy()
+            try:
+                vertices_t = torch.tensor(vertices).cuda()
+                faces_t = torch.tensor(faces.astype(np.int32)).cuda()
+                vertices_t, faces_t = _fill_holes(
+                    vertices_t, faces_t,
+                    max_hole_size=fill_holes_max_hole_size,
+                    max_hole_nbe=fill_holes_max_hole_nbe,
+                    resolution=fill_holes_resolution,
+                    num_views=fill_holes_num_views,
+                    debug=debug,
+                    verbose=verbose,
+                )
+                vertices, faces = vertices_t.cpu().numpy(), faces_t.cpu().numpy()
+                if verbose:
+                    tqdm.write(f'After remove invisible faces: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+            except Exception as e:
+                # If hole filling fails (e.g., nvdiffrast missing), continue with decimated mesh
+                tqdm.write(f'Error in hole filling (continuing with decimated mesh): {e}')
+                # Restore decimated mesh
+                vertices, faces = decimated_vertices, decimated_faces
     except Exception as e:
         tqdm.write(f'Error in postprocess_mesh: {e}')
+        # If decimation also failed, return original mesh
+        # Otherwise, the decimated mesh should have been preserved above
         return None, None
 
     return vertices, faces
@@ -514,8 +526,8 @@ def to_glb(
         trimesh.Trimesh: The processed mesh with texture, ready for GLB export
     """
     # Extract mesh data from the result
-    vertices = mesh.vertices.cpu().numpy()
-    faces = mesh.faces.cpu().numpy()
+    vertices = mesh.vertices.detach().cpu().numpy()
+    faces = mesh.faces.detach().cpu().numpy()
     
     # Apply mesh post-processing
     vertices, faces = postprocess_mesh(
@@ -531,8 +543,31 @@ def to_glb(
         verbose=verbose,
     )
     
+    # If postprocess_mesh failed completely, try with just decimation (no hole filling)
     if vertices is None or faces is None:
-        return None
+        if verbose:
+            print("[WARN] postprocess_mesh failed, retrying with simplified processing (no hole filling)...")
+        # Retry with just decimation, no hole filling
+        vertices, faces = postprocess_mesh(
+            mesh.vertices.detach().cpu().numpy(),  # Use original vertices
+            mesh.faces.detach().cpu().numpy(),      # Use original faces
+            simplify=simplify > 0,
+            simplify_ratio=simplify,
+            fill_holes=False,  # Disable hole filling
+            fill_holes_max_hole_size=fill_holes_max_size,
+            fill_holes_max_hole_nbe=int(250 * np.sqrt(1-simplify)),
+            fill_holes_resolution=1024,
+            fill_holes_num_views=1000,
+            debug=debug,
+            verbose=verbose,
+        )
+        # If still None, use original vertices/faces
+        if vertices is None or faces is None:
+            if verbose:
+                print("[WARN] postprocess_mesh failed again, using original mesh without post-processing")
+            # Use original mesh data
+            vertices = mesh.vertices.detach().cpu().numpy()
+            faces = mesh.faces.detach().cpu().numpy()
 
     if vertices.shape[0] == 0 or faces.shape[0] == 0:
         return None

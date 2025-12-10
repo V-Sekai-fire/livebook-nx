@@ -371,8 +371,16 @@ class SLatFlowModel(nn.Module):
         len_before = 0
         batch_last_partid = []
         for batch_idx, part_layout in enumerate(part_layouts):
+            if len(part_layout) == 0:
+                print(f"[WARN] Empty part_layout for batch {batch_idx}, skipping")
+                batch_last_partid.append(part_id)
+                continue
             for layout_idx, layout in enumerate(part_layout):
                 adjusted_layout = slice(layout.start + len_before, layout.stop + len_before, layout.step)
+                # Validate slice bounds
+                if adjusted_layout.stop > new_batch_ids.shape[0]:
+                    print(f"[ERROR] Slice stop {adjusted_layout.stop} exceeds tensor size {new_batch_ids.shape[0]}")
+                    raise ValueError(f"Invalid slice bounds: {adjusted_layout}")
                 new_batch_ids[adjusted_layout] = part_id
                 part_id += 1
             
