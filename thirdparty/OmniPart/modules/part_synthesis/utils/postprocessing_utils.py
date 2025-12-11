@@ -418,8 +418,9 @@ def bake_texture(
         np.array: The baked texture as an RGB image (H, W, 3)
     """
     # Move data to GPU and ensure float32 (not float64)
+    # nvdiffrast requires int32 for faces, not int64
     vertices = torch.tensor(vertices, dtype=torch.float32).cuda()
-    faces = torch.tensor(faces.astype(np.int32), dtype=torch.int64).cuda()
+    faces = torch.tensor(faces.astype(np.int32), dtype=torch.int32).cuda()
     uvs = torch.tensor(uvs, dtype=torch.float32).cuda()
     observations = [torch.tensor(obs / 255.0).float().cuda() for obs in observations]
     masks = [torch.tensor(m>0).bool().cuda() for m in masks]
