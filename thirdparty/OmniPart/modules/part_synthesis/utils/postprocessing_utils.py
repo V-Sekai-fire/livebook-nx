@@ -560,6 +560,10 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     faces_uvs_batch = faces.unsqueeze(0) if len(faces.shape) == 2 else faces  # (F, 3) -> (1, F, 3)
     verts_uvs_batch = uvs.unsqueeze(0) if len(uvs.shape) == 2 else uvs  # (V, 2) -> (1, V, 2)
     
+    # Store references to UV data for later use (PyTorch3D TexturesUV doesn't expose these as public attributes)
+    faces_uvs_indices = faces_uvs_batch  # (B, F, 3) - indices into verts_uvs
+    verts_uvs = verts_uvs_batch  # (B, V, 2) - actual UV coordinates
+    
     meshes = Meshes(
         verts=vertices,
         faces=faces,
@@ -593,8 +597,7 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     # In PyTorch3D, faces_uvs contains indices into verts_uvs
     # faces_uvs: (B, F, 3) - indices into verts_uvs
     # verts_uvs: (B, V, 2) - actual UV coordinates
-    faces_uvs_indices = meshes.textures.faces_uvs  # (B, F, 3) - indices
-    verts_uvs = meshes.textures.verts_uvs  # (B, V, 2) - UV coordinates
+    # Note: We use the stored references since TexturesUV doesn't expose these as public attributes
     
     # Get face index for each pixel
     face_idx = pix_to_face.squeeze(-1)  # (B, H, W) - face indices, -1 for background
@@ -888,8 +891,13 @@ def bake_texture(
                 if use_pytorch3d:
                     # Use PyTorch3D texture sampling (simpler bilinear sampling)
                     # Sample texture using UV coordinates
+                    # uv from _rasterize_with_pytorch3d has shape (B, H, W, 2) where B=1
+                    # We need to ensure it's (H, W, 2) before normalizing, then (1, H, W, 2) for grid_sample
+                    if len(uv.shape) == 4 and uv.shape[0] == 1:
+                        # Remove batch dimension: (1, H, W, 2) -> (H, W, 2)
+                        uv = uv.squeeze(0)
                     uv_normalized = uv * 2.0 - 1.0  # Convert [0,1] to [-1,1] for grid_sample
-                    uv_grid = uv_normalized.unsqueeze(0)  # (1, H, W, 2)
+                    uv_grid = uv_normalized.unsqueeze(0)  # (H, W, 2) -> (1, H, W, 2)
                     # grid_sample expects (N, C, H, W) input and (N, H, W, 2) grid
                     texture_for_sampling = texture.permute(0, 3, 1, 2)  # (1, 3, H, W)
                     render = torch.nn.functional.grid_sample(
