@@ -357,30 +357,89 @@ def postprocess_mesh(
     if vertices.shape[0] == 0 or faces.shape[0] == 0:
         return vertices, faces
     
-    # Simplify mesh using quadric edge collapse decimation
-    # Use trimesh instead of PyVista to avoid signal handler conflicts in Pythonx
+    # Simplify mesh using meshoptimizer with screen-space arc angle error metric
+    # Falls back to trimesh if meshoptimizer is not available
     if simplify and simplify_ratio > 0:
         try:
-            # Ensure float32/int32 for trimesh (not float64)
+            # Ensure float32/int32
             vertices = np.asarray(vertices, dtype=np.float32)
             faces = np.asarray(faces, dtype=np.int32)
-            # Create trimesh object
-            mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-            # Calculate target number of faces
-            target_faces = int(faces.shape[0] * simplify_ratio)
-            if target_faces < 4:  # Minimum faces for a valid mesh
-                target_faces = 4
-            if target_faces >= faces.shape[0]:
+            
+            # Calculate target number of indices (3 per face)
+            target_indices = int(faces.shape[0] * simplify_ratio * 3)
+            if target_indices < 12:  # Minimum 4 faces = 12 indices
+                target_indices = 12
+            
+            if target_indices >= faces.shape[0] * 3:
                 # No decimation needed
                 if verbose:
-                    tqdm.write(f'Decimation skipped: target faces ({target_faces}) >= current faces ({faces.shape[0]})')
+                    tqdm.write(f'Decimation skipped: target indices ({target_indices}) >= current indices ({faces.shape[0] * 3})')
             else:
-                # Perform quadric decimation
-                mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
-                vertices = mesh.vertices
-                faces = mesh.faces
-                if verbose:
-                    tqdm.write(f'After decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+                # Try to use meshoptimizer with screen-space error
+                try:
+                    from .meshoptimizer_wrapper import simplify_with_screen_error
+                    
+                    # Convert faces to flat index array
+                    indices = faces.flatten().astype(np.uint32)
+                    
+                    # Use default camera (origin looking at mesh center)
+                    # Screen-space error will be calculated based on mesh extents
+                    mesh_center = vertices.mean(axis=0)
+                    mesh_extent = np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))
+                    
+                    # Calculate target error based on screen arc angle
+                    # For screen-space: error should be relative to viewing distance
+                    # Default: 1% of mesh extent, adjusted for screen projection
+                    target_error = 0.01  # 1% relative error
+                    
+                    # Simplify with meshoptimizer
+                    result = simplify_with_screen_error(
+                        vertices,
+                        indices,
+                        target_index_count=target_indices,
+                        target_error=target_error,
+                        camera_position=mesh_center + np.array([0, 0, mesh_extent * 2], dtype=np.float32),
+                        camera_direction=np.array([0, 0, -1], dtype=np.float32),
+                        fov=40.0,
+                        screen_width=1920,
+                        screen_height=1080,
+                        options=0,
+                    )
+                    
+                    # Handle return value (may be 2 or 3 elements depending on version)
+                    if len(result) == 2:
+                        new_indices, result_error = result
+                        new_vertices = vertices  # Vertices not modified
+                    else:
+                        new_indices, new_vertices, result_error = result
+                    
+                    # Convert back to faces
+                    new_faces = new_indices.reshape(-1, 3)
+                    
+                    # Remap vertices if needed (meshoptimizer may not remap, so we keep original)
+                    vertices = new_vertices
+                    faces = new_faces.astype(np.int32)
+                    
+                    if verbose:
+                        tqdm.write(f'After meshoptimizer decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces (error: {result_error:.6f})')
+                
+                except (ImportError, Exception) as e:
+                    # Fallback to trimesh if meshoptimizer not available
+                    if verbose:
+                        tqdm.write(f'Meshoptimizer not available ({e}), falling back to trimesh')
+                    
+                    # Create trimesh object
+                    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+                    # Calculate target number of faces
+                    target_faces = int(faces.shape[0] * simplify_ratio)
+                    if target_faces < 4:  # Minimum faces for a valid mesh
+                        target_faces = 4
+                    # Perform quadric decimation
+                    mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
+                    vertices = mesh.vertices
+                    faces = mesh.faces
+                    if verbose:
+                        tqdm.write(f'After trimesh decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
         except Exception as e:
             # Decimation failed, skip it but continue
             if verbose:

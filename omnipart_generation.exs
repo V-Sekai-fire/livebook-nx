@@ -31,6 +31,10 @@ OtelSetup.configure()
 # Initialize Python environment with required dependencies
 # OmniPart uses TRELLIS framework and various 3D processing libraries
 # Based on official requirements: https://github.com/HKU-MMLab/OmniPart
+base_dir = Path.expand(".")
+meshoptimizer_path = Path.join([base_dir, "thirdparty", "meshoptimizer"])
+meshoptimizer_path_normalized = String.replace(meshoptimizer_path, "\\", "/")
+
 Pythonx.uv_init("""
 [project]
 name = "omnipart-generation"
@@ -57,6 +61,7 @@ dependencies = [
   "numpy==1.26.4",  # Pin to 1.26.4 to fix spconv SIGFPE with CUDA 12.1 (NumPy 2.0+ incompatible)
   "spconv-cu120==2.3.6",
   "transformers @ git+https://github.com/huggingface/transformers.git@ff13eb668aa03f151ded71636d723f2e490ad967",
+  "meshoptimizer @ file:///#{String.replace(meshoptimizer_path, "\\", "/")}",
   "pydantic==2.10.6",
   "diffusers==0.32.0",
   "lightning==2.2",
@@ -534,6 +539,13 @@ from pathlib import Path
 import shutil
 import time
 
+# Add meshoptimizer to Python path for local development
+# This allows importing meshoptimizer package even if not installed via pip/uv
+base_dir = Path(__file__).parent if '__file__' in globals() else Path.cwd()
+meshoptimizer_dir = base_dir / "thirdparty" / "meshoptimizer"
+if meshoptimizer_dir.exists():
+    sys.path.insert(0, str(meshoptimizer_dir))
+
 # Enable OpenEXR support in OpenCV (required for .exr file writing)
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
@@ -840,6 +852,10 @@ if not apply_merge:
         )
     
     sys.path.insert(0, str(omnipart_dir))
+    # Add meshoptimizer to path for local development
+    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
+    if meshoptimizer_dir.exists():
+        sys.path.insert(0, str(meshoptimizer_dir))
     
     # Import required modules
     try:
@@ -944,6 +960,10 @@ for img_idx, image_path in enumerate(image_paths):
                 raise FileNotFoundError(f"OmniPart directory not found at {omnipart_dir}")
             
             sys.path.insert(0, str(omnipart_dir))
+    # Add meshoptimizer to path for local development
+    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
+    if meshoptimizer_dir.exists():
+        sys.path.insert(0, str(meshoptimizer_dir))
             
             from segment_anything import SamAutomaticMaskGenerator, build_sam
             from modules.label_2d_mask.label_parts import get_sam_mask, clean_segment_edges
@@ -1439,6 +1459,10 @@ if Path(omnipart_dir).exists():
 if Path(omnipart_dir).exists():
     # Use local OmniPart installation
     sys.path.insert(0, str(omnipart_dir))
+    # Add meshoptimizer to path for local development
+    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
+    if meshoptimizer_dir.exists():
+        sys.path.insert(0, str(meshoptimizer_dir))
     print(f"[INFO] Using OmniPart from: {omnipart_dir}")
 else:
     # Try to use OmniPart as installed package

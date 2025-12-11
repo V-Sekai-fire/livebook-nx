@@ -1,19 +1,50 @@
-# IDE integrations
-/.cache/
-/.idea/
-/.vs/
-/.vscode/
-/.zed/
+# Build directories
+build/
+dist/
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
-# Build files
-/build/
-/cmake*/
-/out/
-/*.dSYM/
-/gltf/library.wasm
-compile_commands.json
+# Compiled libraries
+*.so
+*.dylib
+*.dll
+*.a
+*.lib
 
-# Test files
-/data/
-/*.log
-/perf.data*
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python virtual environments
+venv/
+env/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Distribution / packaging
+*.egg
+*.whl
+
