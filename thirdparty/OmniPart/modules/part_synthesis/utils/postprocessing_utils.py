@@ -77,16 +77,21 @@ def _fill_holes(
         verts = verts.float()
     else:
         verts = torch.tensor(verts, dtype=torch.float32)
+    # nvdiffrast requires int32 for faces, not int64
     if isinstance(faces, torch.Tensor):
-        faces = faces.long()
+        faces = faces.int()  # Convert to int32 (not long/int64)
     else:
-        faces = torch.tensor(faces, dtype=torch.long)
+        faces = torch.tensor(faces, dtype=torch.int32)  # Use int32 for nvdiffrast
     
     # Move to GPU if not already
     if not verts.is_cuda:
         verts = verts.cuda()
     if not faces.is_cuda:
         faces = faces.cuda()
+    
+    # Ensure faces are int32 (nvdiffrast requirement)
+    if faces.dtype != torch.int32:
+        faces = faces.int()
     
     # Construct cameras at uniformly distributed positions on a sphere
     yaws = []
