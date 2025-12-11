@@ -154,7 +154,7 @@ defmodule ArgsParser do
       --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
       --num-inference-steps <int>   Number of inference steps (default: 25)
       --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
-      --simplify-ratio <float>      Mesh simplification ratio (default: 0.3)
+      --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
       --gpu <int>                   GPU ID to use (default: 0)
       --seed <int>                  Random seed (default: 42)
       --help, -h                     Show this help message
@@ -275,7 +275,7 @@ defmodule ArgsParser do
       merge_groups: Keyword.get(opts, :merge_groups),
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
-        simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
+        simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.15),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
     }
@@ -386,7 +386,7 @@ size_threshold = config.get('size_threshold', 2000)
 merge_groups_str = config.get('merge_groups')
 num_inference_steps = config.get('num_inference_steps', 25)
 guidance_scale = config.get('guidance_scale', 7.5)
-simplify_ratio = config.get('simplify_ratio', 0.3)
+simplify_ratio = config.get('simplify_ratio', 0.15)
 gpu = config.get('gpu', 0)
 seed = config.get('seed', 42)
 omnipart_dir = config.get('omnipart_dir')
