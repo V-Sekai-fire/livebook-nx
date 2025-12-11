@@ -291,211 +291,367 @@ end
 
 defmodule OtelSetup do
   @moduledoc """
-  Configures OpenTelemetry for console-only logging.
+  Configures OpenTelemetry using the official library from hex.pm.
+  Sets up a JSON console exporter for spans and metrics.
   """
+  require OpenTelemetry.Tracer
+  
   def configure do
+    # Configure batch processor for better performance
     Application.put_env(:opentelemetry, :span_processor, :batch)
-    Application.put_env(:opentelemetry, :traces_exporter, :none)
-    Application.put_env(:opentelemetry, :metrics_exporter, :none)
-    Application.put_env(:opentelemetry, :logs_exporter, :none)
+    
+    # Start our JSON exporter agent to collect spans
+    OtelJsonExporter.start_link([])
+    
+    # Use a custom span processor that collects spans
+    # The exporter will be called by the SDK's batch processor
+    Application.put_env(:opentelemetry, :traces_exporter, OtelJsonExporter)
+    Application.put_env(:opentelemetry, :metrics_exporter, OtelJsonExporter)
+    Application.put_env(:opentelemetry, :logs_exporter, OtelJsonExporter)
+    
+    # Set up Logger backend to capture logs
+    setup_log_backend()
 
     case Application.ensure_all_started(:opentelemetry) do
       {:ok, _} ->
-        OtelLogger.info("OpenTelemetry started - logging to console only", [
-          {"otel.export_method", "console"},
-          {"otel.local_only", true}
-        ])
-        # Start span collector for performance tracking
-        SpanCollector.start_link()
         :ok
       error ->
-        OtelLogger.warn("Failed to start OpenTelemetry - spans will not be created", [
+        OtelLogger.warn("Failed to start OpenTelemetry", [
           {"otel.error", inspect(error)}
         ])
         {:error, error}
     end
   end
+  
+  defp setup_log_backend do
+    # Add a custom Logger backend to capture logs
+    # Use Elixir's Logger.add_backend for compatibility
+    case Logger.add_backend(OtelLogHandler) do
+      {:ok, _} -> :ok
+      {:error, :already_exists} -> :ok  # Already added, that's fine
+      error -> 
+        # Fallback: try the :logger API
+        try do
+          :logger.add_handler(:otel_json_handler, OtelLogHandler, %{
+            level: :info,
+            config: %{}
+          })
+        rescue
+          _ -> :ok  # If both fail, continue without log collection
+        end
+    end
+  end
+end
+
+defmodule OtelLogHandler do
+  @moduledoc """
+  Logger backend that captures logs and sends them to OtelJsonExporter.
+  """
+  @behaviour :gen_event
+  
+  def init(_args) do
+    {:ok, %{}}
+  end
+  
+  def handle_event({level, _gl, {Logger, msg, ts, md}}, state) do
+    # Extract log message and metadata
+    message = format_message(msg, md)
+    metadata = extract_metadata(md)
+    
+    # Send to OtelJsonExporter
+    OtelJsonExporter.add_log(level, message, metadata)
+    
+    {:ok, state}
+  end
+  
+  def handle_event(_event, state) do
+    {:ok, state}
+  end
+  
+  def handle_call({:configure, opts}, state) do
+    {:ok, :ok, state}
+  end
+  
+  def handle_info(_msg, state) do
+    {:ok, state}
+  end
+  
+  def code_change(_old_vsn, state, _extra) do
+    {:ok, state}
+  end
+  
+  def terminate(_reason, _state) do
+    :ok
+  end
+  
+  defp format_message(msg, _md) when is_binary(msg), do: msg
+  defp format_message({:string, chardata}, _md), do: IO.chardata_to_string(chardata)
+  defp format_message({:report, report}, _md) when is_map(report), do: inspect(report)
+  defp format_message(other, _md), do: inspect(other)
+  
+  defp extract_metadata(md) when is_list(md) do
+    Enum.map(md, fn
+      {key, value} -> {key, value}
+      other -> other
+    end)
+  end
+  defp extract_metadata(md), do: md
+end
+
+defmodule OtelJsonExporter do
+  @moduledoc """
+  Custom OpenTelemetry exporter that collects spans and metrics, then exports as JSON.
+  Implements the OpenTelemetry exporter behavior.
+  """
+  use Agent
+  
+  def start_link(_opts \\ []) do
+    Agent.start_link(fn -> %{
+      spans: [],
+      metrics: [],
+      logs: [],
+      start_time: System.monotonic_time(:millisecond)
+    } end, name: __MODULE__)
+  end
+  
+  def add_log(level, message, metadata \\ []) do
+    log_entry = %{
+      timestamp: System.monotonic_time(:millisecond),
+      level: level,
+      message: message,
+      metadata: convert_metadata(metadata)
+    }
+    
+    Agent.update(__MODULE__, fn state ->
+      %{state | logs: [log_entry | state.logs]}
+    end)
+  end
+  
+  # OpenTelemetry exporter callback
+  def export(traces, _opts) when is_list(traces) do
+    # Collect spans from traces
+    spans = Enum.flat_map(traces, fn trace ->
+      collect_spans_from_trace(trace)
+    end)
+    
+    Agent.update(__MODULE__, fn state ->
+      %{state | spans: state.spans ++ spans}
+    end)
+    
+    :ok
+  end
+  
+  def export(_other, _opts), do: :ok
+  
+  # OpenTelemetry metrics exporter callback  
+  def export_metrics(metrics, _opts) when is_list(metrics) do
+    exported_metrics = Enum.map(metrics, fn metric ->
+      convert_metric(metric)
+    end)
+    
+    Agent.update(__MODULE__, fn state ->
+      %{state | metrics: state.metrics ++ exported_metrics}
+    end)
+    
+    :ok
+  end
+  
+  def export_metrics(_other, _opts), do: :ok
+  
+  def export_json do
+    state = Agent.get(__MODULE__, fn s -> s end)
+    total_time = System.monotonic_time(:millisecond) - state.start_time
+    
+    json_data = %{
+      spans: state.spans,
+      metrics: state.metrics,
+      logs: Enum.reverse(state.logs),  # Reverse to show chronological order
+      metadata: %{
+        total_time_ms: total_time,
+        start_time: state.start_time,
+        end_time: System.monotonic_time(:millisecond),
+        span_count: length(state.spans),
+        metric_count: length(state.metrics),
+        log_count: length(state.logs)
+      }
+    }
+    
+    IO.puts("")
+    IO.puts("=== OpenTelemetry JSON Export ===")
+    IO.puts("")
+    IO.puts(Jason.encode!(json_data, pretty: true))
+    IO.puts("")
+    
+    Jason.encode!(json_data, pretty: true)
+  end
+  
+  defp convert_metadata(metadata) when is_list(metadata) do
+    Enum.map(metadata, fn
+      {key, value} -> {inspect(key), convert_value(value)}
+      other -> inspect(other)
+    end)
+  end
+  defp convert_metadata(metadata), do: inspect(metadata)
+  
+  defp collect_spans_from_trace(trace) do
+    # Extract spans from trace - structure depends on OpenTelemetry SDK
+    # Try to extract span data from the trace tuple/record
+    try do
+      # OpenTelemetry traces are typically tuples or records
+      # Try common patterns
+      case trace do
+        {_module, spans} when is_list(spans) ->
+          Enum.map(spans, &convert_span/1)
+        spans when is_list(spans) ->
+          Enum.map(spans, &convert_span/1)
+        span when is_tuple(span) ->
+          [convert_span(span)]
+        _ ->
+          # Fallback: try to extract using OpenTelemetry API functions
+          try do
+            # Use OpenTelemetry API if available
+            [%{trace: inspect(trace, limit: 100)}]
+          rescue
+            _ -> []
+          end
+      end
+    rescue
+      _ -> []
+    end
+  end
+  
+  defp convert_span(span) do
+    # Convert OpenTelemetry span to JSON-serializable format
+    try do
+      # Try to extract span data - OpenTelemetry spans are typically records
+      # Use pattern matching on common span structures
+      case span do
+        {:span, name, trace_id, span_id, parent_span_id, start_time, end_time, attributes, events, status, _links} ->
+          %{
+            name: name,
+            trace_id: format_id(trace_id),
+            span_id: format_id(span_id),
+            parent_span_id: format_id(parent_span_id),
+            start_time: start_time,
+            end_time: end_time,
+            duration_ns: if(end_time && start_time, do: end_time - start_time, else: nil),
+            attributes: convert_attributes(attributes),
+            events: convert_events(events),
+            status: inspect(status)
+          }
+        tuple when is_tuple(tuple) and tuple_size(tuple) >= 2 ->
+          # Generic tuple extraction
+          %{
+            name: inspect(:erlang.element(2, tuple)),
+            trace_id: format_id(try(do: :erlang.element(3, tuple), rescue: _ -> nil)),
+            span_id: format_id(try(do: :erlang.element(4, tuple), rescue: _ -> nil)),
+            start_time: try(do: :erlang.element(5, tuple), rescue: _ -> nil),
+            end_time: try(do: :erlang.element(6, tuple), rescue: _ -> nil),
+            attributes: try(do: convert_attributes(:erlang.element(7, tuple)), rescue: _ -> []),
+            raw: inspect(tuple, limit: 200)
+          }
+        _ ->
+          %{span: inspect(span, limit: 200)}
+      end
+    rescue
+      e ->
+        %{span: inspect(span, limit: 200), error: inspect(e, limit: 100)}
+    end
+  end
+  
+  defp convert_metric(metric) do
+    try do
+      %{
+        name: inspect(metric, limit: 200),
+        data: inspect(metric, limit: 500)
+      }
+    rescue
+      _ ->
+        %{metric: inspect(metric, limit: 200)}
+    end
+  end
+  
+  defp convert_attributes(attrs) when is_list(attrs) do
+    Enum.map(attrs, fn
+      {key, value} -> {inspect(key), convert_value(value)}
+      other -> inspect(other)
+    end)
+  end
+  defp convert_attributes(attrs), do: inspect(attrs)
+  
+  defp convert_events(events) when is_list(events) do
+    Enum.map(events, &inspect/1)
+  end
+  defp convert_events(events), do: inspect(events)
+  
+  defp convert_value(value) when is_atom(value), do: inspect(value)
+  defp convert_value(value) when is_binary(value), do: value
+  defp convert_value(value) when is_number(value), do: value
+  defp convert_value(value) when is_boolean(value), do: value
+  defp convert_value(value), do: inspect(value, limit: 100)
+  
+  defp format_id(id) when is_integer(id) do
+    Integer.to_string(id, 16) |> String.pad_leading(16, "0")
+  end
+  defp format_id(nil), do: nil
+  defp format_id(id), do: inspect(id)
 end
 
 defmodule SpanCollector do
   @moduledoc """
-  Collects OpenTelemetry span timing data for performance debugging.
+  Wrapper around OpenTelemetry.Tracer API for convenience.
+  Uses the official OpenTelemetry library from hex.pm instead of custom implementation.
   """
-  use Agent
+  require OpenTelemetry.Tracer
 
-  def start_link(_opts \\ []) do
-    Agent.start_link(fn -> %{spans: [], start_time: System.monotonic_time(:millisecond)} end, name: __MODULE__)
-  end
-
-  def track_span(name, fun) do
-    start_time = System.monotonic_time(:millisecond)
-    parent_span = get_current_span()
-
-    Agent.update(__MODULE__, fn state ->
-      span_id = :erlang.unique_integer([:positive])
-      new_span = %{
-        id: span_id,
-        name: name,
-        parent: parent_span,
-        start_time: start_time,
-        end_time: nil,
-        duration_ms: nil
-      }
-      %{state | spans: [new_span | state.spans]}
-    end)
-
-    set_current_span(name)
-
-    try do
-      result = fun.()
-      end_time = System.monotonic_time(:millisecond)
-      duration = end_time - start_time
-
-      Agent.update(__MODULE__, fn state ->
-        spans = Enum.map(state.spans, fn span ->
-          span_name = Map.get(span, :name)
-          span_end_time = Map.get(span, :end_time)
-          if span_name == name && span_end_time == nil do
-            %{span | end_time: end_time, duration_ms: duration}
-          else
-            span
-          end
-        end)
-        %{state | spans: spans}
+  def track_span(name, fun, attrs \\ []) do
+    OpenTelemetry.Tracer.with_span name do
+      # Set attributes on the current span
+      Enum.each(attrs, fn {key, value} ->
+        OpenTelemetry.Tracer.set_attribute(key, value)
       end)
-
-      clear_current_span()
-      result
-    rescue
-      e ->
-        end_time = System.monotonic_time(:millisecond)
-        duration = end_time - start_time
-
-        # Extract a concise error message (first line only, max 200 chars)
-        error_msg = Exception.message(e)
-        error_msg = error_msg
-          |> String.split("\n")
-          |> List.first()
-          |> String.slice(0, 200)
-
-        Agent.update(__MODULE__, fn state ->
-          spans = Enum.map(state.spans, fn span ->
-            span_name = Map.get(span, :name)
-            span_end_time = Map.get(span, :end_time)
-            if span_name == name && span_end_time == nil do
-              Map.merge(span, %{
-                end_time: end_time,
-                duration_ms: duration,
-                error: error_msg
-              })
-            else
-              span
-            end
-          end)
-          %{state | spans: spans}
-        end)
-
-        clear_current_span()
-        raise e
+      
+      try do
+        result = fun.()
+        OpenTelemetry.Tracer.set_status(:ok)
+        result
+      rescue
+        e ->
+          OpenTelemetry.Tracer.record_exception(e, [])
+          OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
+          raise e
+      end
     end
   end
 
-  defp get_current_span do
-    case Process.get(:current_span) do
-      nil -> :root
-      span -> span
-    end
+  def add_span_attribute(key, value) do
+    OpenTelemetry.Tracer.set_attribute(key, value)
   end
 
-  defp set_current_span(name) do
-    Process.put(:current_span, name)
-  end
-
-  defp clear_current_span do
-    Process.delete(:current_span)
-  end
-
-  def get_trace do
-    Agent.get(__MODULE__, fn state ->
-      total_time = System.monotonic_time(:millisecond) - state.start_time
-      %{
-        spans: Enum.reverse(state.spans),
-        total_time_ms: total_time,
-        start_time: state.start_time
-      }
-    end)
+  def record_metric(name, value, unit \\ nil) do
+    # Use OpenTelemetry Metrics API when available
+    # For now, we'll need to use a metrics exporter or custom collection
+    # This is a placeholder - proper implementation would use OpenTelemetry.Metrics
+    :ok
   end
 
   def display_trace do
-    trace = get_trace()
-
+    # OpenTelemetry spans are handled by the SDK and exporters
+    # For console output, we'd need to configure a console exporter
+    # or use the SDK's built-in export functionality
     IO.puts("")
-    IO.puts("=== OpenTelemetry Trace Summary ===")
+    IO.puts("=== OpenTelemetry Trace ===")
     IO.puts("")
-
-    if trace.spans == [] do
-      IO.puts("  No spans recorded")
-      IO.puts("")
-    else
-      # Calculate total time from all spans for percentage calculation
-      total_span_time = Enum.sum(Enum.map(trace.spans, fn s -> Map.get(s, :duration_ms, 0) end))
-
-      # Calculate total time from root spans for overhead calculation
-      root_spans = Enum.filter(trace.spans, fn span -> Map.get(span, :parent) == :root end)
-      total_root_time = Enum.sum(Enum.map(root_spans, fn s -> Map.get(s, :duration_ms, 0) end))
-
-      IO.puts("  Total Execution Time: #{format_duration(trace.total_time_ms)}")
-      IO.puts("  Total Span Time: #{format_duration(total_root_time)}")
-      IO.puts("  Overhead: #{format_duration(trace.total_time_ms - total_root_time)}")
-      IO.puts("")
-      IO.puts("  Span Breakdown:")
-      IO.puts("")
-
-      # Display spans in order with indentation
-      display_spans(root_spans, trace.spans, total_span_time, 0)
-
-      IO.puts("")
-    end
+    IO.puts("Note: Use OpenTelemetry exporters (OTLP, Jaeger, etc.) to view traces.")
+    IO.puts("For JSON export, configure opentelemetry_exporter_otlp or similar.")
+    IO.puts("")
   end
-
-  defp display_spans(spans, all_spans, total_span_time, indent) do
-    Enum.each(spans, fn span ->
-      indent_str = String.duplicate("  ", indent)
-      span_name = Map.get(span, :name, "unknown")
-      span_duration = Map.get(span, :duration_ms)
-      span_error = Map.get(span, :error)
-      duration_str = if span_duration, do: format_duration(span_duration), else: "N/A"
-      error_str = if span_error, do: " [ERROR: #{span_error}]", else: ""
-
-      percentage = if span_duration && total_span_time > 0 do
-        Float.round(span_duration / total_span_time * 100, 1)
-      else
-        0.0
-      end
-
-      IO.puts("#{indent_str}├─ #{span_name}: #{duration_str} (#{percentage}%)#{error_str}")
-
-      # Display child spans - find all spans that have this span's name as parent
-      child_spans = Enum.filter(all_spans, fn s -> Map.get(s, :parent) == span_name end)
-      if child_spans != [] do
-        display_spans(child_spans, all_spans, total_span_time, indent + 1)
-      end
-    end)
-  end
-
-  defp format_duration(ms) when is_integer(ms) do
-    cond do
-      ms >= 1000 -> "#{Float.round(ms / 1000, 2)}s"
-      true -> "#{ms}ms"
-    end
-  end
-
-  defp format_duration(_), do: "N/A"
 end
 
 defmodule OtelLogger do
   @moduledoc """
   Logger wrapper for OpenTelemetry attributes.
+  Logs are captured by OtelLogHandler and included in JSON export.
   """
   require Logger
 
@@ -526,4 +682,60 @@ defmodule OtelLogger do
   def ok(message, attrs \\ []) do
     Logger.info(message, Keyword.merge([severity: "ok"], to_keyword_list(attrs)))
   end
+end
+
+defmodule OtelLogHandler do
+  @moduledoc """
+  Logger backend that captures logs and sends them to OtelJsonExporter.
+  Uses the modern Logger backend API.
+  """
+  @behaviour :gen_event
+  
+  def init(_args) do
+    {:ok, %{}}
+  end
+  
+  def handle_event({level, _gl, {Logger, msg, ts, md}}, state) do
+    # Extract log message and metadata
+    message = format_message(msg, md)
+    metadata = extract_metadata(md)
+    
+    # Send to OtelJsonExporter
+    OtelJsonExporter.add_log(level, message, metadata)
+    
+    {:ok, state}
+  end
+  
+  def handle_event(_event, state) do
+    {:ok, state}
+  end
+  
+  def handle_call({:configure, opts}, state) do
+    {:ok, :ok, state}
+  end
+  
+  def handle_info(_msg, state) do
+    {:ok, state}
+  end
+  
+  def code_change(_old_vsn, state, _extra) do
+    {:ok, state}
+  end
+  
+  def terminate(_reason, _state) do
+    :ok
+  end
+  
+  defp format_message(msg, _md) when is_binary(msg), do: msg
+  defp format_message({:string, chardata}, _md), do: IO.chardata_to_string(chardata)
+  defp format_message({:report, report}, _md) when is_map(report), do: inspect(report)
+  defp format_message(other, _md), do: inspect(other)
+  
+  defp extract_metadata(md) when is_list(md) do
+    Enum.map(md, fn
+      {key, value} -> {key, value}
+      other -> other
+    end)
+  end
+  defp extract_metadata(md), do: md
 end

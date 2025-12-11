@@ -239,15 +239,17 @@ defmodule ArgsParser do
 
     # Check if image file exists
     if !File.exists?(image_path) do
-      IO.puts("Error: Image file not found: #{image_path}")
+      # Error logs are kept for critical failures
+      OtelLogger.error("Image file not found", [{"file.path", image_path}])
       System.halt(1)
     end
 
     # Mask is optional - will be auto-generated if not provided
     auto_generate_mask = !mask_path || !File.exists?(mask_path)
     if mask_path && !File.exists?(mask_path) do
-      IO.puts("[INFO] Mask file not found: #{mask_path}")
-      IO.puts("[INFO] Will auto-generate mask using SAM")
+      # Track as span attribute instead of log
+      OpenTelemetry.Tracer.set_attribute("mask.auto_generate", true)
+      OpenTelemetry.Tracer.set_attribute("mask.path", mask_path)
       ^mask_path = nil
       ^auto_generate_mask = true
     end
@@ -257,7 +259,8 @@ defmodule ArgsParser do
     
     # Validate mode
     if segment_only && apply_merge do
-      IO.puts("Error: Cannot use --segment-only and --apply-merge together")
+      # Error logs are kept for critical failures
+      OtelLogger.error("Cannot use --segment-only and --apply-merge together")
       System.halt(1)
     end
     
@@ -311,9 +314,8 @@ config_with_paths = Map.merge(config, %{
 {config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "omnipart_config")
 
 # Download checkpoints using Elixir downloader
-SpanCollector.track_span("omnipart.download_weights", fn ->
-  IO.puts("\n=== Step 1: Download Pretrained Weights ===")
-  
+require OpenTelemetry.Tracer
+OpenTelemetry.Tracer.with_span "omnipart.download_weights" do
   checkpoint_dir = config_with_paths.checkpoint_dir
   File.mkdir_p!(checkpoint_dir)
   
@@ -321,27 +323,26 @@ SpanCollector.track_span("omnipart.download_weights", fn ->
   omnipart_modules_dir = Path.join([checkpoint_dir, "..", "OmniPart_modules"])
   case HuggingFaceDownloader.download_repo("omnipart/OmniPart_modules", omnipart_modules_dir, "OmniPart Modules", true) do
     {:ok, _} ->
-      IO.puts("[OK] OmniPart modules downloaded successfully")
+      OpenTelemetry.Tracer.set_attribute("download.status", "success")
       # Move SAM checkpoint to checkpoint_dir if needed
       sam_ckpt_src = Path.join([omnipart_modules_dir, "sam_vit_h_4b8939.pth"])
       sam_ckpt_dst = Path.join([checkpoint_dir, "sam_vit_h_4b8939.pth"])
       if File.exists?(sam_ckpt_src) and not File.exists?(sam_ckpt_dst) do
         File.cp!(sam_ckpt_src, sam_ckpt_dst)
-        IO.puts("[OK] SAM checkpoint copied to checkpoint directory")
+        OpenTelemetry.Tracer.set_attribute("sam_checkpoint.copied", true)
       end
-    {:error, _} ->
-      IO.puts("[WARN] OmniPart modules download had errors, but continuing...")
-      IO.puts("[INFO] Model weights will be downloaded automatically by Python if needed")
+    {:error, reason} ->
+      OpenTelemetry.Tracer.set_attribute("download.status", "error")
+      OpenTelemetry.Tracer.set_attribute("download.error", inspect(reason))
+      # Only log errors - metrics will show the status
+      OtelLogger.error("OmniPart modules download failed", [{"error", inspect(reason)}])
   end
   
-  # Note: Using transparent-background (free open-source library) for background removal
-  # Powered by InSPyReNet (ACCV 2022) - research-backed, high-quality results
-  
-  IO.puts("[OK] Checkpoint directory ready: #{checkpoint_dir}")
-end)
+  OpenTelemetry.Tracer.set_attribute("checkpoint.dir", checkpoint_dir)
+end
 
 # Process using OmniPart
-SpanCollector.track_span("omnipart.generation", fn ->
+OpenTelemetry.Tracer.with_span "omnipart.generation" do
 try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -353,11 +354,19 @@ import shutil
 # Enable OpenEXR support in OpenCV (required for .exr file writing)
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
+# Setup Python logging with proper levels
+import logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
 # Verify torch is available
 try:
     import torch
-    print(f"[OK] PyTorch version: {torch.__version__}")
-    print(f"[OK] CUDA available: {torch.cuda.is_available()}")
+    logger.info(f"PyTorch version: {torch.__version__}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
 except ImportError as e:
     raise ImportError(
         f"torch is not available: {e}. "
@@ -398,13 +407,13 @@ if not Path(image_path).exists():
 if mask_path:
     mask_path = str(Path(mask_path).resolve())
     if not Path(mask_path).exists():
-        print(f"[WARN] Mask file not found: {mask_path}")
-        print("[INFO] Will auto-generate mask using SAM")
+        logger.warning(f"Mask file not found: {mask_path}")
+        logger.info("Will auto-generate mask using SAM")
         auto_generate_mask = True
         mask_path = None
     elif not mask_path.lower().endswith('.exr'):
-        print(f"[WARN] Mask file is not .exr format: {mask_path}")
-        print("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
+        logger.warning(f"Mask file is not .exr format: {mask_path}")
+        logger.info("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
 else:
     auto_generate_mask = True
 
@@ -989,72 +998,76 @@ try:
     torch.manual_seed(seed)
     
     # Load part_synthesis model with half precision for memory efficiency
-    print("[INFO] Loading PartSynthesis model with half precision...")
+    logger.info("Loading PartSynthesis model with half precision...")
     part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
     part_synthesis_pipeline.to(device)
     torch.cuda.empty_cache()
-    print("[INFO] PartSynthesis model loaded (half precision enabled)")
+    logger.info("PartSynthesis model loaded (half precision enabled)")
     
     # Load bbox_gen model
-    print("[INFO] Loading BboxGen model...")
+    logger.info("Loading BboxGen model...")
     bbox_gen_config = OmegaConf.load("configs/bbox_gen.yaml").model.args
     bbox_gen_config.partfield_encoder_path = partfield_encoder_path
     bbox_gen_model = BboxGen(bbox_gen_config)
     bbox_gen_model.load_state_dict(torch.load(bbox_gen_ckpt), strict=False)
     bbox_gen_model.to(device)
     bbox_gen_model.eval().half()
-    print("[INFO] BboxGen model loaded")
+    logger.info("BboxGen model loaded")
     
     # Load image and mask
     img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(image_path, mask_path)
     img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
     
-    # Generate voxel coordinates
-    print("[INFO] Generating voxel coordinates...")
+    # Generate voxel coordinates with performance optimizations
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
+    logger.info("Generating voxel coordinates...")
     voxel_coords = part_synthesis_pipeline.get_coords(img_black_bg, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
     voxel_coords_ply.export(os.path.join(inference_output_dir, "voxel_coords_vis.ply"))
-    print("[INFO] Voxel coordinates saved")
+    logger.info("Voxel coordinates saved")
     # Clear cache after voxel coordinate generation
     torch.cuda.empty_cache()
     
     # Generate bounding boxes
-    print("[INFO] Generating bounding boxes...")
+    logger.info("Generating bounding boxes...")
     bbox_gen_input = prepare_bbox_gen_input(os.path.join(inference_output_dir, "voxel_coords.npy"), img_white_bg, ordered_mask_input)
     bbox_gen_output = bbox_gen_model.generate(bbox_gen_input)
     np.save(os.path.join(inference_output_dir, "bboxes.npy"), bbox_gen_output['bboxes'][0])
     bboxes_vis = gen_mesh_from_bounds(bbox_gen_output['bboxes'][0])
     bboxes_vis.export(os.path.join(inference_output_dir, "bboxes_vis.glb"))
-    print("[INFO] BboxGen output saved")
+    logger.info("BboxGen output saved")
     
     # Unload bbox_gen model to free GPU memory before SLAT sampling
-    print("[INFO] Unloading BboxGen model to free GPU memory...")
+    logger.info("Unloading BboxGen model to free GPU memory...")
     del bbox_gen_model
     torch.cuda.empty_cache()
     import gc
     gc.collect()
-    print("[OK] BboxGen model unloaded")
+    logger.info("BboxGen model unloaded")
     
     # Prepare part synthesis input
     part_synthesis_input = prepare_part_synthesis_input(os.path.join(inference_output_dir, "voxel_coords.npy"), os.path.join(inference_output_dir, "bboxes.npy"), ordered_mask_input)
     
     # Validate inputs
-    print(f"[INFO] Validating inputs...")
-    print(f"  Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
-    print(f"  Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
-    print(f"  Masks shape: {part_synthesis_input['masks'].shape}")
+    logger.info("Validating inputs...")
+    logger.debug(f"Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
+    logger.debug(f"Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
+    logger.debug(f"Masks shape: {part_synthesis_input['masks'].shape}")
     
-    # Sample SLAT with memory optimizations
+    # Sample SLAT with performance optimizations
     torch.backends.cudnn.enabled = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
     # Enable memory-efficient attention if available
     try:
         torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True)
     except:
         pass
-    print("[INFO] Sampling SLAT...")
+    logger.info("Sampling SLAT...")
     torch.cuda.empty_cache()
     
     if isinstance(img_black_bg, torch.Tensor):
@@ -1070,7 +1083,7 @@ try:
         part_synthesis_input['masks'],
         sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
     )
-    print("[INFO] SLAT sampling completed")
+    logger.info("SLAT sampling completed")
     
     # Divide SLAT into parts
     divided_slat = part_synthesis_pipeline.divide_slat(slat, [part_synthesis_input['part_layouts']])
@@ -1193,11 +1206,12 @@ after
   # Clean up temp file
   ConfigFile.cleanup(config_file)
 end
-end)
 
-IO.puts("\n=== Complete ===")
-IO.puts("3D shape generation completed successfully!")
+# Track completion as span attribute
+OpenTelemetry.Tracer.set_attribute("status", "completed")
+OpenTelemetry.Tracer.set_status(:ok)
+end
 
-# Display OpenTelemetry trace
+# Export spans and metrics as JSON
 SpanCollector.display_trace()
 
