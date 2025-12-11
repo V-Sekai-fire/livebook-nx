@@ -635,6 +635,29 @@ tag = time.strftime("%Y%m%d_%H_%M_%S")
 output_dir = str(output_dir_base / tag)
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
+# Save input config JSON to output directory for reference
+output_config_path = Path(output_dir) / "input_config.json"
+config_dict = {
+    'image_paths': image_paths,
+    'mask_paths': mask_paths,
+    'auto_generate_masks': auto_generate_masks,
+    'merge_groups': merge_groups_list,
+    'output_dir': output_dir,
+    'segment_only': segment_only,
+    'apply_merge': apply_merge,
+    'size_threshold': size_threshold,
+    'num_inference_steps': num_inference_steps,
+    'guidance_scale': guidance_scale,
+    'simplify_ratio': simplify_ratio,
+    'gpu': gpu,
+    'seed': seed,
+    'omnipart_dir': omnipart_dir,
+    'checkpoint_dir': checkpoint_dir,
+}
+with open(output_config_path, 'w') as f:
+    json.dump(config_dict, f, indent=2)
+print(f"[OK] Input config saved to: {output_config_path}")
+
 # Process each image separately for segmentation
 processed_images = []
 processed_masks = []
