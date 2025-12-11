@@ -604,6 +604,12 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     bary_coords = fragments.bary_coords  # (B, H, W, 1, 3)
     pix_to_face = fragments.pix_to_face  # (B, H, W, 1)
     
+    # Debug: Check if any faces were rasterized
+    if pix_to_face.shape[0] > 0:
+        valid_pixels = (pix_to_face >= 0).sum().item()
+        total_pixels = pix_to_face.numel()
+        print(f"[DEBUG] Rasterization result: {valid_pixels}/{total_pixels} pixels have valid faces (pix_to_face range: [{pix_to_face.min().item()}, {pix_to_face.max().item()}])")
+    
     # Interpolate UV coordinates using barycentric coordinates
     # In PyTorch3D, faces_uvs contains indices into verts_uvs
     # faces_uvs: (B, F, 3) - indices into verts_uvs
@@ -625,6 +631,9 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
         
         if valid_mask.sum() == 0:
             # No valid pixels, create zero UV map
+            if b == 0:
+                print(f"[DEBUG] Rasterization: NO VALID PIXELS in batch {b}! (valid_mask.sum() == 0)")
+                print(f"[DEBUG] pix_to_face range: [{pix_to_face.min().item()}, {pix_to_face.max().item()}]")
             batch_uv_map = torch.zeros((height, width, 2), device=device, dtype=torch.float32)
             uv_maps.append(batch_uv_map)
             continue
@@ -632,30 +641,48 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
         # Get UV vertex indices for valid faces: (num_valid, 3)
         valid_face_idx = batch_face_idx[valid_mask]  # (num_valid,)
         
-        # Debug: Check face index range
-        if b == 0 and valid_face_idx.numel() > 0:
-            max_face_idx = valid_face_idx.max().item()
-            num_faces = faces_uvs_indices.shape[1]
-            if max_face_idx >= num_faces:
-                raise RuntimeError(f"Face index {max_face_idx} out of range [0, {num_faces-1}]. This indicates a mismatch between rasterized faces and UV face indices.")
+        # Debug: Check face index range (only on first batch to avoid spam)
+        debug_this_batch = (b == 0 and valid_face_idx.numel() > 0)
+        if b == 0:
+            # Always print debug info for first batch, even if no valid pixels
+            if valid_face_idx.numel() > 0:
+                max_face_idx = valid_face_idx.max().item()
+                num_faces = faces_uvs_indices.shape[1]
+                if max_face_idx >= num_faces:
+                    raise RuntimeError(f"Face index {max_face_idx} out of range [0, {num_faces-1}]. This indicates a mismatch between rasterized faces and UV face indices.")
+                print(f"[DEBUG] Rasterization: {valid_face_idx.numel()} valid pixels, max face idx: {max_face_idx}, num faces: {num_faces}")
+            else:
+                print(f"[DEBUG] Rasterization: NO VALID PIXELS in batch {b}!")
         
         face_uv_indices = faces_uvs_indices[b, valid_face_idx]  # (num_valid, 3)
         
         # Get UV coordinates: (num_valid, 3, 2)
         # face_uv_indices contains vertex indices into verts_uvs
-        max_uv_idx = face_uv_indices.max().item()
-        num_uv_verts = verts_uvs.shape[1]
-        if max_uv_idx >= num_uv_verts:
-            raise RuntimeError(f"UV vertex index {max_uv_idx} out of range [0, {num_uv_verts-1}]. This indicates a mismatch between face UV indices and UV vertices.")
+        if debug_this_batch:
+            max_uv_idx = face_uv_indices.max().item()
+            min_uv_idx = face_uv_indices.min().item()
+            num_uv_verts = verts_uvs.shape[1]
+            print(f"[DEBUG] UV indices: min={min_uv_idx}, max={max_uv_idx}, num_uv_verts={num_uv_verts}")
+            if max_uv_idx >= num_uv_verts:
+                raise RuntimeError(f"UV vertex index {max_uv_idx} out of range [0, {num_uv_verts-1}]. This indicates a mismatch between face UV indices and UV vertices.")
         
         face_uvs = verts_uvs[b, face_uv_indices]  # (num_valid, 3, 2)
+        
+        if debug_this_batch:
+            print(f"[DEBUG] Face UVs range: [{face_uvs.min():.3f}, {face_uvs.max():.3f}], mean: {face_uvs.mean():.3f}")
         
         # Get barycentric coordinates for valid pixels: (num_valid, 3)
         batch_bary = bary_coords[b, valid_mask].squeeze(1)  # (num_valid, 3)
         
+        if debug_this_batch:
+            print(f"[DEBUG] Bary coords range: [{batch_bary.min():.3f}, {batch_bary.max():.3f}], sum per pixel: [{batch_bary.sum(dim=1).min():.3f}, {batch_bary.sum(dim=1).max():.3f}]")
+        
         # Interpolate: (num_valid, 3) @ (num_valid, 3, 2) -> (num_valid, 2)
         # We need to do element-wise multiplication and sum
         uv_valid = (batch_bary.unsqueeze(-1) * face_uvs).sum(dim=1)  # (num_valid, 2)
+        
+        if debug_this_batch:
+            print(f"[DEBUG] Interpolated UV range: [{uv_valid.min():.3f}, {uv_valid.max():.3f}], mean: {uv_valid.mean():.3f}")
         
         # Create full UV map for this batch
         batch_uv_map = torch.zeros((height, width, 2), device=device, dtype=torch.float32)
@@ -665,11 +692,27 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     # Stack all batches: (B, H, W, 2)
     uv_map = torch.stack(uv_maps, dim=0)  # (B, H, W, 2)
     
+    # Debug: Check UV map before flipping
+    if uv_map.shape[0] > 0:
+        valid_uv_mask = uv_map[0].abs().sum(dim=-1) > 0
+        if valid_uv_mask.sum() > 0:
+            print(f"[DEBUG] UV map before flip: range [{uv_map[0, valid_uv_mask].min():.3f}, {uv_map[0, valid_uv_mask].max():.3f}], valid pixels: {valid_uv_mask.sum()}/{valid_uv_mask.numel()}")
+        else:
+            print(f"[DEBUG] UV map before flip: ALL ZEROS!")
+    
     # Create mask (pixels with valid faces)
     mask = (pix_to_face >= 0).float()  # (B, H, W, 1)
     
     # Flip Y coordinate to match nvdiffrast convention
     uv_map = uv_map.flip(1)  # Flip height dimension
+    
+    # Debug: Check UV map after flipping
+    if uv_map.shape[0] > 0:
+        valid_uv_mask = uv_map[0].abs().sum(dim=-1) > 0
+        if valid_uv_mask.sum() > 0:
+            print(f"[DEBUG] UV map after flip: range [{uv_map[0, valid_uv_mask].min():.3f}, {uv_map[0, valid_uv_mask].max():.3f}], valid pixels: {valid_uv_mask.sum()}/{valid_uv_mask.numel()}")
+        else:
+            print(f"[DEBUG] UV map after flip: ALL ZEROS!")
     
     return {
         'uv': uv_map,  # (B, H, W, 2)
@@ -874,7 +917,7 @@ def bake_texture(
         # Precompute UV maps for efficiency
         _uv = []
         _uv_dr = []
-        for observation, view, projection in tqdm(zip(observations, views, projections), total=len(views), disable=not verbose, desc='Texture baking (opt): UV'):
+        for view_idx, (observation, view, projection) in enumerate(tqdm(zip(observations, views, projections), total=len(views), disable=not verbose, desc='Texture baking (opt): UV')):
             with torch.no_grad():
                 if use_pytorch3d:
                     rast = _rasterize_with_pytorch3d(
@@ -882,9 +925,17 @@ def bake_texture(
                         observation.shape[0], observation.shape[1],
                         view, projection
                     )
-                    _uv.append(rast['uv'].detach())
+                    uv_result = rast['uv'].detach()
+                    _uv.append(uv_result)
                     # For PyTorch3D, we don't have uv_dr, so create a dummy gradient tensor
-                    _uv_dr.append(torch.ones_like(rast['uv'].detach()))
+                    _uv_dr.append(torch.ones_like(uv_result))
+                    # Debug: Check UV map for first view
+                    if view_idx == 0 and verbose:
+                        valid_uv_mask = uv_result[0].abs().sum(dim=-1) > 0
+                        if valid_uv_mask.sum() > 0:
+                            print(f"[DEBUG] First view UV map: range [{uv_result[0, valid_uv_mask].min():.3f}, {uv_result[0, valid_uv_mask].max():.3f}], valid pixels: {valid_uv_mask.sum()}/{valid_uv_mask.numel()}")
+                        else:
+                            print(f"[DEBUG] First view UV map: ALL ZEROS!")
                 else:
                     rast = utils3d.torch.rasterize_triangle_faces(
                         rastctx, vertices[None], faces, observation.shape[1], observation.shape[0], uv=uvs[None], view=view, projection=projection
