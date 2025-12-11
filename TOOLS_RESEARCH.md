@@ -178,29 +178,6 @@ Your Elixir scripts follow a consistent pattern:
   - State-of-the-art performance on in-the-wild scenes
   - Fully open-source (Apache 2.0)
 
-### 10. Face Recognition / Detection
-
-#### AuraFace
-
-- **Model**: Various AuraFace models
-- **License**: Apache 2.0 ✅ FOSS
-- **Style Match**: ✅ High - Open-source face recognition
-- **Integration**: Face recognition and identity preservation
-- **Script Name**: `auraface_recognition.exs`
-- **Features**:
-  - Face recognition
-  - Identity preservation
-  - Fully open-source (Apache 2.0)
-
-#### RetinaFace
-
-- **Model**: Various RetinaFace models
-- **License**: MIT ✅ FOSS
-- **Style Match**: ✅ High - Face detection
-- **Integration**: Detect faces in images
-- **Script Name**: `retinaface_detection.exs`
-- **Note**: Fully permissive MIT license
-
 ### 11. Pose Estimation
 
 #### YOLO-NAS-POSE
