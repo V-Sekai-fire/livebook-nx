@@ -12,11 +12,18 @@
 #   elixir qwen3vl_inference.exs <image_path> "<prompt>" [options]
 #
 # Options:
-#   --max-tokens <int>              Maximum number of tokens to generate (default: 4096)
-#   --temperature <float>            Sampling temperature (default: 0.7)
+#   --max-tokens, -m <int>          Maximum number of tokens to generate (default: 4096)
+#   --temperature, -t <float>         Sampling temperature (default: 0.7)
 #   --top-p <float>                  Top-p (nucleus) sampling (default: 0.9)
-#   --output <path>                  Output file path for text response (optional)
+#   --output, -o <path>              Output file path for text response (optional)
 #   --use-flash-attention            Use Flash Attention 2 for better performance (default: false)
+#   --use-4bit                       Use 4-bit quantization (default: true, recommended for 4B model, ~2-3GB VRAM)
+#   --full-precision                 Use full precision instead of 4-bit quantization (requires 8GB+ VRAM)
+#   --help, -h                       Show help message
+#
+# Examples:
+#   elixir qwen3vl_inference.exs image.jpg "What is in this image?"
+#   elixir qwen3vl_inference.exs photo.png "Describe this scene" -m 2048 -t 0.8 -o output.txt
 
 # Configure OpenTelemetry for console-only logging
 Application.put_env(:opentelemetry, :span_processor, :batch)
