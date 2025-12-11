@@ -430,7 +430,41 @@ class OmniPartImageTo3DPipeline(Pipeline):
         if 'mesh' in formats:
             print("[DEBUG] decode_slat: Decoding mesh format...")
             try:
-                ret['mesh'] = self.models['slat_decoder_mesh'](slat)
+                # Optimize for inference speed
+                mesh_decoder = self.models['slat_decoder_mesh']
+                mesh_decoder.eval()  # Ensure eval mode
+                
+                # Disable checkpointing for faster inference (saves memory but slows down)
+                original_checkpoint_settings = {}
+                if hasattr(mesh_decoder, 'use_checkpoint'):
+                    original_checkpoint_settings['decoder'] = mesh_decoder.use_checkpoint
+                    mesh_decoder.use_checkpoint = False
+                
+                # Disable checkpointing in transformer blocks
+                if hasattr(mesh_decoder, 'blocks'):
+                    original_checkpoint_settings['blocks'] = []
+                    for i, block in enumerate(mesh_decoder.blocks):
+                        if hasattr(block, 'use_checkpoint'):
+                            original_checkpoint_settings['blocks'].append((i, block.use_checkpoint))
+                            block.use_checkpoint = False
+                
+                # Use inference_mode for better performance than no_grad
+                with torch.inference_mode():
+                    # Enable cudnn benchmark for faster convolutions
+                    original_benchmark = torch.backends.cudnn.benchmark
+                    torch.backends.cudnn.benchmark = True
+                    try:
+                        ret['mesh'] = mesh_decoder(slat)
+                    finally:
+                        torch.backends.cudnn.benchmark = original_benchmark
+                
+                # Restore checkpointing settings
+                if 'decoder' in original_checkpoint_settings:
+                    mesh_decoder.use_checkpoint = original_checkpoint_settings['decoder']
+                if 'blocks' in original_checkpoint_settings:
+                    for i, checkpoint_val in original_checkpoint_settings['blocks']:
+                        mesh_decoder.blocks[i].use_checkpoint = checkpoint_val
+                
                 print(f"[DEBUG] decode_slat: Mesh format decoded successfully, got {len(ret['mesh'])} meshes")
             except Exception as e:
                 print(f"[ERROR] decode_slat: Mesh format failed: {type(e).__name__}: {e}")
