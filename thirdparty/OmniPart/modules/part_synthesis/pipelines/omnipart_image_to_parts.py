@@ -498,10 +498,12 @@ class OmniPartImageTo3DPipeline(Pipeline):
             if hasattr(slat, 'feats') and hasattr(slat, 'coords'):
                 # Clone to ensure we have a regular tensor (not inference tensor)
                 # This converts inference tensors to regular tensors
+                # Use shape and layout from original tensor, not batch_size keyword
                 slat_clone = sp.SparseTensor(
                     coords=slat.coords.clone(),
                     feats=slat.feats.clone(),
-                    batch_size=getattr(slat, 'batch_size', None)
+                    shape=getattr(slat, 'shape', None),
+                    layout=getattr(slat, 'layout', None)
                 )
             else:
                 slat_clone = slat
