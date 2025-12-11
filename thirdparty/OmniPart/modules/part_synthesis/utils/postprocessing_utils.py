@@ -862,7 +862,8 @@ def bake_texture(
                     _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
-        texture = torch.nn.Parameter(torch.zeros((1, texture_size, texture_size, 3), dtype=torch.float32).cuda())
+        # Use small random values instead of zeros to break symmetry and allow gradients to flow
+        texture = torch.nn.Parameter(torch.randn((1, texture_size, texture_size, 3), dtype=torch.float32).cuda() * 0.01)
         optimizer = torch.optim.Adam([texture], betas=(0.5, 0.9), lr=1e-2)
 
         # Learning rate scheduling functions
@@ -882,6 +883,18 @@ def bake_texture(
         # Optimization loop
         total_steps = 2500
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
+            # Debug: Print initial statistics
+            if verbose and len(_uv) > 0:
+                uv_sample = _uv[0]
+                obs_sample = observations[0]
+                mask_sample = masks[0]
+                if len(uv_sample.shape) == 4:
+                    uv_sample = uv_sample.squeeze(0)
+                print(f"[DEBUG] UV range: [{uv_sample.min():.3f}, {uv_sample.max():.3f}], shape: {uv_sample.shape}")
+                print(f"[DEBUG] Observation range: [{obs_sample.min():.3f}, {obs_sample.max():.3f}], mean: {obs_sample.mean():.3f}, shape: {obs_sample.shape}")
+                print(f"[DEBUG] Mask coverage: {mask_sample.sum().item()}/{mask_sample.numel()} ({100*mask_sample.sum().item()/mask_sample.numel():.1f}%)")
+                print(f"[DEBUG] Texture init range: [{texture.min():.3f}, {texture.max():.3f}], mean: {texture.mean():.3f}")
+            
             for step in range(total_steps):
                 optimizer.zero_grad()
                 # Random sample a view for stochastic optimization
@@ -910,10 +923,20 @@ def bake_texture(
                         padding_mode='zeros', align_corners=True
                     )
                     render = render.squeeze(0).permute(1, 2, 0)  # (H, W, 3)
+                    # Debug on first step
+                    if step == 0 and verbose:
+                        print(f"[DEBUG] Render range: [{render.min():.3f}, {render.max():.3f}], mean: {render.mean():.3f}")
+                        print(f"[DEBUG] Render on mask range: [{render[mask].min():.3f if mask.sum() > 0 else 0}, {render[mask].max():.3f if mask.sum() > 0 else 0}], mean: {render[mask].mean():.3f if mask.sum() > 0 else 0}")
+                        print(f"[DEBUG] Observation on mask range: [{observation[mask].min():.3f if mask.sum() > 0 else 0}, {observation[mask].max():.3f if mask.sum() > 0 else 0}], mean: {observation[mask].mean():.3f if mask.sum() > 0 else 0}")
                 else:
                     render = dr.texture(texture, uv, uv_dr)[0]
                 # Loss calculation - L1 reconstruction loss + TV regularization
-                loss = torch.nn.functional.l1_loss(render[mask], observation[mask])
+                if mask.sum() > 0:
+                    loss = torch.nn.functional.l1_loss(render[mask], observation[mask])
+                else:
+                    # Skip if no valid pixels
+                    pbar.update()
+                    continue
                 if lambda_tv > 0:
                     loss += lambda_tv * tv_loss(texture)
                 loss.backward()
