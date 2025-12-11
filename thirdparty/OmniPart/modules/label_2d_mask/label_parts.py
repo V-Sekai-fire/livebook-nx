@@ -263,12 +263,12 @@ def create_labeled_visualization(group_ids, visual, image, label_mode='1', anno_
     """
     # Create a fresh visualizer copy to avoid modifying the original
     from modules.label_2d_mask.visualizer import Visualizer
-    vis_mask = Visualizer(image)
+    vis = Visualizer(image)
     
     # First draw background areas (ID -1)
     background_mask = (group_ids == -1)
     if np.any(background_mask):
-        vis_mask = vis_mask.draw_binary_mask(background_mask, color=[1.0, 1.0, 1.0], alpha=0.0)
+        vis.draw_binary_mask(background_mask, color=[1.0, 1.0, 1.0], alpha=0.0)
 
     # Then draw each segment with unique colors and labels
     for unique_id in np.unique(group_ids):
@@ -304,7 +304,7 @@ def create_labeled_visualization(group_ids, visual, image, label_mode='1', anno_
             label = f"{unique_id}"
             
             # First draw the main body of the region
-            vis_mask = vis_mask.draw_binary_mask_with_number(
+            vis.draw_binary_mask_with_number(
                 mask, 
                 text=label,
                 label_mode=label_mode,
@@ -316,13 +316,13 @@ def create_labeled_visualization(group_ids, visual, image, label_mode='1', anno_
             
             # Enhance edges (add border effect for all parts)
             edge_color = [min(c*1.3, 1.0) for c in color]  # Slightly brighter edge color
-            vis_mask = vis_mask.draw_binary_mask(
+            vis.draw_binary_mask(
                 edge,
                 alpha=0.8,  # Lower transparency for edges to make them more visible
                 color=edge_color
             )
             
-    im = vis_mask.get_image()
+    im = vis.output.get_image()
     return im
 
 # -------------------------------------------------------
