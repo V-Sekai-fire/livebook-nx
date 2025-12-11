@@ -111,9 +111,11 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                 ply_path = f"{output_dir}/part{i}_gs.ply"
                 if os.path.exists(ply_path):
                     os.remove(ply_path)
-                outputs['gaussian'][i].save_ply(ply_path)
+                if 'gaussian' in outputs and i < len(outputs['gaussian']):
+                    outputs['gaussian'][i].save_ply(ply_path)
             else:
-                gs_list.append(outputs['gaussian'][i])
+                if 'gaussian' in outputs and i < len(outputs['gaussian']):
+                    gs_list.append(outputs['gaussian'][i])
                 
     # Only merge gaussians if we have any to merge
     if gs_list:

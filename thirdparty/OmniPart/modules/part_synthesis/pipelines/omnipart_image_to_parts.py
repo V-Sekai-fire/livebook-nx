@@ -434,6 +434,13 @@ class OmniPartImageTo3DPipeline(Pipeline):
                 mesh_decoder = self.models['slat_decoder_mesh']
                 mesh_decoder.eval()  # Ensure eval mode
                 
+                # Ensure mesh extractor is also in eval mode (not training)
+                if hasattr(mesh_decoder, 'mesh_extractor'):
+                    mesh_extractor = mesh_decoder.mesh_extractor
+                    if hasattr(mesh_extractor, 'mesh_extractor'):
+                        # FlexiCubes extractor - ensure it's not in training mode
+                        mesh_extractor.mesh_extractor.training = False
+                
                 # Disable checkpointing for faster inference (saves memory but slows down)
                 original_checkpoint_settings = {}
                 if hasattr(mesh_decoder, 'use_checkpoint'):
@@ -448,15 +455,22 @@ class OmniPartImageTo3DPipeline(Pipeline):
                             original_checkpoint_settings['blocks'].append((i, block.use_checkpoint))
                             block.use_checkpoint = False
                 
+                # Clear cache before decoding for better memory management
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                
                 # Use inference_mode for better performance than no_grad
                 with torch.inference_mode():
                     # Enable cudnn benchmark for faster convolutions
                     original_benchmark = torch.backends.cudnn.benchmark
+                    original_deterministic = torch.backends.cudnn.deterministic
                     torch.backends.cudnn.benchmark = True
+                    torch.backends.cudnn.deterministic = False  # Allow non-deterministic for speed
                     try:
                         ret['mesh'] = mesh_decoder(slat)
                     finally:
                         torch.backends.cudnn.benchmark = original_benchmark
+                        torch.backends.cudnn.deterministic = original_deterministic
                 
                 # Restore checkpointing settings
                 if 'decoder' in original_checkpoint_settings:
@@ -476,14 +490,25 @@ class OmniPartImageTo3DPipeline(Pipeline):
                 
         if 'gaussian' in formats:
             print("[DEBUG] decode_slat: Decoding gaussian format...")
-            try:
-                ret['gaussian'] = self.models['slat_decoder_gs'](slat)
-                print(f"[DEBUG] decode_slat: Gaussian format decoded successfully, got {len(ret['gaussian'])} gaussians")
-            except Exception as e:
-                print(f"[ERROR] decode_slat: Gaussian format failed: {type(e).__name__}: {e}")
-                import traceback
-                traceback.print_exc()
-                raise
+            gaussian_decoder = self.models['slat_decoder_gs']
+            gaussian_decoder.eval()
+            
+            # Gaussian decoder may need gradients, so use no_grad instead of inference_mode
+            # Clone slat to convert from inference tensor to regular tensor if needed
+            if hasattr(slat, 'feats') and hasattr(slat, 'coords'):
+                # Clone to ensure we have a regular tensor (not inference tensor)
+                # This converts inference tensors to regular tensors
+                slat_clone = sp.SparseTensor(
+                    coords=slat.coords.clone(),
+                    feats=slat.feats.clone(),
+                    batch_size=getattr(slat, 'batch_size', None)
+                )
+            else:
+                slat_clone = slat
+            
+            with torch.no_grad():  # Use no_grad instead of inference_mode for gaussian
+                ret['gaussian'] = gaussian_decoder(slat_clone)
+            print(f"[DEBUG] decode_slat: Gaussian format decoded successfully, got {len(ret['gaussian'])} gaussians")
                 
         if 'radiance_field' in formats:
             print("[DEBUG] decode_slat: Decoding radiance_field format...")
