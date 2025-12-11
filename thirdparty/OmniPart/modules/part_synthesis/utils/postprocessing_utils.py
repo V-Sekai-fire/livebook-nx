@@ -505,8 +505,9 @@ def bake_texture(
             raise ImportError("nvdiffrast is required for optimization-based texture baking. Please install nvdiffrast.")
         
         rastctx = utils3d.torch.RastContext(backend='cuda')
-        observations = [obs.flip(0) for obs in observations]  # Flip Y for rendering
-        masks = [m.flip(0) for m in masks]
+        # Do NOT flip observations - texture will be flipped at the end to match convention
+        # observations = [obs.flip(0) for obs in observations]  # Flip Y for rendering
+        # masks = [m.flip(0) for m in masks]
         
         # Precompute UV maps for efficiency
         _uv = []
