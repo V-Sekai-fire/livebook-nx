@@ -1359,6 +1359,7 @@ try:
     
     # Load all images as PIL Images for multiview
     images_list = [Image.open(img_path) for img_path in processed_image_paths]
+    print(f"[DEBUG] Loaded {len(images_list)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}")
     
     # Generate voxel coordinates with performance optimizations
     torch.backends.cudnn.enabled = True
@@ -1419,7 +1420,9 @@ try:
     
     # Use all images for multiview conditioning
     print(f"[INFO] Using {len(images_list)} image(s) for SLAT generation...")
+    print(f"[DEBUG] Conditioning on images: {[Path(p).name for p in processed_image_paths]}")
     cond = part_synthesis_pipeline.get_cond(images_list)
+    print(f"[DEBUG] Condition shape: {cond['cond'].shape if isinstance(cond, dict) and 'cond' in cond else 'N/A'}")
     
     # Clear memory before SLAT sampling
     torch.cuda.empty_cache()

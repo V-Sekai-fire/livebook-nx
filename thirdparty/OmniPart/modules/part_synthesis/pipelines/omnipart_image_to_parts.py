@@ -139,6 +139,8 @@ class OmniPartImageTo3DPipeline(Pipeline):
     def encode_image(self, image: Union[torch.Tensor, List[Image.Image]]) -> torch.Tensor:
         """
         Encode the image using the conditioning model.
+        
+        For multiview (list of images), concatenates patch tokens along sequence dimension.
 
         Args:
             image (Union[torch.Tensor, list[Image.Image]]): The image(s) to encode
@@ -148,21 +150,30 @@ class OmniPartImageTo3DPipeline(Pipeline):
         """
         if isinstance(image, torch.Tensor):
             assert image.ndim == 4, "Image tensor should be batched (B, C, H, W)"
+            # Single image or batch - process normally
+            image = self.image_cond_model_transform(image).to(self.device)
+            features = self.models['image_cond_model'](image, is_training=True)['x_prenorm']
+            patchtokens = F.layer_norm(features, features.shape[-1:])
+            return patchtokens
         elif isinstance(image, list):
             assert all(isinstance(i, Image.Image) for i in image), "Image list should be list of PIL images"
-            # Convert PIL images to tensors
-            image = [i.resize((518, 518), Image.LANCZOS) for i in image]
-            image = [np.array(i.convert('RGB')).astype(np.float32) / 255 for i in image]
-            image = [torch.from_numpy(i).permute(2, 0, 1).float() for i in image]
-            image = torch.stack(image).to(self.device)
+            # Multiview: process each image separately and concatenate patch tokens
+            patchtoken_list = []
+            for img in image:
+                # Resize and convert to tensor
+                img = img.resize((518, 518), Image.LANCZOS)
+                img = np.array(img.convert('RGB')).astype(np.float32) / 255
+                img = torch.from_numpy(img).permute(2, 0, 1).float().unsqueeze(0).to(self.device)
+                # Apply normalization and run through DINOv2 model
+                img = self.image_cond_model_transform(img).to(self.device)
+                features = self.models['image_cond_model'](img, is_training=True)['x_prenorm']
+                patchtokens = F.layer_norm(features, features.shape[-1:])
+                patchtoken_list.append(patchtokens)
+            # Concatenate patch tokens along sequence dimension (dim=1) for multiview
+            patchtokens = torch.concat(patchtoken_list, dim=1)
+            return patchtokens
         else:
             raise ValueError(f"Unsupported type of image: {type(image)}")
-        
-        # Apply normalization and run through DINOv2 model
-        image = self.image_cond_model_transform(image).to(self.device)
-        features = self.models['image_cond_model'](image, is_training=True)['x_prenorm']
-        patchtokens = F.layer_norm(features, features.shape[-1:])
-        return patchtokens
 
     def get_cond(self, image: Union[torch.Tensor, List[Image.Image]]) -> dict:
         """
