@@ -270,9 +270,15 @@ def _fill_holes(
     
     # Use meshfix to fill small holes in the mesh        
     mesh = _meshfix.PyTMesh()
-    mesh.load_array(verts.cpu().numpy(), faces.cpu().numpy())
+    # Ensure numpy arrays are float32 before passing to meshfix
+    verts_np = verts.cpu().numpy().astype(np.float32)
+    faces_np = faces.cpu().numpy().astype(np.int32)
+    mesh.load_array(verts_np, faces_np)
     mesh.fill_small_boundaries(nbe=max_hole_nbe, refine=True)
     verts, faces = mesh.return_arrays()
+    # Ensure output from meshfix is converted to float32 (meshfix may return float64)
+    verts = np.asarray(verts, dtype=np.float32)
+    faces = np.asarray(faces, dtype=np.int32)
     verts, faces = torch.tensor(verts, device='cuda', dtype=torch.float32), torch.tensor(faces, device='cuda', dtype=torch.int32)
 
     return verts, faces
@@ -347,8 +353,9 @@ def postprocess_mesh(
         # Save current mesh before attempting hole filling
         mesh_before_holes = (vertices.copy(), faces.copy())
         try:
-            vertices_t = torch.tensor(vertices).cuda()
-            faces_t = torch.tensor(faces.astype(np.int32)).cuda()
+            # Ensure float32 to avoid dtype mismatches
+            vertices_t = torch.tensor(vertices, dtype=torch.float32).cuda()
+            faces_t = torch.tensor(faces.astype(np.int32), dtype=torch.int32).cuda()
             vertices_t, faces_t = _fill_holes(
                 vertices_t, faces_t,
                 max_hole_size=fill_holes_max_hole_size,
