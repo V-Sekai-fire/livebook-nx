@@ -853,7 +853,7 @@ if not apply_merge:
     
     sys.path.insert(0, str(omnipart_dir))
     # Add meshoptimizer to path for local development
-    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
+    meshoptimizer_dir = Path(omnipart_dir).parent.parent / "meshoptimizer"
     if meshoptimizer_dir.exists():
         sys.path.insert(0, str(meshoptimizer_dir))
     
@@ -960,10 +960,10 @@ for img_idx, image_path in enumerate(image_paths):
                 raise FileNotFoundError(f"OmniPart directory not found at {omnipart_dir}")
             
             sys.path.insert(0, str(omnipart_dir))
-    # Add meshoptimizer to path for local development
-    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
-    if meshoptimizer_dir.exists():
-        sys.path.insert(0, str(meshoptimizer_dir))
+            # Add meshoptimizer to path for local development
+            meshoptimizer_dir = Path(omnipart_dir).parent.parent / "meshoptimizer"
+            if meshoptimizer_dir.exists():
+                sys.path.insert(0, str(meshoptimizer_dir))
             
             from segment_anything import SamAutomaticMaskGenerator, build_sam
             from modules.label_2d_mask.label_parts import get_sam_mask, clean_segment_edges
@@ -1460,7 +1460,7 @@ if Path(omnipart_dir).exists():
     # Use local OmniPart installation
     sys.path.insert(0, str(omnipart_dir))
     # Add meshoptimizer to path for local development
-    meshoptimizer_dir = Path(__file__).parent.parent / "thirdparty" / "meshoptimizer"
+    meshoptimizer_dir = Path(omnipart_dir).parent.parent / "meshoptimizer"
     if meshoptimizer_dir.exists():
         sys.path.insert(0, str(meshoptimizer_dir))
     print(f"[INFO] Using OmniPart from: {omnipart_dir}")

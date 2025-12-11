@@ -375,9 +375,19 @@ def postprocess_mesh(
                 if verbose:
                     tqdm.write(f'Decimation skipped: target indices ({target_indices}) >= current indices ({faces.shape[0] * 3})')
             else:
-                # Try to use meshoptimizer with screen-space error
+                # Use meshoptimizer with screen-space error (required, no fallback)
                 try:
-                    from .meshoptimizer_wrapper import simplify_with_screen_error
+                    # Try importing from installed package first
+                    try:
+                        from meshoptimizer import simplify_with_screen_error
+                        meshopt_source = "installed package"
+                    except ImportError:
+                        # Try importing from wrapper (which handles local path)
+                        from .meshoptimizer_wrapper import simplify_with_screen_error
+                        meshopt_source = "wrapper (local path)"
+                    
+                    if verbose:
+                        tqdm.write(f'Using meshoptimizer for decimation (source: {meshopt_source})')
                     
                     # Convert faces to flat index array
                     indices = faces.flatten().astype(np.uint32)
@@ -424,22 +434,11 @@ def postprocess_mesh(
                         tqdm.write(f'After meshoptimizer decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces (error: {result_error:.6f})')
                 
                 except (ImportError, Exception) as e:
-                    # Fallback to trimesh if meshoptimizer not available
+                    # Meshoptimizer is required - raise error instead of falling back
+                    error_msg = f'Meshoptimizer is required for decimation but is not available: {e}'
                     if verbose:
-                        tqdm.write(f'Meshoptimizer not available ({e}), falling back to trimesh')
-                    
-                    # Create trimesh object
-                    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-                    # Calculate target number of faces
-                    target_faces = int(faces.shape[0] * simplify_ratio)
-                    if target_faces < 4:  # Minimum faces for a valid mesh
-                        target_faces = 4
-                    # Perform quadric decimation
-                    mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
-                    vertices = mesh.vertices
-                    faces = mesh.faces
-                    if verbose:
-                        tqdm.write(f'After trimesh decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+                        tqdm.write(f'ERROR: {error_msg}')
+                    raise RuntimeError(error_msg) from e
         except Exception as e:
             # Decimation failed, skip it but continue
             if verbose:
@@ -852,6 +851,7 @@ def to_glb(
             
             # Bake texture from the rendered views onto the mesh
             # Use vertices as-is (no normalization) - mesh and Gaussian should already be in same coordinate system
+            try:
                 texture = bake_texture(
                     vertices, faces, uvs,
                     observations, masks, extrinsics, intrinsics,

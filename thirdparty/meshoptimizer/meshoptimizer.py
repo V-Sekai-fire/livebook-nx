@@ -56,7 +56,8 @@ def _load_meshoptimizer_lib():
     
     raise ImportError(
         "Could not load meshoptimizer library. "
-        "Please build it first using: cd thirdparty/meshoptimizer && ./build.sh"
+        "The library should be built automatically during package installation via uv_init. "
+        "If the library is missing, ensure CMake is available and the package was installed correctly."
     )
 
 
