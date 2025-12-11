@@ -583,7 +583,8 @@ def bake_texture(
             texture = rgb_to_srgb_image(texture)
         
         # Convert optimized texture to numpy array
-        texture = np.clip(texture[0].flip(0).detach().cpu().numpy() * 255, 0, 255).astype(np.uint8)
+        # Do NOT flip texture - observations are already flipped, so flipping texture would invert it
+        texture = np.clip(texture[0].detach().cpu().numpy() * 255, 0, 255).astype(np.uint8)
         
         # Fill any remaining holes in the texture
         mask = 1 - utils3d.torch.rasterize_triangle_faces(
