@@ -131,8 +131,9 @@ def _fill_holes(
         face_id = buffers['face_id'][0][buffers['mask'][0] > 0.95] - 1
         face_id = torch.unique(face_id).long()
         visblity[face_id] += 1
-    # Normalize visibility to [0,1]
-    visblity = visblity.float() / num_views
+    # Normalize visibility to [0,1] - ensure float32
+    visblity = visblity.float() / float(num_views)
+    visblity = visblity.float()  # Ensure float32 (not float64)
     
     # Prepare for mincut-based mesh cleaning
     ## Construct edge data structures
@@ -221,13 +222,13 @@ def _fill_holes(
         if len(cc_new_boundary_edge_indices) > 0:
             # Group boundary edges into connected components
             cc_new_boundary_edge_cc = utils3d.torch.compute_edge_connected_components(edges[cc_new_boundary_edge_indices])
-            # Calculate the center of each boundary loop
-            cc_new_boundary_edges_cc_center = [verts[edges[cc_new_boundary_edge_indices[edge_cc]]].mean(dim=1).mean(dim=0) for edge_cc in cc_new_boundary_edge_cc]
+            # Calculate the center of each boundary loop - ensure float32
+            cc_new_boundary_edges_cc_center = [verts[edges[cc_new_boundary_edge_indices[edge_cc]]].mean(dim=1).mean(dim=0).float() for edge_cc in cc_new_boundary_edge_cc]
             cc_new_boundary_edges_cc_area = []
             # Calculate the area of each boundary loop
             for i, edge_cc in enumerate(cc_new_boundary_edge_cc):
-                _e1 = verts[edges[cc_new_boundary_edge_indices[edge_cc]][:, 0]] - cc_new_boundary_edges_cc_center[i]
-                _e2 = verts[edges[cc_new_boundary_edge_indices[edge_cc]][:, 1]] - cc_new_boundary_edges_cc_center[i]
+                _e1 = (verts[edges[cc_new_boundary_edge_indices[edge_cc]][:, 0]] - cc_new_boundary_edges_cc_center[i]).float()
+                _e2 = (verts[edges[cc_new_boundary_edge_indices[edge_cc]][:, 1]] - cc_new_boundary_edges_cc_center[i]).float()
                 cc_new_boundary_edges_cc_area.append(torch.norm(torch.cross(_e1, _e2, dim=-1), dim=1).sum() * 0.5)
             if debug:
                 cutting_edges.append(cc_new_boundary_edge_indices)
