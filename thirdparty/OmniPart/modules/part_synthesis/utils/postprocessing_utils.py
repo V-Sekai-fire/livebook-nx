@@ -177,7 +177,13 @@ def _fill_holes(
     dual_edges, dual_edge2edge = utils3d.torch.compute_dual_graph(face2edge)
     dual_edge2edge = edges[dual_edge2edge]
     # Edge weights based on edge length - used for min-cut algorithm
-    dual_edges_weights = torch.norm(verts[dual_edge2edge[:, 0]] - verts[dual_edge2edge[:, 1]], dim=1)
+    # Ensure float32 for all operations
+    v0 = verts[dual_edge2edge[:, 0]].float()
+    v1 = verts[dual_edge2edge[:, 1]].float()
+    dual_edges_weights = torch.norm(v0 - v1, dim=1)
+    # Ensure weights are float32 (not float64)
+    if dual_edges_weights.dtype != torch.float32:
+        dual_edges_weights = dual_edges_weights.float()
     if verbose:
         tqdm.write(f'Dual graph: {dual_edges.shape[0]} edges')
 
@@ -349,6 +355,9 @@ def postprocess_mesh(
     # Use trimesh instead of PyVista to avoid signal handler conflicts in Pythonx
     if simplify and simplify_ratio > 0:
         try:
+            # Ensure float32/int32 for trimesh (not float64)
+            vertices = np.asarray(vertices, dtype=np.float32)
+            faces = np.asarray(faces, dtype=np.int32)
             # Create trimesh object
             mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
             # Calculate target number of faces
@@ -714,9 +723,9 @@ def to_glb(
         if vertices is None or faces is None:
             if verbose:
                 print("[WARN] postprocess_mesh failed again, using original mesh without post-processing")
-            # Use original mesh data
-            vertices = mesh.vertices.detach().cpu().numpy()
-            faces = mesh.faces.detach().cpu().numpy()
+            # Use original mesh data - ensure float32/int32 (not float64)
+            vertices = mesh.vertices.detach().cpu().numpy().astype(np.float32)
+            faces = mesh.faces.detach().cpu().numpy().astype(np.int32)
 
     if vertices.shape[0] == 0 or faces.shape[0] == 0:
         return None
