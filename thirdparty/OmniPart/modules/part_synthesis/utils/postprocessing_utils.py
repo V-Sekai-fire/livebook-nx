@@ -683,9 +683,9 @@ def to_glb(
     Returns:
         trimesh.Trimesh: The processed mesh with texture, ready for GLB export
     """
-    # Extract mesh data from the result
-    vertices = mesh.vertices.detach().cpu().numpy()
-    faces = mesh.faces.detach().cpu().numpy()
+    # Extract mesh data from the result - ensure float32/int32 (not float64)
+    vertices = mesh.vertices.detach().cpu().numpy().astype(np.float32)
+    faces = mesh.faces.detach().cpu().numpy().astype(np.int32)
     
     # Apply mesh post-processing
     vertices, faces = postprocess_mesh(
