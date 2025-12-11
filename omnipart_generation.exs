@@ -586,6 +586,18 @@ if apply_merge:
     print("  1. Run again with --apply-merge and different --merge-groups to refine further")
     print("  2. Run without --apply-merge to generate 3D model")
     
+    # Unload SAM models and clear GPU cache after merge stage
+    print("\n[INFO] Unloading SAM models and clearing GPU cache...")
+    if 'sam_model' in locals():
+        del sam_model
+    if 'sam_mask_generator' in locals():
+        del sam_mask_generator
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+    print("[OK] Resources cleaned up after merge stage")
+    
     # Exit early - don't generate 3D
     import sys
     sys.exit(0)
@@ -847,6 +859,18 @@ if auto_generate_mask:
     # Update image path to use processed image (with alpha channel)
     image_path = processed_image_path
     
+    # Unload SAM models and clear GPU cache after segmentation stage
+    print("\n[INFO] Unloading SAM models and clearing GPU cache...")
+    if 'sam_model' in locals():
+        del sam_model
+    if 'sam_mask_generator' in locals():
+        del sam_mask_generator
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+    print("[OK] Resources cleaned up after segmentation stage")
+    
     # If segment-only mode, exit here
     if segment_only:
         print("\n=== Segmentation Complete ===")
@@ -988,6 +1012,14 @@ try:
         print(result.stdout)
     
     print("[OK] OmniPart inference completed successfully")
+    
+    # Clear GPU cache after 3D generation stage
+    print("\n[INFO] Clearing GPU cache after 3D generation...")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
+    print("[OK] Resources cleaned up after 3D generation stage")
     
 except subprocess.CalledProcessError as e:
     print(f"\n[ERROR] OmniPart inference failed:")
