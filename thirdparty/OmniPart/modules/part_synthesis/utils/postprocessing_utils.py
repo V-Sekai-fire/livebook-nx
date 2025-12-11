@@ -605,7 +605,7 @@ def to_glb(
     simplify: float = 0.95,
     fill_holes: bool = True,
     fill_holes_max_size: float = 0.04,
-    texture_size: int = 1024,
+    texture_size: int = 2048,
     debug: bool = False,
     verbose: bool = True,
     textured: bool = True,
@@ -712,7 +712,7 @@ def to_glb(
 
             # Render multi-view images from the appearance representation for texturing
             # Reduced from 100 to 30 views for faster texture baking (can be increased for higher quality)
-            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=30)
+            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=2048, nviews=30)
             # Create masks from the rendered images
             masks = [np.any(observation > 0, axis=-1) for observation in observations]
             # Convert camera parameters to numpy
