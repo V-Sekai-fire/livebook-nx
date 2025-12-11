@@ -56,6 +56,8 @@ Mix.install([
   {:opentelemetry_exporter, "~> 1.0"},
 ])
 
+require Logger
+
 Logger.configure(level: :info)
 
 # Load shared utilities
@@ -258,6 +260,7 @@ defmodule ArgsParser do
     
     # Debug: Verify all images are parsed
     if length(image_paths) > 1 do
+      require Logger
       Logger.debug("Parsed #{length(image_paths)} images: #{inspect(Enum.map(image_paths, &Path.basename/1))}")
       OtelLogger.info("Parsed multiple images", [{"image.count", length(image_paths)}])
     end
@@ -492,6 +495,7 @@ if not is_list(config_with_paths.image_paths) or length(config_with_paths.image_
 end
 
 # Debug: Log how many images are in config before serialization
+require Logger
 Logger.debug("Config contains #{length(config_with_paths.image_paths)} image(s) before serialization")
 if length(config_with_paths.image_paths) > 1 do
   Logger.debug("Image paths in config: #{inspect(Enum.map(config_with_paths.image_paths, &Path.basename/1))}")
@@ -555,6 +559,9 @@ try do
   log_dir = System.get_env("TMPDIR", System.get_env("TMP", "/tmp"))
   System.put_env("OTEL_LOG_DIR", log_dir)
   
+  # Format trace context string for Python (explicitly use the variable to avoid unused warning)
+  trace_context_str_for_python = if trace_context, do: "\"#{trace_context}\"", else: "None"
+  
   # Use spawn to run Python in separate process to avoid GIL issues
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -578,7 +585,7 @@ try:
     import logging
     
     # Get trace context from Elixir (passed via environment or Pythonx context)
-    trace_context_str = """ <> (if trace_context, do: "\"#{trace_context}\"", else: "None") <> """
+    trace_context_str = """ <> trace_context_str_for_python <> """
     
     # Initialize OpenTelemetry SDK
     resource = Resource.create({"service.name": "omnipart-generation", "service.version": "1.0.0"})
