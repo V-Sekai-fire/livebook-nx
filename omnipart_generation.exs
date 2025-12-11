@@ -2,44 +2,6 @@
 
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
-#
-# OmniPart Generation Script
-# Generate part-aware 3D shapes with semantic decoupling and structural cohesion
-# Repository: https://github.com/HKU-MMLab/OmniPart
-# Hugging Face Space: https://huggingface.co/spaces/omnipart/OmniPart
-# Project Page: https://omnipart.github.io/
-#
-# Usage:
-#   elixir omnipart_generation.exs <image_path> [image_path2 ...] [mask_path ...] [options]
-#   elixir omnipart_generation.exs --image <path1>,<path2>,<path3> [--mask <path1>,<path2>] [options]
-#
-# Multiview Support:
-#   Multiple images can be provided for multiview 3D generation using comma-separated values.
-#   Each image will be processed separately for segmentation, with independent mask indices 
-#   (starting from 0 for each image). Each image can have its own merge groups specified 
-#   using || separator.
-#
-#   Example (multiview with merge groups):
-#     elixir omnipart_generation.exs \
-#       --image img1.png,img2.png,img3.png \
-#       --merge-groups "0,1;3,4||2,3||1,2" \
-#       --segment-only
-#
-# Options:
-#   --image, -i <paths>           Input image path(s) - comma-separated for multiple images (required)
-#   --mask, -m <paths>            Segmentation mask path(s) - comma-separated for multiple masks (.exr file with 2D part IDs) (optional)
-#   --output-dir, -o <path>       Output directory (default: output)
-#   --segment-only                 Only generate segmentation, don't generate 3D model
-#   --apply-merge                  Apply merge groups to existing segmentation state
-#   --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
-#   --merge-groups <string>       Merge groups for mask(s). For multiple images, separate with || 
-#                                  (e.g., "0,1;3,4||2,3" merges 0&1 and 3&4 for first image, 2&3 for second)
-#                                  Example for 4 images: "5,6;0,3||5,6;2,4||5,6;0,2,3,4||5,6;1,3,4"
-#   --num-inference-steps <int>   Number of inference steps (default: 25)
-#   --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
-#   --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
-#   --gpu <int>                   GPU ID to use (default: 0)
-#   --seed <int>                  Random seed (default: 42)
 
 # Configure OpenTelemetry for console-only logging
 Application.put_env(:opentelemetry, :span_processor, :batch)
@@ -174,6 +136,7 @@ defmodule ArgsParser do
       --num-inference-steps <int>   Number of inference steps (default: 25)
       --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
       --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
+      --textured                     Enable texture baking for GLB files (default: disabled)
       --gpu <int>                   GPU ID to use (default: 0)
       --seed <int>                  Random seed (default: 42)
       --help, -h                     Show this help message
@@ -222,6 +185,7 @@ defmodule ArgsParser do
         num_inference_steps: :integer,
         guidance_scale: :float,
         simplify_ratio: :float,
+        textured: :boolean,
         gpu: :integer,
         seed: :integer,
         help: :boolean
@@ -395,6 +359,7 @@ defmodule ArgsParser do
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
       simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.15),
+      textured: Keyword.get(opts, :textured, false),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
     }
@@ -470,7 +435,7 @@ Mode: #{mode}
 Images: #{images_str}
 Masks: #{masks_str}
 Output Directory: #{config.output_dir}
-#{if config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks) || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if merge_groups_str, do: "Merge Groups: #{merge_groups_str}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\n", else: ""}GPU: #{config.gpu}
+#{if config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks) || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if merge_groups_str, do: "Merge Groups: #{merge_groups_str}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\nTextured: #{config.textured}\n", else: ""}GPU: #{config.gpu}
 Seed: #{config.seed}
 """)
 
@@ -559,11 +524,12 @@ try do
   log_dir = System.get_env("TMPDIR", System.get_env("TMP", "/tmp"))
   System.put_env("OTEL_LOG_DIR", log_dir)
   
-  # Format trace context string for Python (explicitly use the variable to avoid unused warning)
-  trace_context_str_for_python = if trace_context, do: "\"#{trace_context}\"", else: "None"
-  
   # Use spawn to run Python in separate process to avoid GIL issues
-  {_, _python_globals} = Pythonx.eval(~S"""
+  # Build Python code string using iodata (list of strings) - no concatenation, no interpolation
+  config_file_code = ConfigFile.python_path_string(config_file_normalized)
+  
+  python_code_iodata = [
+    ~S"""
 import json
 import sys
 import os
@@ -585,7 +551,9 @@ try:
     import logging
     
     # Get trace context from Elixir (passed via environment or Pythonx context)
-    trace_context_str = """ <> trace_context_str_for_python <> """
+    trace_context_str = """,
+    trace_context_str_for_python,
+    ~S"""
     
     # Initialize OpenTelemetry SDK
     resource = Resource.create({"service.name": "omnipart-generation", "service.version": "1.0.0"})
@@ -716,7 +684,9 @@ except ImportError as e:
     )
 
 # Get configuration from JSON file
-""" <> ConfigFile.python_path_string(config_file_normalized) <> ~S"""
+""",
+    config_file_code,
+    ~S"""
 
 # Support multiple images - read as lists
 image_paths = config.get('image_paths', [])
@@ -755,6 +725,7 @@ size_threshold = config.get('size_threshold', 2000)
 num_inference_steps = config.get('num_inference_steps', 25)
 guidance_scale = config.get('guidance_scale', 7.5)
 simplify_ratio = config.get('simplify_ratio', 0.15)
+textured = config.get('textured', False)
 gpu = config.get('gpu', 0)
 seed = config.get('seed', 42)
 omnipart_dir = config.get('omnipart_dir')
@@ -1433,8 +1404,8 @@ print(f"[INFO] torch_extensions cache directory: {torch_ext_dir_abs}")
 env["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
 os.environ["TORCH_EXTENSIONS_DIR"] = torch_ext_dir_abs
 
-# Note: nvdiffrast is not needed since texture baking is disabled (textured=False)
-# GLB files will be exported without baked textures, avoiding nvdiffrast dependency
+# Note: nvdiffrast is only needed if texture baking is enabled (--textured flag)
+# GLB files can be exported with or without baked textures depending on the --textured option
 
 # Set up checkpoint directory
 # OmniPart expects checkpoints in ckpt/ directory relative to the OmniPart directory
@@ -1862,7 +1833,7 @@ try:
         simplify_ratio=simplify_ratio, 
         save_video=False,
         save_glb=True,
-        textured=False,  # Disabled texture baking to prevent OOM errors
+        textured=textured,  # Use CLI option for texture baking
     )
     
     # Merge parts
@@ -1934,7 +1905,13 @@ else:
     print(f"\n[WARN] No output files found in {output_dir}")
     print("Please check the inference output above for details.")
 
-""", %{})
+"""
+  ]
+  
+  # Convert iodata to binary using IO.iodata_to_binary (no concatenation)
+  python_code_binary = IO.iodata_to_binary(python_code_iodata)
+  
+  {_, _python_globals} = Pythonx.eval(python_code_binary, %{})
 rescue
   e ->
     # Clean up temp file on error

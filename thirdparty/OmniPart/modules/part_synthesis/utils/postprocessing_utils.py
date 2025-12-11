@@ -607,8 +607,8 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        # Reduced from 500 to 250 for memory efficiency (can be increased for higher quality)
-        total_steps = 250
+        # Doubled from 250 to 500 for higher quality texture baking
+        total_steps = 500
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
             if verbose and len(_uv) > 0:
