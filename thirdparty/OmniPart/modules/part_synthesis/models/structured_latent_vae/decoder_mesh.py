@@ -133,7 +133,8 @@ class SLatMeshDecoder(SparseTransformerBase):
         self.rep_config = representation_config
         
         # Mesh extractor to convert features to mesh representation
-        self.mesh_extractor = SparseFeatures2Mesh(res=self.resolution*4, use_color=self.rep_config.get('use_color', False))
+        # Reduced from resolution*4 to resolution*2 for faster mesh decoding
+        self.mesh_extractor = SparseFeatures2Mesh(res=self.resolution*2, use_color=self.rep_config.get('use_color', False))
         self.out_channels = self.mesh_extractor.feats_channels
         
         # Upsampling blocks that progressively increase resolution
