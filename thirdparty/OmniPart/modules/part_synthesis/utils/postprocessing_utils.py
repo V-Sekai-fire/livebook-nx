@@ -607,8 +607,8 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        # Doubled from 500 to 1000 for higher quality texture baking
-        total_steps = 1000
+        # Set to 500 iterations for balanced quality and performance
+        total_steps = 500
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
             if verbose and len(_uv) > 0:
@@ -796,12 +796,15 @@ def to_glb(
                     # Check available GPU memory
                     free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
                     free_memory_gb = free_memory / (1024**3)
-                    # If less than 5GB free, reduce texture size
+                    # If less than 5GB free, reduce texture size from 2048 to 1024
                     if free_memory_gb < 5.0 and texture_size > 1024:
                         if verbose:
                             print(f"[INFO] Low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 1024")
                         texture_size = 1024
                     elif free_memory_gb < 2.0 and texture_size > 512:
+                        if verbose:
+                            print(f"[INFO] Very low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 512")
+                        texture_size = 512
                         if verbose:
                             print(f"[INFO] Very low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 512")
                         texture_size = 512
