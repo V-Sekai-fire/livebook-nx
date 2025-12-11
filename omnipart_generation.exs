@@ -988,11 +988,12 @@ try:
     
     torch.manual_seed(seed)
     
-    # Load part_synthesis model
-    print("[INFO] Loading PartSynthesis model...")
-    part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt)
+    # Load part_synthesis model with half precision for memory efficiency
+    print("[INFO] Loading PartSynthesis model with half precision...")
+    part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
     part_synthesis_pipeline.to(device)
-    print("[INFO] PartSynthesis model loaded")
+    torch.cuda.empty_cache()
+    print("[INFO] PartSynthesis model loaded (half precision enabled)")
     
     # Load bbox_gen model
     print("[INFO] Loading BboxGen model...")
@@ -1016,6 +1017,8 @@ try:
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
     voxel_coords_ply.export(os.path.join(inference_output_dir, "voxel_coords_vis.ply"))
     print("[INFO] Voxel coordinates saved")
+    # Clear cache after voxel coordinate generation
+    torch.cuda.empty_cache()
     
     # Generate bounding boxes
     print("[INFO] Generating bounding boxes...")
@@ -1026,6 +1029,14 @@ try:
     bboxes_vis.export(os.path.join(inference_output_dir, "bboxes_vis.glb"))
     print("[INFO] BboxGen output saved")
     
+    # Unload bbox_gen model to free GPU memory before SLAT sampling
+    print("[INFO] Unloading BboxGen model to free GPU memory...")
+    del bbox_gen_model
+    torch.cuda.empty_cache()
+    import gc
+    gc.collect()
+    print("[OK] BboxGen model unloaded")
+    
     # Prepare part synthesis input
     part_synthesis_input = prepare_part_synthesis_input(os.path.join(inference_output_dir, "voxel_coords.npy"), os.path.join(inference_output_dir, "bboxes.npy"), ordered_mask_input)
     
@@ -1035,9 +1046,14 @@ try:
     print(f"  Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
     print(f"  Masks shape: {part_synthesis_input['masks'].shape}")
     
-    # Sample SLAT
+    # Sample SLAT with memory optimizations
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = False
+    # Enable memory-efficient attention if available
+    try:
+        torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True)
+    except:
+        pass
     print("[INFO] Sampling SLAT...")
     torch.cuda.empty_cache()
     
@@ -1073,10 +1089,13 @@ try:
                 print(f"[OK] Successfully decoded {fmt} format")
             else:
                 print(f"[WARN] {fmt} format not in output")
+            # Clear cache after each format to free memory
+            torch.cuda.empty_cache()
         except Exception as e:
             print(f"[WARN] Failed to decode {fmt} format: {type(e).__name__}: {e}")
             import traceback
             traceback.print_exc()
+            torch.cuda.empty_cache()  # Clear cache even on error
             continue
     
     if not part_synthesis_output:
@@ -1104,11 +1123,16 @@ try:
     # Unload models and clear GPU cache after 3D generation stage
     print("\n[INFO] Unloading models and clearing GPU cache...")
     if 'part_synthesis_pipeline' in locals():
+        # Clear pipeline models
+        if hasattr(part_synthesis_pipeline, 'models'):
+            for model in part_synthesis_pipeline.models.values():
+                del model
         del part_synthesis_pipeline
     if 'bbox_gen_model' in locals():
         del bbox_gen_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+        torch.cuda.synchronize()  # Ensure all operations complete
         import gc
         gc.collect()
     print("[OK] Resources cleaned up after 3D generation stage")

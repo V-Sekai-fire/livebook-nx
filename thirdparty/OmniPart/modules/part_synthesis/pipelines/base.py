@@ -18,8 +18,14 @@ class Pipeline:
             model.eval()
 
     @staticmethod
-    def from_pretrained(path: str) -> "Pipeline":
+    def from_pretrained(path: str, **kwargs) -> "Pipeline":
+        """
+        Load a pretrained pipeline.
         
+        Args:
+            path: Path to the pipeline (local or Hugging Face)
+            **kwargs: Additional arguments to pass to model constructors (e.g., use_fp16=True)
+        """
         import os
         import json
 
@@ -41,7 +47,7 @@ class Pipeline:
         _models = {}
         for k, v in args['models'].items():
             print(f"Loading model {k} from local path: {path}/{v}")
-            _models[k] = models.from_pretrained(f"{path}/{v}")
+            _models[k] = models.from_pretrained(f"{path}/{v}", **kwargs)
 
         new_pipeline = Pipeline(_models)
         new_pipeline._pretrained_args = args

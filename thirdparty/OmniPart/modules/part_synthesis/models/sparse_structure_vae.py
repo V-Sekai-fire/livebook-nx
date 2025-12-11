@@ -303,6 +303,11 @@ class SparseStructureEncoder(nn.Module):
         Returns:
             Either the latent representation or a tuple of (z, mean, logvar) if return_raw=True
         """
+        # Convert input to match input_layer weight dtype to avoid dtype mismatches
+        input_layer_dtype = next(self.input_layer.parameters()).dtype
+        if x.dtype != input_layer_dtype:
+            x = x.type(input_layer_dtype)
+        
         h = self.input_layer(x)
         h = h.type(self.dtype)  # Convert to FP16 if needed
 

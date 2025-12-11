@@ -47,17 +47,23 @@ class OmniPartImageTo3DPipeline(Pipeline):
 
     
     @staticmethod
-    def from_pretrained(path: str) -> "OmniPartImageTo3DPipeline":
+    def from_pretrained(path: str, use_fp16: bool = False, **kwargs) -> "OmniPartImageTo3DPipeline":
         """
         Load a pretrained model.
 
         Args:
             path (str): The path to the model. Can be either local path or a Hugging Face repository.
+            use_fp16 (bool): Whether to use half precision for models (default: False)
+            **kwargs: Additional arguments to pass to model constructors
             
         Returns:
             OmniPartImageTo3DPipeline: Loaded pipeline instance
         """
-        pipeline = super(OmniPartImageTo3DPipeline, OmniPartImageTo3DPipeline).from_pretrained(path)
+        # Pass use_fp16 to model constructors
+        if use_fp16:
+            kwargs['use_fp16'] = True
+        
+        pipeline = super(OmniPartImageTo3DPipeline, OmniPartImageTo3DPipeline).from_pretrained(path, **kwargs)
         new_pipeline = OmniPartImageTo3DPipeline()
         new_pipeline.__dict__ = pipeline.__dict__
         args = pipeline._pretrained_args
@@ -73,6 +79,20 @@ class OmniPartImageTo3DPipeline(Pipeline):
 
         new_pipeline.slat_normalization = args['slat_normalization']
         new_pipeline._init_image_cond_model(args['image_cond_model'])
+        
+        # Convert models to fp16 if requested (except image_cond_model which should stay in float32)
+        if use_fp16:
+            print("[INFO] Converting models to half precision (except image_cond_model)...")
+            for model_name, model in new_pipeline.models.items():
+                if model_name != 'image_cond_model':
+                    if hasattr(model, 'convert_to_fp16'):
+                        model.convert_to_fp16()
+                        print(f"[OK] Converted {model_name} to half precision")
+                    elif hasattr(model, 'half'):
+                        # Fallback for models without convert_to_fp16 method
+                        new_pipeline.models[model_name] = model.half()
+                        print(f"[OK] Converted {model_name} to half precision (using .half())")
+            print("[OK] Half precision conversion complete")
 
         return new_pipeline
     

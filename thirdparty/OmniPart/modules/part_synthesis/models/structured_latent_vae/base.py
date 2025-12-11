@@ -168,6 +168,12 @@ class SparseTransformerBase(nn.Module):
         Returns:
             Processed sparse tensor after passing through all transformer blocks
         """
+        # Convert input to match input_layer weight dtype to avoid dtype mismatches
+        # This handles cases where model weights are in half precision but self.dtype is float32
+        input_layer_dtype = next(self.input_layer.parameters()).dtype
+        if x.feats.dtype != input_layer_dtype:
+            x = sp.SparseTensor(feats=x.feats.type(input_layer_dtype), coords=x.coords, batch_size=x.batch_size)
+        
         # Project input to model dimension
         h = self.input_layer(x)
         

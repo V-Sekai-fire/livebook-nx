@@ -261,6 +261,12 @@ class SparseStructureFlowModel(nn.Module):
         h = patchify(x, self.patch_size)
         h = h.view(*h.shape[:2], -1).permute(0, 2, 1).contiguous()  # [B, num_patches, patch_dim]
 
+        # Convert input to match input_layer weight dtype to avoid dtype mismatches
+        # This handles cases where model weights are in half precision but self.dtype is float32
+        input_layer_dtype = next(self.input_layer.parameters()).dtype
+        if h.dtype != input_layer_dtype:
+            h = h.type(input_layer_dtype)
+        
         # Project to model dimension
         h = self.input_layer(h)
         

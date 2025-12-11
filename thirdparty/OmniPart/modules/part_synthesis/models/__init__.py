@@ -86,8 +86,13 @@ def from_pretrained(path: str, **kwargs):
         print(f"Model lookup failed: {e}")
         raise ValueError(f"Model class '{model_class}' not found in available models: {list(__attributes.keys())}")
 
-    # print(f"Initializing model with args: {config.get('args', {})}")
-    model = model_constructor(**config.get('args', {}), **kwargs)
+    # Merge config args with kwargs, with kwargs taking precedence
+    config_args = config.get('args', {}).copy()
+    # Remove any keys from config_args that are in kwargs to avoid conflicts
+    for key in kwargs:
+        config_args.pop(key, None)
+    # print(f"Initializing model with args: {config_args}, kwargs: {kwargs}")
+    model = model_constructor(**config_args, **kwargs)
     
     # Load state dict
     state_dict = load_file(model_file)
