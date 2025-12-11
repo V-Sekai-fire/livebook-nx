@@ -896,13 +896,18 @@ def bake_texture(
                     if len(uv.shape) == 4 and uv.shape[0] == 1:
                         # Remove batch dimension: (1, H, W, 2) -> (H, W, 2)
                         uv = uv.squeeze(0)
-                    uv_normalized = uv * 2.0 - 1.0  # Convert [0,1] to [-1,1] for grid_sample
+                    # Clamp UV coordinates to [0, 1] range to avoid out-of-bounds sampling
+                    uv = torch.clamp(uv, 0.0, 1.0)
+                    # Flip Y coordinate: PyTorch3D uses bottom-left origin, but grid_sample uses top-left
+                    # Also, texture coordinates typically have Y flipped
+                    uv_flipped = torch.stack([uv[..., 0], 1.0 - uv[..., 1]], dim=-1)
+                    uv_normalized = uv_flipped * 2.0 - 1.0  # Convert [0,1] to [-1,1] for grid_sample
                     uv_grid = uv_normalized.unsqueeze(0)  # (H, W, 2) -> (1, H, W, 2)
                     # grid_sample expects (N, C, H, W) input and (N, H, W, 2) grid
                     texture_for_sampling = texture.permute(0, 3, 1, 2)  # (1, 3, H, W)
                     render = torch.nn.functional.grid_sample(
                         texture_for_sampling, uv_grid, mode='bilinear', 
-                        padding_mode='border', align_corners=False
+                        padding_mode='zeros', align_corners=True
                     )
                     render = render.squeeze(0).permute(1, 2, 0)  # (H, W, 3)
                 else:
