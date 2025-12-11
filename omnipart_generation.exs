@@ -145,13 +145,13 @@ defmodule ArgsParser do
       <mask_path>                  Segmentation mask file (.exr with 2D part IDs) (optional)
     
     Options:
-      --image, -i <path>            Input image path (required if not positional, RGBA PNG recommended)
-      --mask, -m <path>             Segmentation mask path (.exr file) (optional)
+      --image, -i <path>            Input image path(s) (required, can specify multiple times or use positional args)
+      --mask, -m <path>             Segmentation mask path(s) (.exr file, one per image, optional)
       --output-dir, -o <path>       Output directory (default: output)
       --segment-only                 Only generate segmentation, don't generate 3D model
       --apply-merge                  Apply merge groups to existing segmentation state
       --size-threshold <int>        Minimum segment size in pixels for mask generation (default: 2000)
-      --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
+      --merge-groups <string>       Merge groups for mask(s) (use || to separate per image, e.g., "0,1;3,4||2,3||1,2")
       --num-inference-steps <int>   Number of inference steps (default: 25)
       --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
       --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
@@ -220,38 +220,77 @@ defmodule ArgsParser do
       System.halt(0)
     end
 
-    # Get image and mask paths (positional or from options)
-    image_path = Keyword.get(opts, :image) || Enum.at(args, 0)
-    mask_path = Keyword.get(opts, :mask) || Enum.at(args, 1)
+    # Get image paths - support multiple images
+    image_paths = case Keyword.get_values(opts, :image) do
+      [] -> 
+        # No --image flags, use positional args
+        args
+      images -> 
+        # --image flags provided
+        images
+    end
 
-    if !image_path do
+    # Get mask paths - support multiple masks
+    mask_paths = case Keyword.get_values(opts, :mask) do
+      [] -> 
+        # No --mask flags, try positional args after images
+        if length(image_paths) > 0 do
+          Enum.drop(args, length(image_paths))
+        else
+          []
+        end
+      masks -> 
+        masks
+    end
+
+    if length(image_paths) == 0 do
       IO.puts("""
-      Error: Image path is required.
+      Error: At least one image path is required.
       
       Usage:
-        elixir omnipart_generation.exs <image_path> [mask_path] [options]
-        elixir omnipart_generation.exs --image <path> [--mask <path>] [options]
+        elixir omnipart_generation.exs <image_path> [image_path2 ...] [mask_path ...] [options]
+        elixir omnipart_generation.exs --image <path1> --image <path2> [--mask <path1> --mask <path2>] [options]
       
       Use --help or -h for more information.
       """)
       System.halt(1)
     end
 
-    # Check if image file exists
-    if !File.exists?(image_path) do
-      # Error logs are kept for critical failures
-      OtelLogger.error("Image file not found", [{"file.path", image_path}])
+    # Check if all image files exist
+    Enum.each(image_paths, fn image_path ->
+      if !File.exists?(image_path) do
+        OtelLogger.error("Image file not found", [{"file.path", image_path}])
+        System.halt(1)
+      end
+    end)
+
+    # Validate mask paths (must match number of images or be empty)
+    if length(mask_paths) > 0 && length(mask_paths) != length(image_paths) do
+      IO.puts("""
+      Error: Number of mask paths (#{length(mask_paths)}) must match number of image paths (#{length(image_paths)})
+      """)
       System.halt(1)
     end
 
-    # Mask is optional - will be auto-generated if not provided
-    auto_generate_mask = !mask_path || !File.exists?(mask_path)
-    if mask_path && !File.exists?(mask_path) do
-      # Track as span attribute instead of log
-      SpanCollector.add_span_attribute("mask.auto_generate", true)
-      SpanCollector.add_span_attribute("mask.path", mask_path)
-      ^mask_path = nil
-      ^auto_generate_mask = true
+    # Check mask files exist, set auto_generate flags
+    {mask_paths_valid, auto_generate_flags} = Enum.with_index(mask_paths)
+      |> Enum.map_reduce([], fn {mask_path, idx}, acc ->
+        if mask_path && File.exists?(mask_path) do
+          {mask_path, [false | acc]}
+        else
+          if mask_path do
+            SpanCollector.add_span_attribute("mask.auto_generate.#{idx}", true)
+            SpanCollector.add_span_attribute("mask.path.#{idx}", mask_path)
+          end
+          {nil, [true | acc]}
+        end
+      end)
+    
+    auto_generate_flags = Enum.reverse(auto_generate_flags)
+    # If no masks provided, auto-generate all
+    if length(mask_paths) == 0 do
+      auto_generate_flags = List.duplicate(true, length(image_paths))
+      mask_paths_valid = List.duplicate(nil, length(image_paths))
     end
 
     segment_only = Keyword.get(opts, :segment_only, false)
@@ -264,18 +303,38 @@ defmodule ArgsParser do
       System.halt(1)
     end
     
+    # Parse merge groups - support multiple (separated by ||)
+    merge_groups_str = Keyword.get(opts, :merge_groups)
+    merge_groups_list = if merge_groups_str do
+      merge_groups_str
+      |> String.split("||")
+      |> Enum.map(&String.trim/1)
+      |> Enum.filter(&(&1 != ""))
+    else
+      []
+    end
+    
+    # Validate merge groups count matches images (or is empty)
+    if length(merge_groups_list) > 0 && length(merge_groups_list) != length(image_paths) do
+      IO.puts("""
+      Error: Number of merge groups (#{length(merge_groups_list)}) must match number of image paths (#{length(image_paths)})
+      Use || to separate merge groups for each image, e.g., "0,1;3,4||2,3||1,2"
+      """)
+      System.halt(1)
+    end
+    
     %{
-      image_path: image_path,
-      mask_path: mask_path,
-      auto_generate_mask: auto_generate_mask,
+      image_paths: image_paths,
+      mask_paths: mask_paths_valid,
+      auto_generate_masks: auto_generate_flags,
       segment_only: segment_only,
       apply_merge: apply_merge,
       output_dir: Keyword.get(opts, :output_dir, "output"),
       size_threshold: Keyword.get(opts, :size_threshold, 2000),
-      merge_groups: Keyword.get(opts, :merge_groups),
+      merge_groups: merge_groups_list,
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
-        simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.15),
+      simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.15),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
     }
@@ -291,13 +350,39 @@ mode = cond do
   true -> "Full Generation"
 end
 
+images_str = if is_list(config.image_paths) do
+  "#{length(config.image_paths)} image(s): #{Enum.join(Enum.map(config.image_paths, &Path.basename/1), ", ")}"
+else
+  "#{Path.basename(config.image_paths)}"
+end
+
+masks_str = if is_list(config.mask_paths) and length(config.mask_paths) > 0 do
+  "#{length(config.mask_paths)} mask(s)"
+else
+  if config.mask_paths && length(config.mask_paths) > 0 && hd(config.mask_paths) do
+    Path.basename(hd(config.mask_paths))
+  else
+    "Auto-generate using SAM"
+  end
+end
+
+merge_groups_str = if is_list(config.merge_groups) and length(config.merge_groups) > 0 do
+  "#{length(config.merge_groups)} merge group set(s)"
+else
+  if config.merge_groups && length(config.merge_groups) > 0 do
+    inspect(config.merge_groups)
+  else
+    nil
+  end
+end
+
 IO.puts("""
 === OmniPart Generation ===
 Mode: #{mode}
-Image: #{config.image_path}
-Mask: #{if config.mask_path, do: config.mask_path, else: "Auto-generate using SAM"}
+Images: #{images_str}
+Masks: #{masks_str}
 Output Directory: #{config.output_dir}
-#{if config.auto_generate_mask || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if config.merge_groups, do: "Merge Groups: #{config.merge_groups}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\n", else: ""}GPU: #{config.gpu}
+#{if config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks) || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if merge_groups_str, do: "Merge Groups: #{merge_groups_str}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\n", else: ""}GPU: #{config.gpu}
 Seed: #{config.seed}
 """)
 
@@ -376,14 +461,27 @@ except ImportError as e:
 # Get configuration from JSON file
 """ <> ConfigFile.python_path_string(config_file_normalized) <> ~S"""
 
-image_path = config.get('image_path')
-mask_path = config.get('mask_path')
-auto_generate_mask = config.get('auto_generate_mask', False)
+# Support multiple images - read as lists
+image_paths = config.get('image_paths', [])
+mask_paths = config.get('mask_paths', [])
+auto_generate_masks = config.get('auto_generate_masks', [])
+merge_groups_list = config.get('merge_groups', [])
+
+# Backward compatibility: if old single image format, convert to list
+if not image_paths and config.get('image_path'):
+    image_paths = [config.get('image_path')]
+    mask_paths = [config.get('mask_path')] if config.get('mask_path') else []
+    auto_generate_masks = [config.get('auto_generate_mask', False)]
+    merge_groups_str = config.get('merge_groups')
+    if merge_groups_str:
+        merge_groups_list = [merge_groups_str]
+    else:
+        merge_groups_list = []
+
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
 output_dir = config.get('output_dir', 'output')
 size_threshold = config.get('size_threshold', 2000)
-merge_groups_str = config.get('merge_groups')
 num_inference_steps = config.get('num_inference_steps', 25)
 guidance_scale = config.get('guidance_scale', 7.5)
 simplify_ratio = config.get('simplify_ratio', 0.15)
@@ -392,29 +490,38 @@ seed = config.get('seed', 42)
 omnipart_dir = config.get('omnipart_dir')
 checkpoint_dir = config.get('checkpoint_dir')
 
-# Resolve paths to absolute
-image_path = str(Path(image_path).resolve())
+# Resolve all paths to absolute
+image_paths = [str(Path(p).resolve()) for p in image_paths]
+mask_paths = [str(Path(p).resolve()) if p else None for p in mask_paths]
 output_dir_base = Path(output_dir).resolve()
 omnipart_dir = str(Path(omnipart_dir).resolve())
 checkpoint_dir = str(Path(checkpoint_dir).resolve())
 
-# Verify input image exists
-if not Path(image_path).exists():
-    raise FileNotFoundError(f"Image file not found: {image_path}")
+# Verify all input images exist
+for image_path in image_paths:
+    if not Path(image_path).exists():
+        raise FileNotFoundError(f"Image file not found: {image_path}")
 
-# Handle mask path
-if mask_path:
-    mask_path = str(Path(mask_path).resolve())
-    if not Path(mask_path).exists():
-        logger.warning(f"Mask file not found: {mask_path}")
-        logger.info("Will auto-generate mask using SAM")
-        auto_generate_mask = True
-        mask_path = None
-    elif not mask_path.lower().endswith('.exr'):
-        logger.warning(f"Mask file is not .exr format: {mask_path}")
-        logger.info("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
-else:
-    auto_generate_mask = True
+# Handle mask paths - ensure lists match length
+while len(mask_paths) < len(image_paths):
+    mask_paths.append(None)
+while len(auto_generate_masks) < len(image_paths):
+    auto_generate_masks.append(True)
+while len(merge_groups_list) < len(image_paths):
+    merge_groups_list.append(None)
+
+for i, mask_path in enumerate(mask_paths):
+    if mask_path:
+        if not Path(mask_path).exists():
+            logger.warning(f"Mask file not found: {mask_path}")
+            logger.info("Will auto-generate mask using SAM")
+            auto_generate_masks[i] = True
+            mask_paths[i] = None
+        elif not mask_path.lower().endswith('.exr'):
+            logger.warning(f"Mask file is not .exr format: {mask_path}")
+            logger.info("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
+    else:
+        auto_generate_masks[i] = True
 
 # Verify OmniPart directory exists (optional - can use from Hugging Face)
 if not Path(omnipart_dir).exists():
@@ -422,7 +529,7 @@ if not Path(omnipart_dir).exists():
     print("Will attempt to use OmniPart from Python package or Hugging Face")
 
 print("\n=== Step 2: Prepare Input Data ===")
-print(f"Image: {image_path}")
+print(f"Images ({len(image_paths)}): {', '.join([Path(p).name for p in image_paths])}")
 
 # Create output directory with timestamped subdirectory (matching other generation scripts)
 output_dir_base.mkdir(parents=True, exist_ok=True)
@@ -431,9 +538,20 @@ tag = time.strftime("%Y%m%d_%H_%M_%S")
 output_dir = str(output_dir_base / tag)
 Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-# State file for iterative workflow
-img_name = Path(image_path).stem
-state_file = Path(output_dir) / f"{img_name}_segmentation_state.json"
+# Process each image separately for segmentation
+processed_images = []
+processed_masks = []
+processed_image_paths = []
+
+for img_idx, image_path in enumerate(image_paths):
+    print(f"\n--- Processing image {img_idx + 1}/{len(image_paths)}: {Path(image_path).name} ---")
+    mask_path = mask_paths[img_idx] if img_idx < len(mask_paths) else None
+    auto_generate_mask = auto_generate_masks[img_idx] if img_idx < len(auto_generate_masks) else True
+    merge_groups_str = merge_groups_list[img_idx] if img_idx < len(merge_groups_list) and merge_groups_list[img_idx] else None
+    
+    # State file for iterative workflow (per image)
+    img_name = Path(image_path).stem
+    state_file = Path(output_dir) / f"{img_name}_segmentation_state.json"
 
 # Handle apply_merge mode - load existing state
 if apply_merge:
@@ -875,11 +993,15 @@ if auto_generate_mask:
     processed_image.save(processed_image_path)
     print(f"[OK] Processed image saved to: {processed_image_path}")
     
-    # Update image path to use processed image (with alpha channel)
-    image_path = processed_image_path
-    
-    # Unload SAM models and clear GPU cache after segmentation stage
-    print("\n[INFO] Unloading SAM models and clearing GPU cache...")
+    # Collect processed image and mask for this image
+    processed_images.append(Image.open(processed_image_path))
+    processed_masks.append(mask_path)
+    processed_image_paths.append(processed_image_path)
+    print(f"[OK] Image {img_idx + 1} processed: mask={mask_path}, processed_image={processed_image_path}")
+
+# After processing all images, unload SAM models
+if len(processed_images) > 0:
+    print("\n[INFO] Unloading SAM models and clearing GPU cache after segmentation stage...")
     if 'sam_model' in locals():
         del sam_model
     if 'sam_mask_generator' in locals():
@@ -889,22 +1011,32 @@ if auto_generate_mask:
         import gc
         gc.collect()
     print("[OK] Resources cleaned up after segmentation stage")
-    
-    # If segment-only mode, exit here
-    if segment_only:
-        print("\n=== Segmentation Complete ===")
-        print("Next steps:")
-        print("  1. Review the segmentation visualizations in the output directory")
+
+# If segment-only mode, exit here
+if segment_only:
+    print("\n=== Segmentation Complete ===")
+    print(f"Processed {len(processed_images)} image(s)")
+    print("Next steps:")
+    print("  1. Review the segmentation visualizations in the output directory")
         print("  2. Run with --apply-merge and --merge-groups to refine segmentation")
         print("     Example: elixir omnipart_generation.exs image.png --apply-merge --merge-groups '0,1;3,4'")
         print("  3. Run without --segment-only to generate 3D model")
         import sys
         sys.exit(0)
-else:
-    print(f"Mask: {mask_path}")
+
+# Use first image's mask for 3D generation (or combine masks if needed)
+mask_path = processed_masks[0] if processed_masks else None
+image_path = processed_image_paths[0] if processed_image_paths else None
+
+if not image_path:
+    raise ValueError("No processed images available for 3D generation")
+
+print(f"\nUsing {len(processed_image_paths)} image(s) for 3D generation")
+if mask_path:
+    print(f"Using mask from first image: {mask_path}")
 
 print("\n=== Step 3: Run OmniPart Inference ===")
-print(f"Generating 3D shape with part-aware control...")
+print(f"Generating 3D shape with part-aware control from {len(processed_image_paths)} view(s)...")
 
 # Set up environment for SPMD (Single Program Multiple Data)
 env = os.environ.copy()
@@ -1070,16 +1202,23 @@ try:
     bbox_gen_model.to(device)
     bbox_gen_model.eval().half()
     
-    # Load image and mask
-    img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(image_path, mask_path)
+    # Load all images for multiview generation
+    print(f"[INFO] Loading {len(processed_image_paths)} image(s) for multiview 3D generation...")
+    
+    # Load mask from first image (for part layout)
+    img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(processed_image_paths[0], mask_path)
     img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
+    
+    # Load all images as PIL Images for multiview
+    images_list = [Image.open(img_path) for img_path in processed_image_paths]
     
     # Generate voxel coordinates with performance optimizations
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
-    # Generate voxel coordinates (reduced verbosity)
-    voxel_coords = part_synthesis_pipeline.get_coords(img_black_bg, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
+    # Generate voxel coordinates from all images (multiview)
+    print(f"[INFO] Generating voxel coordinates from {len(images_list)} view(s)...")
+    voxel_coords = part_synthesis_pipeline.get_coords(images_list, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
@@ -1130,11 +1269,9 @@ try:
     import gc
     gc.collect()
     
-    if isinstance(img_black_bg, torch.Tensor):
-        img_batched = img_black_bg.unsqueeze(0)
-    else:
-        img_batched = [img_black_bg]
-    cond = part_synthesis_pipeline.get_cond(img_batched)
+    # Use all images for multiview conditioning
+    print(f"[INFO] Using {len(images_list)} image(s) for SLAT generation...")
+    cond = part_synthesis_pipeline.get_cond(images_list)
     
     # Clear memory before SLAT sampling
     torch.cuda.empty_cache()
