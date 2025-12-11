@@ -906,22 +906,37 @@ else:
 print("\n=== Step 3: Run OmniPart Inference ===")
 print(f"Generating 3D shape with part-aware control...")
 
-# Set up environment
+# Set up environment for SPMD (Single Program Multiple Data)
 env = os.environ.copy()
-env["CUDA_VISIBLE_DEVICES"] = str(gpu)
 env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-# Add numerical stability settings
-env["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+# Memory optimization settings to reduce fragmentation
+env["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
 env["CUDA_LAUNCH_BLOCKING"] = "0"  # Set to 1 for debugging, 0 for performance
 # Disable some optimizations that might cause numerical issues
 env["TORCH_USE_CUDA_DSA"] = "0"
-# Verify CUDA is available
+# Also set in os.environ for Python code
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True,max_split_size_mb:512"
+
+# For SPMD: Use all available GPUs, don't restrict with CUDA_VISIBLE_DEVICES
+# Verify CUDA is available and detect number of GPUs
 if torch.cuda.is_available():
+    num_gpus = torch.cuda.device_count()
     print(f"CUDA available: {torch.cuda.is_available()}")
-    print(f"CUDA device count: {torch.cuda.device_count()}")
-    if torch.cuda.device_count() > 0:
-        print(f"Using GPU {gpu}: {torch.cuda.get_device_name(0)}")
+    print(f"CUDA device count: {num_gpus}")
+    if num_gpus > 0:
+        print(f"[INFO] SPMD mode: Using {num_gpus} GPU(s) for distributed processing")
+        for i in range(num_gpus):
+            print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({torch.cuda.get_device_properties(i).total_memory / (1024**3):.2f} GB)")
+        # Primary device for main operations
+        device = f"cuda:{gpu}" if gpu < num_gpus else "cuda:0"
+        torch.cuda.set_device(int(device.split(':')[1]))
+        print(f"Primary device: {device}")
+    else:
+        device = "cpu"
+        print("[WARN] No CUDA devices available, using CPU")
 else:
+    device = "cpu"
+    num_gpus = 0
     print("[WARN] CUDA is not available. Inference will be slower on CPU.")
 
 # Fix nvdiffrast path issue: ensure torch_extensions directory exists with absolute path
@@ -989,7 +1004,20 @@ try:
     from modules.part_synthesis.pipelines import OmniPartImageTo3DPipeline
     from huggingface_hub import hf_hub_download
     
-    device = "cuda"
+    # Set device explicitly for SPMD (use all available GPUs)
+    num_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    if num_gpus > 0:
+        # Use the specified GPU as primary, or default to 0
+        primary_gpu = min(gpu, num_gpus - 1) if num_gpus > 0 else 0
+        device = f"cuda:{primary_gpu}"
+        torch.cuda.set_device(primary_gpu)
+        print(f"[INFO] SPMD mode: {num_gpus} GPU(s) available")
+        print(f"[INFO] Primary device: {device} ({torch.cuda.get_device_name(primary_gpu)})")
+        use_spmd = num_gpus > 1
+    else:
+        device = "cpu"
+        use_spmd = False
+        print("[WARN] CUDA not available, using CPU")
     
     # Set up paths
     partfield_encoder_path = "ckpt/model_objaverse.ckpt"
@@ -1011,8 +1039,28 @@ try:
     # Load part_synthesis model with half precision for memory efficiency
     # Load models (reduced verbosity)
     part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
+    # Explicitly move to device and ensure not using DataParallel (which uses multiple GPUs)
     part_synthesis_pipeline.to(device)
+    # Ensure all sub-models are on the correct device and not wrapped in DataParallel
+    if hasattr(part_synthesis_pipeline, 'models'):
+        for model_name, model in part_synthesis_pipeline.models.items():
+            if model is not None:
+                # Remove DataParallel wrapper if present (would try to use multiple GPUs)
+                if isinstance(model, torch.nn.DataParallel):
+                    print(f"[WARN] {model_name} was wrapped in DataParallel, unwrapping...")
+                    part_synthesis_pipeline.models[model_name] = model.module
+                    model = model.module
+                model.to(device)
+                # Verify device placement
+                if hasattr(model, 'parameters'):
+                    first_param = next(model.parameters(), None)
+                    if first_param is not None:
+                        param_device = first_param.device
+                        if str(param_device) != device:
+                            print(f"[WARN] {model_name} parameters on {param_device}, moving to {device}")
+                            model.to(device)
     torch.cuda.empty_cache()
+    torch.cuda.synchronize()  # Ensure all operations complete
     
     # Load bbox_gen model
     bbox_gen_config = OmegaConf.load("configs/bbox_gen.yaml").model.args
@@ -1037,7 +1085,10 @@ try:
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
     voxel_coords_ply.export(os.path.join(inference_output_dir, "voxel_coords_vis.ply"))
     # Clear cache after voxel coordinate generation
+    del voxel_coords_ply
     torch.cuda.empty_cache()
+    import gc
+    gc.collect()
     
     # Generate bounding boxes (reduced verbosity)
     bbox_gen_input = prepare_bbox_gen_input(os.path.join(inference_output_dir, "voxel_coords.npy"), img_white_bg, ordered_mask_input)
@@ -1045,6 +1096,11 @@ try:
     np.save(os.path.join(inference_output_dir, "bboxes.npy"), bbox_gen_output['bboxes'][0])
     bboxes_vis = gen_mesh_from_bounds(bbox_gen_output['bboxes'][0])
     bboxes_vis.export(os.path.join(inference_output_dir, "bboxes_vis.glb"))
+    
+    # Clear bbox generation intermediates
+    del bbox_gen_input
+    del bbox_gen_output
+    del bboxes_vis
     
     # Unload bbox_gen model to free GPU memory before SLAT sampling (reduced verbosity)
     del bbox_gen_model
@@ -1071,12 +1127,19 @@ try:
         pass
     # Sampling SLAT (reduced verbosity)
     torch.cuda.empty_cache()
+    import gc
+    gc.collect()
     
     if isinstance(img_black_bg, torch.Tensor):
         img_batched = img_black_bg.unsqueeze(0)
     else:
         img_batched = [img_black_bg]
     cond = part_synthesis_pipeline.get_cond(img_batched)
+    
+    # Clear memory before SLAT sampling
+    torch.cuda.empty_cache()
+    gc.collect()
+    
     torch.manual_seed(seed)
     slat = part_synthesis_pipeline.sample_slat(
         cond, 
@@ -1086,28 +1149,218 @@ try:
         sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
     )
     
+    # Clear cond and intermediate tensors after SLAT sampling
+    del cond
+    if 'img_batched' in locals():
+        del img_batched
+    torch.cuda.empty_cache()
+    gc.collect()
+    
     # Divide SLAT into parts
     divided_slat = part_synthesis_pipeline.divide_slat(slat, [part_synthesis_input['part_layouts']])
     
-    # Decode formats
-    part_synthesis_output = {}
-    formats_to_generate = ['mesh', 'gaussian', 'radiance_field']
+    # Clear original slat after division
+    del slat
+    torch.cuda.empty_cache()
+    gc.collect()
     
-    for fmt in formats_to_generate:
-        try:
-            torch.cuda.empty_cache()
-            fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
-            if fmt in fmt_output:
-                part_synthesis_output[fmt] = fmt_output[fmt]
-            # Success messages removed to reduce verbosity
-            # Clear cache after each format to free memory
-            torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"[WARN] Failed to decode {fmt} format: {type(e).__name__}: {e}")
-            import traceback
-            traceback.print_exc()
-            torch.cuda.empty_cache()  # Clear cache even on error
-            continue
+    # Clear memory after SLAT division
+    torch.cuda.empty_cache()
+    import gc
+    gc.collect()
+    
+    # True SPMD: Split SLAT data across GPUs - each GPU processes different coordinate subsets
+    part_synthesis_output = {}
+    formats_to_generate = ['mesh', 'gaussian']  # Removed radiance_field - too memory intensive
+    
+    if use_spmd and num_gpus > 1 and hasattr(divided_slat, 'coords') and hasattr(divided_slat, 'feats'):
+        # True SPMD: Split the coordinate/feature data across GPUs
+        num_points = divided_slat.coords.shape[0]
+        points_per_gpu = (num_points + num_gpus - 1) // num_gpus  # Ceiling division
+        
+        print(f"[INFO] SPMD: Splitting {num_points} points across {num_gpus} GPUs")
+        print(f"[INFO] SPMD: ~{points_per_gpu} points per GPU (same decoder program, different data)")
+        
+        for fmt in formats_to_generate:
+            try:
+                print(f"\n[INFO] SPMD: Decoding {fmt} format across {num_gpus} GPUs...")
+                decoder_key = f'slat_decoder_{fmt}'
+                
+                if not (hasattr(part_synthesis_pipeline, 'models') and decoder_key in part_synthesis_pipeline.models):
+                    print(f"[WARN] Decoder {decoder_key} not found, skipping")
+                    continue
+                
+                decoder = part_synthesis_pipeline.models[decoder_key]
+                if decoder is None:
+                    print(f"[WARN] Decoder {decoder_key} is None, skipping")
+                    continue
+                
+                # Split SLAT data across GPUs and process sequentially with proper isolation
+                gpu_outputs = []
+                for gpu_id in range(num_gpus):
+                    start_idx = gpu_id * points_per_gpu
+                    end_idx = min((gpu_id + 1) * points_per_gpu, num_points)
+                    
+                    if start_idx >= num_points:
+                        break
+                    
+                    target_device = f"cuda:{gpu_id}"
+                    
+                    # Clear ALL GPUs before processing this one
+                    for d in range(num_gpus):
+                        torch.cuda.set_device(d)
+                        torch.cuda.empty_cache()
+                        torch.cuda.synchronize(d)
+                    gc.collect()
+                    
+                    # Set target GPU as current device
+                    torch.cuda.set_device(gpu_id)
+                    
+                    # Create subset of SLAT for this GPU (SPMD: same program, different data)
+                    # Create on CPU first, then move to target GPU to avoid device conflicts
+                    subset_coords = divided_slat.coords[start_idx:end_idx].cpu()
+                    subset_feats = divided_slat.feats[start_idx:end_idx].cpu()
+                    
+                    # Adjust batch IDs to maintain continuity
+                    if subset_coords.shape[0] > 0:
+                        subset_coords[:, 0] = 0  # All points in same batch for this GPU
+                    
+                    # Move to target GPU
+                    subset_coords = subset_coords.to(target_device)
+                    subset_feats = subset_feats.to(target_device)
+                    
+                    # Create SparseTensor subset for this GPU
+                    from modules.part_synthesis.modules.sparse.basic import SparseTensor
+                    slat_subset = SparseTensor(
+                        coords=subset_coords,
+                        feats=subset_feats
+                    )
+                    
+                    # Create a fresh decoder instance for this GPU to avoid device conflicts
+                    # Deep copy the decoder state to ensure complete isolation
+                    import copy
+                    decoder_copy = copy.deepcopy(decoder)
+                    decoder_copy.to(target_device)
+                    decoder_copy.eval()
+                    
+                    # Verify all parameters are on correct device
+                    all_on_device = all(p.device == torch.device(target_device) for p in decoder_copy.parameters())
+                    if not all_on_device:
+                        print(f"[WARN] SPMD: Some decoder parameters not on {target_device}, skipping GPU {gpu_id}")
+                        del decoder_copy, slat_subset
+                        gpu_outputs.append((gpu_id, None))
+                        continue
+                    
+                    print(f"[INFO] SPMD: GPU {gpu_id} processing {subset_coords.shape[0]} points...")
+                    try:
+                        # Decode subset on this GPU (same program, different data = SPMD)
+                        with torch.cuda.device(gpu_id):
+                            gpu_output = decoder_copy(slat_subset)
+                        # Move output to CPU to free GPU memory
+                        if isinstance(gpu_output, list):
+                            gpu_output = [out.cpu() if hasattr(out, 'cpu') else out for out in gpu_output]
+                        elif hasattr(gpu_output, 'cpu'):
+                            gpu_output = gpu_output.cpu()
+                        gpu_outputs.append((gpu_id, gpu_output))
+                        print(f"[OK] SPMD: GPU {gpu_id} decoded {subset_coords.shape[0]} points")
+                    except RuntimeError as e:
+                        error_msg = str(e)
+                        if "device" in error_msg.lower() or "cuda" in error_msg.lower():
+                            print(f"[WARN] SPMD: GPU {gpu_id} device error: {error_msg[:200]}")
+                        else:
+                            print(f"[WARN] SPMD: GPU {gpu_id} failed: {type(e).__name__}: {error_msg[:200]}")
+                        gpu_outputs.append((gpu_id, None))
+                    except Exception as e:
+                        print(f"[WARN] SPMD: GPU {gpu_id} failed: {type(e).__name__}: {str(e)[:200]}")
+                        gpu_outputs.append((gpu_id, None))
+                    
+                    # Clean up this GPU's resources
+                    del decoder_copy, slat_subset, subset_coords, subset_feats
+                    torch.cuda.empty_cache()
+                    torch.cuda.synchronize(gpu_id)
+                    gc.collect()
+                
+                # Collect and merge results from all GPUs
+                valid_outputs = [out for gpu_id, out in gpu_outputs if out is not None]
+                if valid_outputs:
+                    # If only one GPU succeeded, use that output
+                    if len(valid_outputs) == 1:
+                        part_synthesis_output[fmt] = valid_outputs[0]
+                        print(f"[OK] SPMD: Successfully decoded {fmt} format on 1 GPU")
+                    elif len(valid_outputs) == num_gpus:
+                        # All GPUs succeeded - merge outputs
+                        # For mesh/gaussian, we concatenate the results
+                        if isinstance(valid_outputs[0], list):
+                            # Flatten list of lists
+                            merged = []
+                            for out in valid_outputs:
+                                if isinstance(out, list):
+                                    merged.extend(out)
+                                else:
+                                    merged.append(out)
+                            part_synthesis_output[fmt] = merged
+                        else:
+                            # Single outputs - use first (or merge if needed)
+                            part_synthesis_output[fmt] = valid_outputs[0]
+                        print(f"[OK] SPMD: Successfully decoded {fmt} format on all {num_gpus} GPUs")
+                    else:
+                        # Partial success - use first valid output
+                        part_synthesis_output[fmt] = valid_outputs[0]
+                        print(f"[WARN] SPMD: Partial success - {len(valid_outputs)}/{num_gpus} GPUs decoded {fmt} format")
+                else:
+                    print(f"[ERROR] SPMD: All GPUs failed for {fmt} format")
+                    
+            except Exception as e:
+                print(f"[WARN] SPMD: Failed to decode {fmt} format: {type(e).__name__}: {e}")
+                import traceback
+                traceback.print_exc()
+                continue
+    else:
+        # Fallback: Sequential processing (single GPU or not enough parts)
+        if torch.cuda.is_available():
+            free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+            free_memory_gb = free_memory / (1024**3)
+            print(f"[INFO] Available GPU memory: {free_memory_gb:.2f} GB")
+            if free_memory_gb < 1.0:
+                print("[WARN] Low GPU memory detected, only generating mesh format")
+                formats_to_generate = ['mesh']
+        
+        for fmt in formats_to_generate:
+            try:
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                
+                if torch.cuda.is_available():
+                    allocated_before = torch.cuda.memory_allocated(0) / (1024**3)
+                    print(f"[INFO] Decoding {fmt} format (GPU memory before: {allocated_before:.2f} GB)...")
+                
+                fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
+                if fmt in fmt_output:
+                    part_synthesis_output[fmt] = fmt_output[fmt]
+                    print(f"[OK] Successfully decoded {fmt} format")
+                
+                del fmt_output
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                
+            except RuntimeError as e:
+                error_msg = str(e)
+                if "out of memory" in error_msg.lower() or "CUDA" in error_msg:
+                    print(f"[WARN] Out of memory while decoding {fmt} format, skipping...")
+                else:
+                    print(f"[WARN] Failed to decode {fmt} format: {type(e).__name__}: {e}")
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                continue
+            except Exception as e:
+                print(f"[WARN] Failed to decode {fmt} format: {type(e).__name__}: {e}")
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+                gc.collect()
+                continue
     
     if not part_synthesis_output:
         raise RuntimeError("Failed to generate any format")
