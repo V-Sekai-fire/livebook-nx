@@ -1076,7 +1076,7 @@ def bake_texture(
 
 
 def to_glb(
-    app_rep: Union[Strivec, Gaussian],
+    app_rep: Union[Strivec, Gaussian, None],
     mesh: MeshExtractResult,
     simplify: float = 0.95,
     fill_holes: bool = True,
@@ -1152,6 +1152,13 @@ def to_glb(
 
     texture = None
     uvs = None
+    if textured:
+        # Check if app_rep is available (needed for texture baking)
+        if app_rep is None:
+            if verbose:
+                print("[WARN] app_rep (gaussian/strivec) is None. Cannot bake texture. Skipping texture baking.")
+            textured = False
+        
     if textured:
         # Check if texture baking is possible
         # Determine backend availability
