@@ -511,9 +511,7 @@ class OmniPartImageTo3DPipeline(Pipeline):
 
                 # Calculate filtering statistics
                 total_points = coords.shape[0]
-                # Increased threshold from 0.3 to 0.45 to discard approximately twice as many points
-                # (roughly doubles discard rate from ~13.6% to ~27%)
-                to_keep = sigmoid_val >= 0.45
+                to_keep = sigmoid_val >= 0.3
                 kept_points = to_keep.sum().item()
                 discarded_points = total_points - kept_points
                 discard_percentage = (discarded_points / total_points) * 100 if total_points > 0 else 0
