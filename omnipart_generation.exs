@@ -23,7 +23,7 @@
 #   --merge-groups <string>       Merge groups for mask (e.g., "0,1;3,4" to merge segments 0&1 and 3&4)
 #   --num-inference-steps <int>   Number of inference steps (default: 25)
 #   --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
-#   --simplify-ratio <float>      Mesh simplification ratio (default: 0.3)
+#   --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
 #   --gpu <int>                   GPU ID to use (default: 0)
 #   --seed <int>                  Random seed (default: 42)
 
