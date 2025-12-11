@@ -93,10 +93,12 @@ def _fill_holes(
     pitchs = []
     for i in range(num_views):
         y, p = sphere_hammersley_sequence(i, num_views)  # Generate uniformly distributed points on sphere
-        yaws.append(y)
-        pitchs.append(p)
-    yaws = torch.tensor(yaws, dtype=torch.float32).cuda()
-    pitchs = torch.tensor(pitchs, dtype=torch.float32).cuda()
+        # Explicitly convert to float32 to avoid float64 propagation
+        yaws.append(float(y))
+        pitchs.append(float(p))
+    # Ensure float32 (not float64) - convert Python floats explicitly
+    yaws = torch.tensor(yaws, dtype=torch.float32, device=verts.device)
+    pitchs = torch.tensor(pitchs, dtype=torch.float32, device=verts.device)
     radius = torch.tensor(2.0, dtype=torch.float32, device=verts.device)  # Camera distance from origin
     fov = torch.deg2rad(torch.tensor(40, dtype=torch.float32, device=verts.device))  # Camera field of view
     projection = utils3d.torch.perspective_from_fov_xy(fov, fov, 1, 3)  # Create projection matrix
