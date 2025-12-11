@@ -1375,7 +1375,7 @@ try:
         simplify_ratio=simplify_ratio, 
         save_video=False,
         save_glb=True,
-        textured=True,
+        textured=False,  # Disabled texture baking to prevent OOM errors
     )
     
     # Merge parts
