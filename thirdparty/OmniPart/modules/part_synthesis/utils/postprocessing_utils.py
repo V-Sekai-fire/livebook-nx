@@ -185,8 +185,12 @@ def _fill_holes(
     ### Construct main graph
     g = igraph.Graph()
     g.add_vertices(faces.shape[0])
-    g.add_edges(dual_edges.cpu().numpy())
-    g.es['weight'] = dual_edges_weights.cpu().numpy()
+    # Ensure int32 for edges (igraph expects int)
+    dual_edges_np = dual_edges.cpu().numpy().astype(np.int32)
+    g.add_edges(dual_edges_np)
+    # Ensure float32 for weights (not float64)
+    dual_edges_weights_np = dual_edges_weights.cpu().numpy().astype(np.float32)
+    g.es['weight'] = dual_edges_weights_np
     
     ### Add source and target nodes
     g.add_vertex('s')
@@ -203,7 +207,9 @@ def _fill_holes(
         raise RuntimeError(f'Hole filling failed: Missing inner faces ({inner_face_indices.shape[0]}) or outer faces ({outer_face_indices.shape[0]}). Cannot perform mincut.')
                 
     ### Solve mincut to separate inner from outer faces
-    cut = g.mincut('s', 't', (np.array(g.es['weight']) * 1000).tolist())
+    # Ensure float32 for weight calculation (not float64)
+    weights = np.array(g.es['weight'], dtype=np.float32) * 1000.0
+    cut = g.mincut('s', 't', weights.tolist())
     remove_face_indices = torch.tensor([v for v in cut.partition[0] if v < faces.shape[0]], dtype=torch.long, device=faces.device)
     
     # Safety check: don't remove all faces - fail explicitly
@@ -257,8 +263,9 @@ def _fill_holes(
         
     # Generate debug visualizations if requested
     if debug:
-        face_v = verts[faces].mean(dim=1).cpu().numpy()
-        vis_dual_edges = dual_edges.cpu().numpy()
+        # Ensure float32 for debug visualizations (not float64)
+        face_v = verts[faces].mean(dim=1).cpu().numpy().astype(np.float32)
+        vis_dual_edges = dual_edges.cpu().numpy().astype(np.int32)
         vis_colors = np.zeros((faces.shape[0], 3), dtype=np.uint8)
         vis_colors[inner_face_indices.cpu().numpy()] = [0, 0, 255]  # Blue for inner
         vis_colors[outer_face_indices.cpu().numpy()] = [0, 255, 0]  # Green for outer
@@ -267,8 +274,9 @@ def _fill_holes(
             vis_colors[remove_face_indices[torch.cat(valid_remove_cc)].cpu().numpy()] = [255, 0, 0]  # Red for valid removal
         utils3d.io.write_ply('dbg_dual.ply', face_v, edges=vis_dual_edges, vertex_colors=vis_colors)
         
-        vis_verts = verts.cpu().numpy()
-        vis_edges = edges[torch.cat(cutting_edges)].cpu().numpy()
+        # Ensure float32/int32 for debug visualizations (not float64)
+        vis_verts = verts.cpu().numpy().astype(np.float32)
+        vis_edges = edges[torch.cat(cutting_edges)].cpu().numpy().astype(np.int32)
         utils3d.io.write_ply('dbg_cut.ply', vis_verts, edges=vis_edges)
         
     # Remove the identified faces
