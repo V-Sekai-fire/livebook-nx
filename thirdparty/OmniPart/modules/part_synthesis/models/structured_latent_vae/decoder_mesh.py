@@ -189,8 +189,10 @@ class SLatMeshDecoder(SparseTransformerBase):
             list of mesh representation results, one per batch item
         """
         ret = []
+        # Use training=False for inference (faster, no gradient computation)
+        training_mode = getattr(self, 'training', False)
         for i in range(x.shape[0]):
-            mesh = self.mesh_extractor(x[i], training=self.training)
+            mesh = self.mesh_extractor(x[i], training=training_mode)
             ret.append(mesh)
         return ret
 

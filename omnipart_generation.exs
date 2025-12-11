@@ -255,7 +255,7 @@ defmodule ArgsParser do
     
     # Debug: Verify all images are parsed
     if length(image_paths) > 1 do
-      IO.puts("[DEBUG] Parsed #{length(image_paths)} images: #{inspect(Enum.map(image_paths, &Path.basename/1))}")
+      Logger.debug("Parsed #{length(image_paths)} images: #{inspect(Enum.map(image_paths, &Path.basename/1))}")
       OtelLogger.info("Parsed multiple images", [{"image.count", length(image_paths)}])
     end
 
@@ -283,6 +283,10 @@ defmodule ArgsParser do
     end
 
     if length(image_paths) == 0 do
+      OtelLogger.error("At least one image path is required", [
+        {"error.type", "validation"},
+        {"error.message", "No image paths provided"}
+      ])
       IO.puts("""
       Error: At least one image path is required.
       
@@ -305,6 +309,11 @@ defmodule ArgsParser do
 
     # Validate mask paths (must match number of images or be empty)
     if length(mask_paths) > 0 && length(mask_paths) != length(image_paths) do
+      OtelLogger.error("Number of mask paths must match number of image paths", [
+        {"error.type", "validation"},
+        {"mask.count", length(mask_paths)},
+        {"image.count", length(image_paths)}
+      ])
       IO.puts("""
       Error: Number of mask paths (#{length(mask_paths)}) must match number of image paths (#{length(image_paths)})
       """)
@@ -356,6 +365,11 @@ defmodule ArgsParser do
     
     # Validate merge groups count matches images (or is empty)
     if length(merge_groups_list) > 0 && length(merge_groups_list) != length(image_paths) do
+      OtelLogger.error("Number of merge groups must match number of image paths", [
+        {"error.type", "validation"},
+        {"merge_groups.count", length(merge_groups_list)},
+        {"image.count", length(image_paths)}
+      ])
       IO.puts("""
       Error: Number of merge groups (#{length(merge_groups_list)}) must match number of image paths (#{length(image_paths)})
       Use || to separate merge groups for each image, e.g., "0,1;3,4||2,3||1,2"
@@ -429,6 +443,21 @@ else
   end
 end
 
+# Log configuration using OpenTelemetry
+OtelLogger.info("OmniPart Generation starting", [
+  {"mode", mode},
+  {"image.count", length(config.image_paths)},
+  {"mask.count", length(Enum.filter(config.mask_paths, &(&1 != nil)))},
+  {"output.dir", config.output_dir},
+  {"size_threshold", if(config.segment_only || (config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks)), do: config.size_threshold, else: nil)},
+  {"inference_steps", if(config.segment_only, do: nil, else: config.num_inference_steps)},
+  {"guidance_scale", if(config.segment_only, do: nil, else: config.guidance_scale)},
+  {"simplify_ratio", if(config.segment_only, do: nil, else: config.simplify_ratio)},
+  {"gpu", config.gpu},
+  {"seed", config.seed}
+])
+
+# Also print user-friendly header
 IO.puts("""
 === OmniPart Generation ===
 Mode: #{mode}
@@ -450,15 +479,19 @@ config_with_paths = Map.merge(config, %{
 
 # Validate that image_paths is a list with all images
 if not is_list(config_with_paths.image_paths) or length(config_with_paths.image_paths) == 0 do
+  OtelLogger.error("image_paths must be a non-empty list", [
+    {"error.type", "validation"},
+    {"image_paths.value", inspect(config_with_paths.image_paths)}
+  ])
   IO.puts("Error: image_paths must be a non-empty list")
   IO.puts("  Got: #{inspect(config_with_paths.image_paths)}")
   System.halt(1)
 end
 
 # Debug: Log how many images are in config before serialization
-IO.puts("[DEBUG] Config contains #{length(config_with_paths.image_paths)} image(s) before serialization")
+Logger.debug("Config contains #{length(config_with_paths.image_paths)} image(s) before serialization")
 if length(config_with_paths.image_paths) > 1 do
-  IO.puts("[DEBUG] Image paths in config: #{inspect(Enum.map(config_with_paths.image_paths, &Path.basename/1))}")
+  Logger.debug("Image paths in config: #{inspect(Enum.map(config_with_paths.image_paths, &Path.basename/1))}")
   OtelLogger.info("Config contains multiple images", [{"image.count", length(config_with_paths.image_paths)}])
 end
 
@@ -472,7 +505,10 @@ case File.read(config_file) do
       {:ok, decoded} ->
         image_count = if is_list(decoded["image_paths"]), do: length(decoded["image_paths"]), else: 0
         if image_count != length(config_with_paths.image_paths) do
-          IO.puts("[WARN] Config file image count mismatch: expected #{length(config_with_paths.image_paths)}, got #{image_count}")
+          OtelLogger.warn("Config file image count mismatch", [
+            {"expected.count", length(config_with_paths.image_paths)},
+            {"actual.count", image_count}
+          ])
         end
       {:error, _} -> :ok
     end
@@ -521,6 +557,8 @@ import shutil
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
 # Setup Python logging with proper levels
+# Note: Python logs are separate from OpenTelemetry and will appear in stdout/stderr
+# Elixir-side logging uses OpenTelemetry via OtelLogger/Logger modules
 import logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1795,16 +1833,16 @@ end)
 
 # Export spans and metrics as JSON
 # Wrap in try-catch to ensure logs are displayed even if there's a crash
-# Also flush stdout to ensure output is visible
 try do
   IO.puts("")  # Ensure we're on a new line
-  :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush stdout
   SpanCollector.display_trace()
-  :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush again
 rescue
   e ->
+    OtelLogger.warn("Error displaying OpenTelemetry trace", [
+      {"error.type", "trace_export"},
+      {"error.message", inspect(e)}
+    ])
     IO.puts("\n[WARN] Error displaying OpenTelemetry trace: #{inspect(e)}")
     IO.puts("Continuing with normal exit...")
-    :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush
 end
 

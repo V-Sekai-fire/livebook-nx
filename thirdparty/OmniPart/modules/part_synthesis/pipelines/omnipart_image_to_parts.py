@@ -495,15 +495,13 @@ class OmniPartImageTo3DPipeline(Pipeline):
             
             # Gaussian decoder may need gradients, so use no_grad instead of inference_mode
             # Clone slat to convert from inference tensor to regular tensor if needed
-            if hasattr(slat, 'feats') and hasattr(slat, 'coords'):
-                # Clone to ensure we have a regular tensor (not inference tensor)
-                # This converts inference tensors to regular tensors
-                # Use shape and layout from original tensor, not batch_size keyword
-                slat_clone = sp.SparseTensor(
-                    coords=slat.coords.clone(),
+            # Use replace() method which properly handles spconv backend without parameter conflicts
+            if hasattr(slat, 'replace') and hasattr(slat, 'feats') and hasattr(slat, 'coords'):
+                # Clone feats and coords to convert from inference tensors to regular tensors
+                # Use replace() which preserves the internal data structure correctly
+                slat_clone = slat.replace(
                     feats=slat.feats.clone(),
-                    shape=getattr(slat, 'shape', None),
-                    layout=getattr(slat, 'layout', None)
+                    coords=slat.coords.clone()
                 )
             else:
                 slat_clone = slat
