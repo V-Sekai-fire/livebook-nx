@@ -607,8 +607,15 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        # Set to 500 iterations for balanced quality and performance
-        total_steps = 500
+        # Increased to 1500 iterations for higher quality optimization (texture size reduced to 512 for efficiency)
+        total_steps = 1500
+        # Early stopping parameters
+        early_stop_loss_threshold = 0.002  # Stop if loss drops below this (good quality)
+        early_stop_patience = 50  # Stop if loss doesn't improve for this many iterations
+        min_iterations = 100  # Minimum iterations before early stopping is allowed
+        best_loss = float('inf')
+        no_improvement_count = 0
+        
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
             if verbose and len(_uv) > 0:
@@ -638,12 +645,34 @@ def bake_texture(
                     continue
                 if lambda_tv > 0:
                     loss += lambda_tv * tv_loss(texture)
+                loss_value = loss.item()
                 loss.backward()
                 optimizer.step()
                 # Learning rate annealing
                 optimizer.param_groups[0]['lr'] = cosine_anealing(optimizer, step, total_steps, 1e-2, 1e-5)
-                pbar.set_postfix({'loss': loss.item()})
+                pbar.set_postfix({'loss': loss_value})
                 pbar.update()
+                
+                # Early stopping logic
+                if step >= min_iterations:
+                    # Check for improvement
+                    if loss_value < best_loss:
+                        best_loss = loss_value
+                        no_improvement_count = 0
+                    else:
+                        no_improvement_count += 1
+                    
+                    # Early stop if loss is very low (converged)
+                    if loss_value < early_stop_loss_threshold:
+                        if verbose:
+                            print(f"\n[INFO] Early stopping: loss {loss_value:.6f} below threshold {early_stop_loss_threshold} at iteration {step+1}")
+                        break
+                    
+                    # Early stop if no improvement for patience iterations
+                    if no_improvement_count >= early_stop_patience:
+                        if verbose:
+                            print(f"\n[INFO] Early stopping: no improvement for {early_stop_patience} iterations (best loss: {best_loss:.6f}) at iteration {step+1}")
+                        break
                 
                 # Clear memory periodically to prevent OOM
                 if (step + 1) % 50 == 0:
