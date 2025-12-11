@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "cmake>=3.10"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meshoptimizer"
+version = "1.0.0"
+description = "Python bindings for meshoptimizer - mesh optimization library with screen-space error metrics"
+readme = "README_BUILD.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Arseny Kapoulkine", email = "arseny.kapoulkine@gmail.com"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    "numpy>=1.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=6.0",
+    "pytest-cov",
+]
+
+[tool.setuptools]
+py-modules = ["meshoptimizer"]
+
+[tool.setuptools.package-data]
+"*" = ["*.so", "*.dylib", "*.dll", "*.h"]
+
