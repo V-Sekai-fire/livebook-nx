@@ -347,7 +347,6 @@ try do
 import json
 import sys
 import os
-import subprocess
 from pathlib import Path
 import shutil
 
@@ -934,101 +933,188 @@ if Path(omnipart_dir).exists():
         print(f"[INFO] OmniPart will use: {ckpt_dir}")
         print("[INFO] Model weights will be downloaded automatically if needed")
 
-# Build inference command
-# OmniPart inference script: python -m scripts.inference_omnipart
-inference_script = "scripts.inference_omnipart"
+# Set up OmniPart path and run inference directly (no subprocess)
 if Path(omnipart_dir).exists():
     # Use local OmniPart installation
     sys.path.insert(0, str(omnipart_dir))
-    inference_cmd = [
-        sys.executable,
-        "-m", inference_script,
-        "--image_input", image_path,
-        "--mask_input", mask_path,
-        "--output_root", output_dir,
-        "--seed", str(seed),
-        "--num_inference_steps", str(num_inference_steps),
-        "--guidance_scale", str(guidance_scale),
-        "--simplify_ratio", str(simplify_ratio),
-    ]
-    cwd = omnipart_dir
+    print(f"[INFO] Using OmniPart from: {omnipart_dir}")
 else:
     # Try to use OmniPart as installed package
     try:
         import omnipart
         omnipart_path = Path(omnipart.__file__).parent.parent
-        inference_cmd = [
-            sys.executable,
-            "-m", inference_script,
-            "--image_input", image_path,
-            "--mask_input", mask_path,
-            "--output_root", output_dir,
-            "--seed", str(seed),
-            "--num_inference_steps", str(num_inference_steps),
-            "--guidance_scale", str(guidance_scale),
-            "--simplify_ratio", str(simplify_ratio),
-        ]
-        cwd = str(omnipart_path)
+        sys.path.insert(0, str(omnipart_path))
+        print(f"[INFO] Using OmniPart from installed package: {omnipart_path}")
     except ImportError:
-        # Fallback: try to clone and use OmniPart
-        print("[INFO] OmniPart not found locally. Attempting to use from GitHub...")
-        temp_omnipart = Path(output_dir) / "omnipart_temp"
-        if not temp_omnipart.exists():
-            print("Cloning OmniPart repository...")
-            subprocess.run(
-                ["git", "clone", "https://github.com/HKU-MMLab/OmniPart.git", str(temp_omnipart)],
-                check=True
-            )
-        inference_cmd = [
-            sys.executable,
-            "-m", inference_script,
-            "--image_input", image_path,
-            "--mask_input", mask_path,
-            "--output_root", output_dir,
-            "--seed", str(seed),
-            "--num_inference_steps", str(num_inference_steps),
-            "--guidance_scale", str(guidance_scale),
-            "--simplify_ratio", str(simplify_ratio),
-        ]
-        cwd = str(temp_omnipart)
-        sys.path.insert(0, str(temp_omnipart))
+        raise ImportError("OmniPart not found. Please ensure thirdparty/OmniPart exists or OmniPart is installed.")
 
-print(f"Command: {' '.join(inference_cmd)}")
-print(f"Working directory: {cwd}")
-
-# Run OmniPart inference
+# Change to OmniPart directory for config loading
+original_cwd = os.getcwd()
 try:
-    result = subprocess.run(
-        inference_cmd,
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True
+    if Path(omnipart_dir).exists():
+        os.chdir(omnipart_dir)
+    else:
+        import omnipart
+        omnipart_path = Path(omnipart.__file__).parent.parent
+        os.chdir(str(omnipart_path))
+    
+    # Run OmniPart inference directly
+    import numpy as np
+    from PIL import Image
+    from omegaconf import OmegaConf
+    
+    from modules.bbox_gen.models.autogressive_bbox_gen import BboxGen
+    from modules.part_synthesis.process_utils import save_parts_outputs
+    from modules.inference_utils import load_img_mask, prepare_bbox_gen_input, prepare_part_synthesis_input, gen_mesh_from_bounds, vis_voxel_coords, merge_parts
+    from modules.part_synthesis.pipelines import OmniPartImageTo3DPipeline
+    from huggingface_hub import hf_hub_download
+    
+    device = "cuda"
+    
+    # Set up paths
+    partfield_encoder_path = "ckpt/model_objaverse.ckpt"
+    bbox_gen_ckpt = "ckpt/bbox_gen.ckpt"
+    part_synthesis_ckpt = "omnipart/OmniPart"
+    
+    # Download checkpoints if needed
+    if not os.path.exists(partfield_encoder_path):
+        partfield_encoder_path = hf_hub_download(repo_id="omnipart/OmniPart_modules", filename="partfield_encoder.ckpt", local_dir="ckpt")
+    if not os.path.exists(bbox_gen_ckpt):
+        bbox_gen_ckpt = hf_hub_download(repo_id="omnipart/OmniPart_modules", filename="bbox_gen.ckpt", local_dir="ckpt")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    inference_output_dir = os.path.join(output_dir, Path(image_path).stem)
+    os.makedirs(inference_output_dir, exist_ok=True)
+    
+    torch.manual_seed(seed)
+    
+    # Load part_synthesis model
+    print("[INFO] Loading PartSynthesis model...")
+    part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt)
+    part_synthesis_pipeline.to(device)
+    print("[INFO] PartSynthesis model loaded")
+    
+    # Load bbox_gen model
+    print("[INFO] Loading BboxGen model...")
+    bbox_gen_config = OmegaConf.load("configs/bbox_gen.yaml").model.args
+    bbox_gen_config.partfield_encoder_path = partfield_encoder_path
+    bbox_gen_model = BboxGen(bbox_gen_config)
+    bbox_gen_model.load_state_dict(torch.load(bbox_gen_ckpt), strict=False)
+    bbox_gen_model.to(device)
+    bbox_gen_model.eval().half()
+    print("[INFO] BboxGen model loaded")
+    
+    # Load image and mask
+    img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(image_path, mask_path)
+    img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
+    
+    # Generate voxel coordinates
+    print("[INFO] Generating voxel coordinates...")
+    voxel_coords = part_synthesis_pipeline.get_coords(img_black_bg, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
+    voxel_coords = voxel_coords.cpu().numpy()
+    np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
+    voxel_coords_ply = vis_voxel_coords(voxel_coords)
+    voxel_coords_ply.export(os.path.join(inference_output_dir, "voxel_coords_vis.ply"))
+    print("[INFO] Voxel coordinates saved")
+    
+    # Generate bounding boxes
+    print("[INFO] Generating bounding boxes...")
+    bbox_gen_input = prepare_bbox_gen_input(os.path.join(inference_output_dir, "voxel_coords.npy"), img_white_bg, ordered_mask_input)
+    bbox_gen_output = bbox_gen_model.generate(bbox_gen_input)
+    np.save(os.path.join(inference_output_dir, "bboxes.npy"), bbox_gen_output['bboxes'][0])
+    bboxes_vis = gen_mesh_from_bounds(bbox_gen_output['bboxes'][0])
+    bboxes_vis.export(os.path.join(inference_output_dir, "bboxes_vis.glb"))
+    print("[INFO] BboxGen output saved")
+    
+    # Prepare part synthesis input
+    part_synthesis_input = prepare_part_synthesis_input(os.path.join(inference_output_dir, "voxel_coords.npy"), os.path.join(inference_output_dir, "bboxes.npy"), ordered_mask_input)
+    
+    # Validate inputs
+    print(f"[INFO] Validating inputs...")
+    print(f"  Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
+    print(f"  Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
+    print(f"  Masks shape: {part_synthesis_input['masks'].shape}")
+    
+    # Sample SLAT
+    torch.backends.cudnn.enabled = True
+    torch.backends.cudnn.benchmark = False
+    print("[INFO] Sampling SLAT...")
+    torch.cuda.empty_cache()
+    
+    if isinstance(img_black_bg, torch.Tensor):
+        img_batched = img_black_bg.unsqueeze(0)
+    else:
+        img_batched = [img_black_bg]
+    cond = part_synthesis_pipeline.get_cond(img_batched)
+    torch.manual_seed(seed)
+    slat = part_synthesis_pipeline.sample_slat(
+        cond, 
+        part_synthesis_input['coords'], 
+        [part_synthesis_input['part_layouts']], 
+        part_synthesis_input['masks'],
+        sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
+    )
+    print("[INFO] SLAT sampling completed")
+    
+    # Divide SLAT into parts
+    divided_slat = part_synthesis_pipeline.divide_slat(slat, [part_synthesis_input['part_layouts']])
+    
+    # Decode formats
+    part_synthesis_output = {}
+    formats_to_generate = ['mesh', 'gaussian', 'radiance_field']
+    
+    for fmt in formats_to_generate:
+        print(f"[INFO] Decoding {fmt} format...")
+        try:
+            torch.cuda.empty_cache()
+            fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
+            if fmt in fmt_output:
+                part_synthesis_output[fmt] = fmt_output[fmt]
+                print(f"[OK] Successfully decoded {fmt} format")
+            else:
+                print(f"[WARN] {fmt} format not in output")
+        except Exception as e:
+            print(f"[WARN] Failed to decode {fmt} format: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
+            continue
+    
+    if not part_synthesis_output:
+        raise RuntimeError("Failed to generate any format")
+    
+    print(f"[INFO] Successfully generated formats: {list(part_synthesis_output.keys())}")
+    
+    # Save outputs
+    print("[INFO] Saving outputs...")
+    save_parts_outputs(
+        part_synthesis_output, 
+        output_dir=inference_output_dir, 
+        simplify_ratio=simplify_ratio, 
+        save_video=False,
+        save_glb=True,
+        textured=True,
     )
     
-    if result.stdout:
-        print("\n=== Inference Output ===")
-        print(result.stdout)
+    # Merge parts
+    print("[INFO] Merging parts...")
+    merge_parts(inference_output_dir)
     
     print("[OK] OmniPart inference completed successfully")
     
-    # Clear GPU cache after 3D generation stage
-    print("\n[INFO] Clearing GPU cache after 3D generation...")
+    # Unload models and clear GPU cache after 3D generation stage
+    print("\n[INFO] Unloading models and clearing GPU cache...")
+    if 'part_synthesis_pipeline' in locals():
+        del part_synthesis_pipeline
+    if 'bbox_gen_model' in locals():
+        del bbox_gen_model
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
         import gc
         gc.collect()
     print("[OK] Resources cleaned up after 3D generation stage")
     
-except subprocess.CalledProcessError as e:
-    print(f"\n[ERROR] OmniPart inference failed:")
-    print(f"Return code: {e.returncode}")
-    if e.stdout:
-        print(f"STDOUT:\n{e.stdout}")
-    if e.stderr:
-        print(f"STDERR:\n{e.stderr}")
-    raise
+finally:
+    os.chdir(original_cwd)
 
 # Find output files
 print("\n=== Step 4: Locate Output Files ===")
@@ -1040,11 +1126,12 @@ print("\n=== Step 4: Locate Output Files ===")
 # - merged_gs.ply (merged 3D Gaussians)
 # - exploded_gs.ply (exploded 3D Gaussians)
 image_name = Path(image_path).stem
-expected_subdir = Path(output_dir) / f"{image_name}_processed"
-if expected_subdir.exists():
-    search_dir = expected_subdir
+# inference_output_dir is the subdirectory created by inference (same as image_name)
+search_dir = Path(inference_output_dir) if 'inference_output_dir' in locals() else Path(output_dir) / image_name
+if search_dir.exists():
     print(f"Found output subdirectory: {search_dir}")
 else:
+    # Fallback: search in main output directory
     search_dir = Path(output_dir)
     print(f"Searching in output directory: {search_dir}")
 
