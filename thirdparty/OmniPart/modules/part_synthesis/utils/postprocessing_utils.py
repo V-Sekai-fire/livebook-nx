@@ -516,8 +516,9 @@ def bake_texture(
                 rast = utils3d.torch.rasterize_triangle_faces(
                     rastctx, vertices[None], faces, observation.shape[1], observation.shape[0], uv=uvs[None], view=view, projection=projection
                 )
-                _uv.append(rast['uv'].detach())
-                _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
+                # Flip Y to match texture convention (same as fast mode)
+                _uv.append(rast['uv'][0].detach().flip(0))
+                _uv_dr.append(rast['uv_dr'][0].detach().flip(0))  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
         # Use small random values instead of zeros to break symmetry and allow gradients to flow
