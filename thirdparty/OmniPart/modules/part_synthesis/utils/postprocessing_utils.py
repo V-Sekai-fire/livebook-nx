@@ -852,26 +852,6 @@ def to_glb(
             
             # Bake texture from the rendered views onto the mesh
             # Use vertices as-is (no normalization) - mesh and Gaussian should already be in same coordinate system
-            # Reduce texture size if GPU memory is low to prevent OOM
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    # Check available GPU memory
-                    free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
-                    free_memory_gb = free_memory / (1024**3)
-                    # If less than 5GB free, reduce texture size from 2048 to 1024
-                    if free_memory_gb < 5.0 and texture_size > 1024:
-                        if verbose:
-                            print(f"[INFO] Low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 1024")
-                        texture_size = 1024
-                    elif free_memory_gb < 2.0 and texture_size > 512:
-                        if verbose:
-                            print(f"[INFO] Very low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 512")
-                        texture_size = 512
-                        if verbose:
-                            print(f"[INFO] Very low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 512")
-                        texture_size = 512
-                
                 texture = bake_texture(
                     vertices, faces, uvs,
                     observations, masks, extrinsics, intrinsics,
