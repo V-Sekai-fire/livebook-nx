@@ -855,8 +855,20 @@ after
 end
 end)
 
-# Display OpenTelemetry trace
-SpanCollector.display_trace()
+# Display OpenTelemetry trace - save to output directory
+# Use output directory based on output_path if available, otherwise use "output"
+output_dir_for_trace = cond do
+  config.output_path && config.output_path != "" ->
+    dir = Path.dirname(config.output_path)
+    if dir == "." or dir == "" do
+      "output"
+    else
+      dir
+    end
+  true ->
+    "output"
+end
+SpanCollector.display_trace(output_dir_for_trace)
 
 IO.puts("""
 === Complete ===

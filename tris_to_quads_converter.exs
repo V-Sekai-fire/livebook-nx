@@ -467,5 +467,5 @@ end)
 IO.puts("\n=== Complete ===")
 IO.puts("Tris-to-quads conversion completed successfully!")
 
-# Display OpenTelemetry trace
-SpanCollector.display_trace()
+# Display OpenTelemetry trace (save to output directory)
+SpanCollector.display_trace("output")

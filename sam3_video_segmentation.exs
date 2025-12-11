@@ -719,5 +719,5 @@ end)
 
 IO.puts("\n=== Complete ===")
 
-# Display OpenTelemetry trace
-SpanCollector.display_trace()
+# Display OpenTelemetry trace - save to output directory
+SpanCollector.display_trace("output")

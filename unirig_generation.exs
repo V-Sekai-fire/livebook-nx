@@ -981,6 +981,6 @@ rescue
   e ->
     reraise e, __STACKTRACE__
 after
-  # Always display trace (even on errors)
-  SpanCollector.display_trace()
+  # Always display trace (even on errors) - save to output directory
+  SpanCollector.display_trace("output")
 end

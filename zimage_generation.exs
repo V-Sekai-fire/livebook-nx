@@ -863,5 +863,5 @@ else
   System.halt(1)
 end
 
-# Display OpenTelemetry trace summary for performance debugging
-SpanCollector.display_trace()
+# Display OpenTelemetry trace summary for performance debugging - save to output directory
+SpanCollector.display_trace("output")
