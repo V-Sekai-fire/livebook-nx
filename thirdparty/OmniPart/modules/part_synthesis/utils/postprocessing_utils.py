@@ -72,6 +72,22 @@ def _fill_holes(
         debug (bool): Whether to output debug information and meshes.
         verbose (bool): Whether to print progress.
     """
+    # Ensure inputs are float32 (not float64/double)
+    if isinstance(verts, torch.Tensor):
+        verts = verts.float()
+    else:
+        verts = torch.tensor(verts, dtype=torch.float32)
+    if isinstance(faces, torch.Tensor):
+        faces = faces.long()
+    else:
+        faces = torch.tensor(faces, dtype=torch.long)
+    
+    # Move to GPU if not already
+    if not verts.is_cuda:
+        verts = verts.cuda()
+    if not faces.is_cuda:
+        faces = faces.cuda()
+    
     # Construct cameras at uniformly distributed positions on a sphere
     yaws = []
     pitchs = []
