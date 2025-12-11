@@ -341,6 +341,7 @@ try:
         debug=False,
         verbose=True,
         textured=True,  # Enable texture baking
+        force_pytorch3d=True,  # Force PyTorch3D usage for texture baking
     )
     
     if textured_mesh is not None:

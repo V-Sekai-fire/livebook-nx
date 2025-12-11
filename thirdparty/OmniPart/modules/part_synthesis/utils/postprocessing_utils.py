@@ -451,12 +451,57 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     except ImportError as e:
         raise ImportError(f"PyTorch3D is required for texture baking without nvdiffrast. Import error: {e}")
     
+    # Convert to torch tensors if needed and get device
+    if not isinstance(vertices, torch.Tensor):
+        vertices = torch.tensor(vertices, dtype=torch.float32)
+    if not isinstance(faces, torch.Tensor):
+        faces = torch.tensor(faces, dtype=torch.int64)
+    if not isinstance(uvs, torch.Tensor):
+        uvs = torch.tensor(uvs, dtype=torch.float32)
+    
     device = vertices.device
+    vertices = vertices.to(device)
+    faces = faces.to(device)
+    uvs = uvs.to(device)
+    
+    # Ensure vertices and faces have correct shapes: (batch_size, num_verts, 3) and (batch_size, num_faces, 3)
+    # PyTorch3D Meshes requires batch dimension
+    if len(vertices.shape) == 2:
+        # Add batch dimension: (num_verts, 3) -> (1, num_verts, 3)
+        vertices = vertices.unsqueeze(0)
+    elif len(vertices.shape) != 3:
+        raise ValueError(f"vertices must have shape (num_verts, 3) or (batch_size, num_verts, 3), got {vertices.shape}")
+    
+    if len(faces.shape) == 2:
+        # Add batch dimension: (num_faces, 3) -> (1, num_faces, 3)
+        faces = faces.unsqueeze(0)
+    elif len(faces.shape) != 3:
+        raise ValueError(f"faces must have shape (num_faces, 3) or (batch_size, num_faces, 3), got {faces.shape}")
+    
+    # Ensure faces are int64 (PyTorch3D requirement)
+    faces = faces.long()
+    
     batch_size = vertices.shape[0]
+    
+    # Verify shapes
+    if vertices.shape[2] != 3:
+        raise ValueError(f"vertices must have 3 coordinates per vertex, got {vertices.shape[2]}")
+    if faces.shape[2] != 3:
+        raise ValueError(f"faces must have 3 indices per face, got {faces.shape[2]}")
     
     # Convert view and projection to PyTorch3D camera format
     # view: 4x4 world-to-camera matrix (OpenGL convention)
     # projection: 4x4 OpenGL perspective projection matrix
+    
+    # Ensure view and projection are tensors
+    if not isinstance(view, torch.Tensor):
+        view = torch.tensor(view, device=device, dtype=torch.float32)
+    else:
+        view = view.to(device)
+    if not isinstance(projection, torch.Tensor):
+        projection = torch.tensor(projection, device=device, dtype=torch.float32)
+    else:
+        projection = projection.to(device)
     
     # Extract rotation and translation from view matrix
     # The view matrix is world-to-camera: [R | T; 0 0 0 | 1]
@@ -545,17 +590,46 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
     pix_to_face = fragments.pix_to_face  # (B, H, W, 1)
     
     # Interpolate UV coordinates using barycentric coordinates
-    # Get face UVs
-    faces_uvs = meshes.textures.faces_uvs()  # (B, F, 3, 2)
-    batch_idx = torch.arange(batch_size, device=device)[:, None, None, None]
-    face_idx = pix_to_face  # (B, H, W, 1)
+    # In PyTorch3D, faces_uvs contains indices into verts_uvs
+    # faces_uvs: (B, F, 3) - indices into verts_uvs
+    # verts_uvs: (B, V, 2) - actual UV coordinates
+    faces_uvs_indices = meshes.textures.faces_uvs  # (B, F, 3) - indices
+    verts_uvs = meshes.textures.verts_uvs  # (B, V, 2) - UV coordinates
     
-    # Get UV coordinates for the three vertices of each face
-    face_uvs = faces_uvs[batch_idx, face_idx]  # (B, H, W, 1, 3, 2)
-    face_uvs = face_uvs.squeeze(3)  # (B, H, W, 3, 2)
+    # Get face index for each pixel
+    face_idx = pix_to_face.squeeze(-1)  # (B, H, W) - face indices, -1 for background
     
-    # Interpolate using barycentric coordinates
-    uv_map = (bary_coords[..., None] * face_uvs).sum(dim=-2)  # (B, H, W, 2)
+    # For each batch, gather face UV indices
+    # We'll process each batch separately to avoid complex indexing
+    uv_maps = []
+    for b in range(batch_size):
+        # Get face indices for this batch: (H, W)
+        batch_face_idx = face_idx[b]  # (H, W)
+        
+        # Get valid pixels (face_idx >= 0)
+        valid_mask = batch_face_idx >= 0  # (H, W)
+        
+        # Get UV vertex indices for valid faces: (num_valid, 3)
+        valid_face_idx = batch_face_idx[valid_mask]  # (num_valid,)
+        face_uv_indices = faces_uvs_indices[b, valid_face_idx]  # (num_valid, 3)
+        
+        # Get UV coordinates: (num_valid, 3, 2)
+        face_uvs = verts_uvs[b, face_uv_indices]  # (num_valid, 3, 2)
+        
+        # Get barycentric coordinates for valid pixels: (num_valid, 3)
+        batch_bary = bary_coords[b, valid_mask].squeeze(1)  # (num_valid, 3)
+        
+        # Interpolate: (num_valid, 3) @ (num_valid, 3, 2) -> (num_valid, 2)
+        # We need to do element-wise multiplication and sum
+        uv_valid = (batch_bary.unsqueeze(-1) * face_uvs).sum(dim=1)  # (num_valid, 2)
+        
+        # Create full UV map for this batch
+        batch_uv_map = torch.zeros((height, width, 2), device=device, dtype=torch.float32)
+        batch_uv_map[valid_mask] = uv_valid
+        uv_maps.append(batch_uv_map)
+    
+    # Stack all batches: (B, H, W, 2)
+    uv_map = torch.stack(uv_maps, dim=0)  # (B, H, W, 2)
     
     # Create mask (pixels with valid faces)
     mask = (pix_to_face >= 0).float()  # (B, H, W, 1)
@@ -608,6 +682,7 @@ def bake_texture(
     lambda_tv: float = 1e-2,
     verbose: bool = False,
     srgb_space: bool = False,
+    force_pytorch3d: bool = False,
 ):
     """
     Bake texture to a mesh from multiple observations.
@@ -643,25 +718,31 @@ def bake_texture(
 
     if mode == 'fast':
         # Fast texture baking - weighted average of observed colors
-        # Try to use utils3d's rasterization (may work even without explicit nvdiffrast import)
-        # Fall back to PyTorch3D if available, otherwise try utils3d anyway
         texture = torch.zeros((texture_size * texture_size, 3), dtype=torch.float32).cuda()
         texture_weights = torch.zeros((texture_size * texture_size), dtype=torch.float32).cuda()
         
-        # Use PyTorch3D if nvdiffrast is not available and PyTorch3D works, otherwise try utils3d
-        use_pytorch3d = not NVDIFFRAST_AVAILABLE and PYTORCH3D_AVAILABLE
-        use_utils3d = not use_pytorch3d  # Use utils3d if not using PyTorch3D
-        
-        if use_utils3d:
-            try:
-                rastctx = utils3d.torch.RastContext(backend='cuda')
-            except Exception as e:
-                # If utils3d also fails, try PyTorch3D as last resort
-                if PYTORCH3D_AVAILABLE:
-                    use_pytorch3d = True
-                    use_utils3d = False
-                else:
-                    raise ImportError(f"Rasterization backend unavailable. utils3d error: {e}. PyTorch3D also unavailable.")
+        # Determine which backend to use
+        if force_pytorch3d:
+            # Force PyTorch3D usage
+            if not PYTORCH3D_AVAILABLE:
+                raise ImportError("PyTorch3D is required when force_pytorch3d=True but PyTorch3D is not available.")
+            use_pytorch3d = True
+            use_utils3d = False
+        else:
+            # Auto-detect: Use PyTorch3D if nvdiffrast is not available and PyTorch3D works, otherwise try utils3d
+            use_pytorch3d = not NVDIFFRAST_AVAILABLE and PYTORCH3D_AVAILABLE
+            use_utils3d = not use_pytorch3d  # Use utils3d if not using PyTorch3D
+            
+            if use_utils3d:
+                try:
+                    rastctx = utils3d.torch.RastContext(backend='cuda')
+                except Exception as e:
+                    # If utils3d also fails, try PyTorch3D as last resort
+                    if PYTORCH3D_AVAILABLE:
+                        use_pytorch3d = True
+                        use_utils3d = False
+                    else:
+                        raise ImportError(f"Rasterization backend unavailable. utils3d error: {e}. PyTorch3D also unavailable.")
         
         # Iterate through each observation and accumulate colors
         for observation, view, projection in tqdm(zip(observations, views, projections), total=len(observations), disable=not verbose, desc='Texture baking (fast)'):
@@ -737,14 +818,21 @@ def bake_texture(
 
     elif mode == 'opt':
         # Optimization-based texture baking with total variation regularization
-        # Check if we have a rasterization backend available
-        if not NVDIFFRAST_AVAILABLE and not PYTORCH3D_AVAILABLE:
-            raise ImportError("Either nvdiffrast or PyTorch3D is required for optimization-based texture baking. Please install one of them.")
-        
-        # Use PyTorch3D if nvdiffrast is not available, otherwise use nvdiffrast
-        use_pytorch3d = not NVDIFFRAST_AVAILABLE and PYTORCH3D_AVAILABLE
-        if not use_pytorch3d:
-            rastctx = utils3d.torch.RastContext(backend='cuda')
+        # Determine which backend to use
+        if force_pytorch3d:
+            # Force PyTorch3D usage
+            if not PYTORCH3D_AVAILABLE:
+                raise ImportError("PyTorch3D is required when force_pytorch3d=True but PyTorch3D is not available.")
+            use_pytorch3d = True
+        else:
+            # Auto-detect: Check if we have a rasterization backend available
+            if not NVDIFFRAST_AVAILABLE and not PYTORCH3D_AVAILABLE:
+                raise ImportError("Either nvdiffrast or PyTorch3D is required for optimization-based texture baking. Please install one of them.")
+            
+            # Use PyTorch3D if nvdiffrast is not available, otherwise use nvdiffrast
+            use_pytorch3d = not NVDIFFRAST_AVAILABLE and PYTORCH3D_AVAILABLE
+            if not use_pytorch3d:
+                rastctx = utils3d.torch.RastContext(backend='cuda')
         
         observations = [obs.flip(0) for obs in observations]  # Flip Y for rendering
         masks = [m.flip(0) for m in masks]
@@ -875,6 +963,7 @@ def to_glb(
     debug: bool = False,
     verbose: bool = True,
     textured: bool = True,
+    force_pytorch3d: bool = False,
 ) -> trimesh.Trimesh:
     """
     Convert a generated asset to a glb file.
@@ -943,28 +1032,38 @@ def to_glb(
     uvs = None
     if textured:
         # Check if texture baking is possible
-        # Try to use utils3d's rasterization - it may work even without explicit nvdiffrast import
-        # Only disable texture baking if utils3d also fails
-        try:
-            # Test if utils3d rasterization works
-            test_ctx = utils3d.torch.RastContext(backend='cuda')
-            del test_ctx
-            # If we get here, utils3d works - enable texture baking
-            if verbose:
-                print("[INFO] Using utils3d for texture baking")
-        except Exception as e:
-            # utils3d doesn't work, check if PyTorch3D is available
+        # Determine backend availability
+        utils3d_available = False
+        if not force_pytorch3d:
+            try:
+                # Test if utils3d rasterization works
+                test_ctx = utils3d.torch.RastContext(backend='cuda')
+                del test_ctx
+                utils3d_available = True
+                if verbose:
+                    print("[INFO] Using utils3d for texture baking")
+            except Exception as e:
+                utils3d_available = False
+                if verbose:
+                    print(f"[INFO] utils3d rasterization unavailable: {e}")
+        
+        # Check PyTorch3D availability if needed
+        if force_pytorch3d or not utils3d_available:
             if not PYTORCH3D_AVAILABLE:
                 if verbose:
                     print("[WARN] Neither utils3d rasterization nor PyTorch3D is available. Texture baking disabled.")
                     if PYTORCH3D_IMPORT_ERROR:
                         print(f"[INFO] PyTorch3D import error: {PYTORCH3D_IMPORT_ERROR}")
-                    print("[INFO] utils3d rasterization error:", str(e))
                 textured = False
             else:
                 if verbose:
-                    print("[INFO] Using PyTorch3D for texture baking (utils3d unavailable)")
-        else:
+                    if force_pytorch3d:
+                        print("[INFO] Using PyTorch3D for texture baking (forced)")
+                    else:
+                        print("[INFO] Using PyTorch3D for texture baking (utils3d unavailable)")
+        
+        # Proceed with texture baking if either backend is available
+        if textured:
             # Create UV mapping for the mesh
             vertices, faces, uvs = parametrize_mesh(vertices, faces)
 
@@ -983,7 +1082,8 @@ def to_glb(
                     observations, masks, extrinsics, intrinsics,
                     texture_size=texture_size, mode='opt',  # Use optimization-based texturing
                     lambda_tv=0.01,  # Total variation regularization
-                    verbose=verbose
+                    verbose=verbose,
+                    force_pytorch3d=force_pytorch3d
                 )
                 texture = Image.fromarray(texture)
             except Exception as e:
