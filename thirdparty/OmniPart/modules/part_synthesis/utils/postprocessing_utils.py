@@ -517,8 +517,11 @@ def bake_texture(
                     rastctx, vertices[None], faces, observation.shape[1], observation.shape[0], uv=uvs[None], view=view, projection=projection
                 )
                 # Flip Y to match texture convention (same as fast mode)
-                _uv.append(rast['uv'][0].detach().flip(0))
-                _uv_dr.append(rast['uv_dr'][0].detach().flip(0))  # Gradient information for differentiable rendering
+                # Keep batch dimension for dr.texture which expects (B, H, W, 2)
+                uv_flipped = rast['uv'].detach().flip(1)  # Flip height dimension (dim 1) while keeping batch
+                uv_dr_flipped = rast['uv_dr'].detach().flip(1)
+                _uv.append(uv_flipped)
+                _uv_dr.append(uv_dr_flipped)  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
         # Use small random values instead of zeros to break symmetry and allow gradients to flow
