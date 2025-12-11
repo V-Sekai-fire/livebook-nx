@@ -466,6 +466,13 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
 
     # Merge groups if specified
     if merge_groups is not None:
+        # Show original grouping
+        original_unique_ids = np.unique(group_ids)
+        original_unique_ids = original_unique_ids[original_unique_ids >= 0]
+        print(f"\n=== Merging Segments ===")
+        print(f"Original segment IDs: {sorted(original_unique_ids.tolist())}")
+        print(f"Merge groups to apply: {merge_groups}")
+        
         # Start with current group_ids
         merged_group_ids = group_ids
         
@@ -511,7 +518,10 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
 
         # Replace original group IDs with merged result
         group_ids = merged_group_ids
-        print(f"Merging complete, now have {len(np.unique(group_ids))-1} regions (excluding background)")
+        final_unique_ids = np.unique(group_ids)
+        final_unique_ids = final_unique_ids[final_unique_ids >= 0]
+        print(f"Final segment IDs (after merging): {sorted(final_unique_ids.tolist())}")
+        print(f"Merging complete, now have {len(final_unique_ids)} regions (excluding background)")
         
         # Skip splitting disconnected parts if requested
         if not skip_split:

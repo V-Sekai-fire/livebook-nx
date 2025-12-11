@@ -502,8 +502,9 @@ if apply_merge:
     
     unique_ids = np.unique(original_group_ids)
     unique_ids = unique_ids[unique_ids >= 0]
+    print(f"\n=== Applying Merge Groups ===")
     print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
-    print(f"Merge groups: {merge_groups}")
+    print(f"Merge groups to apply: {merge_groups}")
     
     # Load models (lightweight - just SAM for merging)
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -547,7 +548,11 @@ if apply_merge:
     
     new_unique_ids = np.unique(new_group_ids)
     new_unique_ids = new_unique_ids[new_unique_ids >= 0]
-    print(f"New segment IDs (after merging): {sorted(new_unique_ids.tolist())}")
+    print(f"\n=== Merge Results ===")
+    print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
+    print(f"Applied merge groups: {merge_groups}")
+    print(f"Final segment IDs: {sorted(new_unique_ids.tolist())}")
+    print(f"Result: {len(unique_ids)} segments -> {len(new_unique_ids)} segments")
     
     # Clean edges
     new_group_ids = clean_segment_edges(new_group_ids)
