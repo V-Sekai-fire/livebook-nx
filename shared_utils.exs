@@ -479,7 +479,7 @@ defmodule OtelJsonExporter do
   
   def export_metrics(_other, _opts), do: :ok
   
-  def export_json do
+  def export_json(output_dir \\ nil) do
     state = Agent.get(__MODULE__, fn s -> s end)
     total_time = System.monotonic_time(:millisecond) - state.start_time
     
@@ -497,13 +497,26 @@ defmodule OtelJsonExporter do
       }
     }
     
-    IO.puts("")
-    IO.puts("=== OpenTelemetry JSON Export ===")
-    IO.puts("")
-    IO.puts(Jason.encode!(json_data, pretty: true))
-    IO.puts("")
+    json_string = Jason.encode!(json_data, pretty: true)
     
-    Jason.encode!(json_data, pretty: true)
+    if output_dir do
+      # Save to file instead of printing
+      File.mkdir_p!(output_dir)
+      output_file = Path.join(output_dir, "opentelemetry_trace.json")
+      File.write!(output_file, json_string)
+      IO.puts("")
+      IO.puts("[OK] OpenTelemetry trace saved to: #{output_file}")
+      IO.puts("")
+    else
+      # Fallback: print if no output directory provided
+      IO.puts("")
+      IO.puts("=== OpenTelemetry JSON Export ===")
+      IO.puts("")
+      IO.puts(json_string)
+      IO.puts("")
+    end
+    
+    json_string
   end
   
   defp convert_metadata(metadata) when is_list(metadata) do
@@ -814,11 +827,11 @@ defmodule SpanCollector do
     :ok
   end
 
-  def display_trace do
+  def display_trace(output_dir \\ nil) do
     # Export JSON trace data if available
     try do
       if Process.whereis(OtelJsonExporter) do
-        OtelJsonExporter.export_json()
+        OtelJsonExporter.export_json(output_dir)
       else
         # Fallback if exporter not available
         IO.puts("")

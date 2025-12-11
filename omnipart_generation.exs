@@ -517,9 +517,6 @@ end)
 # Process using OmniPart
 SpanCollector.track_span("omnipart.generation", fn ->
 try do
-  # Get trace context for propagation to Python
-  trace_context = SpanCollector.get_trace_context()
-  
   # Set OTEL_LOG_DIR for Python to write logs/spans
   log_dir = System.get_env("TMPDIR", System.get_env("TMP", "/tmp"))
   System.put_env("OTEL_LOG_DIR", log_dir)
@@ -2003,7 +2000,8 @@ end
 # Wrap in try-catch to ensure logs are displayed even if there's a crash
 try do
   IO.puts("")  # Ensure we're on a new line
-  SpanCollector.display_trace()
+  # Save JSON to output directory instead of printing
+  SpanCollector.display_trace(config.output_dir)
 rescue
   e ->
     OtelLogger.warn("Error displaying OpenTelemetry trace", [
