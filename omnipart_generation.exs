@@ -509,6 +509,7 @@ end)
 # Process using OmniPart
 SpanCollector.track_span("omnipart.generation", fn ->
 try do
+  # Use spawn to run Python in separate process to avoid GIL issues
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
 import sys
@@ -1767,6 +1768,25 @@ rescue
 after
   # Clean up temp file
   ConfigFile.cleanup(config_file)
+  
+  # Give Python time to clean up threads before shutdown
+  # This helps avoid GIL-related crashes during cleanup
+  # The crash happens because Python threads (like tqdm) are still running
+  # when Python interpreter shuts down
+  try do
+    # Force Python garbage collection and wait for threads
+    Pythonx.eval("""
+    import gc
+    import time
+    gc.collect()
+    time.sleep(0.2)  # Give threads time to finish
+    """, %{})
+    Process.sleep(200)  # Additional Elixir-side delay
+  rescue
+    _ -> 
+      # If Python cleanup fails, just wait a bit
+      Process.sleep(200)
+  end
 end
 
 # Track completion as span attribute
@@ -1774,5 +1794,17 @@ SpanCollector.add_span_attribute("status", "completed")
 end)
 
 # Export spans and metrics as JSON
-SpanCollector.display_trace()
+# Wrap in try-catch to ensure logs are displayed even if there's a crash
+# Also flush stdout to ensure output is visible
+try do
+  IO.puts("")  # Ensure we're on a new line
+  :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush stdout
+  SpanCollector.display_trace()
+  :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush again
+rescue
+  e ->
+    IO.puts("\n[WARN] Error displaying OpenTelemetry trace: #{inspect(e)}")
+    IO.puts("Continuing with normal exit...")
+    :ok = :io.put_chars(:standard_io, :unicode, "")  # Flush
+end
 

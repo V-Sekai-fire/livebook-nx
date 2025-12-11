@@ -716,15 +716,27 @@ defmodule SpanCollector do
   end
 
   def display_trace do
-    # OpenTelemetry spans are handled by the SDK and exporters
-    # For console output, we'd need to configure a console exporter
-    # or use the SDK's built-in export functionality
-    IO.puts("")
-    IO.puts("=== OpenTelemetry Trace ===")
-    IO.puts("")
-    IO.puts("Note: Use OpenTelemetry exporters (OTLP, Jaeger, etc.) to view traces.")
-    IO.puts("For JSON export, configure opentelemetry_exporter_otlp or similar.")
-    IO.puts("")
+    # Export JSON trace data if available
+    try do
+      if Process.whereis(OtelJsonExporter) do
+        OtelJsonExporter.export_json()
+      else
+        # Fallback if exporter not available
+        IO.puts("")
+        IO.puts("=== OpenTelemetry Trace ===")
+        IO.puts("")
+        IO.puts("Note: Use OpenTelemetry exporters (OTLP, Jaeger, etc.) to view traces.")
+        IO.puts("For JSON export, configure opentelemetry_exporter_otlp or similar.")
+        IO.puts("")
+      end
+    rescue
+      e ->
+        IO.puts("")
+        IO.puts("=== OpenTelemetry Trace ===")
+        IO.puts("")
+        IO.puts("Error exporting trace: #{inspect(e)}")
+        IO.puts("")
+    end
   end
 end
 
