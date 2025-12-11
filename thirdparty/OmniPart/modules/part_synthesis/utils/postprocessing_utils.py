@@ -392,17 +392,28 @@ def postprocess_mesh(
         return vertices, faces
     
     # Simplify mesh using quadric edge collapse decimation
-    # Note: PyVista decimation may fail in some environments (e.g., Pythonx) due to signal handler conflicts
-    # If it fails, we'll skip decimation but still proceed with hole filling
+    # Use trimesh instead of PyVista to avoid signal handler conflicts in Pythonx
     if simplify and simplify_ratio > 0:
         try:
-            mesh = pv.PolyData(vertices, np.concatenate([np.full((faces.shape[0], 1), 3), faces], axis=1))
-            mesh = mesh.decimate(simplify_ratio, progress_bar=verbose)
-            vertices, faces = mesh.points, mesh.faces.reshape(-1, 4)[:, 1:]
-            if verbose:
-                tqdm.write(f'After decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
+            # Create trimesh object
+            mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+            # Calculate target number of faces
+            target_faces = int(faces.shape[0] * simplify_ratio)
+            if target_faces < 4:  # Minimum faces for a valid mesh
+                target_faces = 4
+            if target_faces >= faces.shape[0]:
+                # No decimation needed
+                if verbose:
+                    tqdm.write(f'Decimation skipped: target faces ({target_faces}) >= current faces ({faces.shape[0]})')
+            else:
+                # Perform quadric decimation
+                mesh = mesh.simplify_quadric_decimation(face_count=target_faces)
+                vertices = mesh.vertices
+                faces = mesh.faces
+                if verbose:
+                    tqdm.write(f'After decimate: {vertices.shape[0]} vertices, {faces.shape[0]} faces')
         except Exception as e:
-            # Decimation failed (e.g., signal handler issue in Pythonx), skip it but continue
+            # Decimation failed, skip it but continue
             if verbose:
                 tqdm.write(f'Warning: Decimation failed ({e}), skipping decimation but continuing with hole filling')
             # Keep original vertices/faces for hole filling
@@ -612,11 +623,31 @@ def _rasterize_with_pytorch3d(vertices, faces, uvs, height, width, view, project
         # Get valid pixels (face_idx >= 0)
         valid_mask = batch_face_idx >= 0  # (H, W)
         
+        if valid_mask.sum() == 0:
+            # No valid pixels, create zero UV map
+            batch_uv_map = torch.zeros((height, width, 2), device=device, dtype=torch.float32)
+            uv_maps.append(batch_uv_map)
+            continue
+        
         # Get UV vertex indices for valid faces: (num_valid, 3)
         valid_face_idx = batch_face_idx[valid_mask]  # (num_valid,)
+        
+        # Debug: Check face index range
+        if b == 0 and valid_face_idx.numel() > 0:
+            max_face_idx = valid_face_idx.max().item()
+            num_faces = faces_uvs_indices.shape[1]
+            if max_face_idx >= num_faces:
+                raise RuntimeError(f"Face index {max_face_idx} out of range [0, {num_faces-1}]. This indicates a mismatch between rasterized faces and UV face indices.")
+        
         face_uv_indices = faces_uvs_indices[b, valid_face_idx]  # (num_valid, 3)
         
         # Get UV coordinates: (num_valid, 3, 2)
+        # face_uv_indices contains vertex indices into verts_uvs
+        max_uv_idx = face_uv_indices.max().item()
+        num_uv_verts = verts_uvs.shape[1]
+        if max_uv_idx >= num_uv_verts:
+            raise RuntimeError(f"UV vertex index {max_uv_idx} out of range [0, {num_uv_verts-1}]. This indicates a mismatch between face UV indices and UV vertices.")
+        
         face_uvs = verts_uvs[b, face_uv_indices]  # (num_valid, 3, 2)
         
         # Get barycentric coordinates for valid pixels: (num_valid, 3)
@@ -926,8 +957,12 @@ def bake_texture(
                     # Debug on first step
                     if step == 0 and verbose:
                         print(f"[DEBUG] Render range: [{render.min():.3f}, {render.max():.3f}], mean: {render.mean():.3f}")
-                        print(f"[DEBUG] Render on mask range: [{render[mask].min():.3f if mask.sum() > 0 else 0}, {render[mask].max():.3f if mask.sum() > 0 else 0}], mean: {render[mask].mean():.3f if mask.sum() > 0 else 0}")
-                        print(f"[DEBUG] Observation on mask range: [{observation[mask].min():.3f if mask.sum() > 0 else 0}, {observation[mask].max():.3f if mask.sum() > 0 else 0}], mean: {observation[mask].mean():.3f if mask.sum() > 0 else 0}")
+                        if mask.sum() > 0:
+                            print(f"[DEBUG] Render on mask range: [{render[mask].min():.3f}, {render[mask].max():.3f}], mean: {render[mask].mean():.3f}")
+                            print(f"[DEBUG] Observation on mask range: [{observation[mask].min():.3f}, {observation[mask].max():.3f}], mean: {observation[mask].mean():.3f}")
+                        else:
+                            print(f"[DEBUG] Render on mask: no valid pixels")
+                            print(f"[DEBUG] Observation on mask: no valid pixels")
                 else:
                     render = dr.texture(texture, uv, uv_dr)[0]
                 # Loss calculation - L1 reconstruction loss + TV regularization
@@ -1102,6 +1137,9 @@ def to_glb(
         if textured:
             # Create UV mapping for the mesh
             vertices, faces, uvs = parametrize_mesh(vertices, faces)
+            if verbose:
+                print(f"[DEBUG] After parametrize_mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces, {uvs.shape[0]} UVs")
+                print(f"[DEBUG] UV range from xatlas: [{uvs.min():.3f}, {uvs.max():.3f}], mean: {uvs.mean():.3f}")
 
             # Render multi-view images from the appearance representation for texturing
             observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=100)
