@@ -322,7 +322,9 @@ def create_labeled_visualization(group_ids, visual, image, label_mode='1', anno_
                 color=edge_color
             )
             
-    im = vis.output.get_image()
+    im_array = vis.output.get_image()
+    # Convert numpy array to PIL Image
+    im = Image.fromarray(im_array)
     return im
 
 # -------------------------------------------------------

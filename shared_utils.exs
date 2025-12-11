@@ -637,15 +637,19 @@ defmodule SpanCollector do
           case e do
             %Pythonx.Error{type: type, value: value} ->
               try do
-                type_name = Pythonx.call(type, :__name__, [])
+                # Use Pythonx.eval to access Python object attributes
+                # Create a temporary Python namespace with the objects
+                python_globals = %{"_elixir_type" => type, "_elixir_value" => value}
+                {type_name, _} = Pythonx.eval("_elixir_type.__name__", python_globals)
                 if type_name == "SystemExit" do
                   exit_code = try do
-                    Pythonx.call(value, :__int__, [])
+                    {code, _} = Pythonx.eval("_elixir_value.__int__()", python_globals)
+                    code
                   rescue
                     _ ->
                       # Try to get exit code from args
                       try do
-                        args = Pythonx.call(value, :args, [])
+                        {args, _} = Pythonx.eval("_elixir_value.args", python_globals)
                         case args do
                           [code] when is_integer(code) -> code
                           _ -> 0
