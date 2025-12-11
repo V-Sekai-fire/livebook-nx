@@ -247,6 +247,84 @@ def split_disconnected_parts(group_ids, size_threshold=None):
     
     return new_group_ids
 
+def create_labeled_visualization(group_ids, visual, image, label_mode='1', anno_mode=['Mask']):
+    """
+    Create a labeled visualization of group_ids.
+    
+    Args:
+        group_ids: Array of segment IDs for each pixel
+        visual: Visualizer instance
+        image: Input image
+        label_mode: Label display mode
+        anno_mode: Annotation mode
+        
+    Returns:
+        PIL Image with labeled visualization
+    """
+    # Create a fresh visualizer copy to avoid modifying the original
+    from modules.label_2d_mask.visualizer import Visualizer
+    vis_mask = Visualizer(image)
+    
+    # First draw background areas (ID -1)
+    background_mask = (group_ids == -1)
+    if np.any(background_mask):
+        vis_mask = vis_mask.draw_binary_mask(background_mask, color=[1.0, 1.0, 1.0], alpha=0.0)
+
+    # Then draw each segment with unique colors and labels
+    for unique_id in np.unique(group_ids):
+        if unique_id == -1:  # Skip background
+            continue
+        mask = (group_ids == unique_id)
+        
+        # Calculate center point and area of this region
+        y_indices, x_indices = np.where(mask)
+        if len(y_indices) > 0 and len(x_indices) > 0:
+            area = len(y_indices)  # Calculate region area
+            
+            print(f"Labeling region {unique_id}, area: {area} pixels")
+            if area < 30:  # Skip very small regions
+                continue
+            
+            # Use different colors for different IDs to enhance visual distinction
+            color_r = (unique_id * 50 + 80) % 200 / 255.0 + 0.2
+            color_g = (unique_id * 120 + 40) % 200 / 255.0 + 0.2
+            color_b = (unique_id * 180 + 20) % 200 / 255.0 + 0.2
+            color = [color_r, color_g, color_b]
+            
+            # Adjust transparency based on area size
+            adaptive_alpha = min(0.3, max(0.1, 0.1 + area / 100000))
+            
+            # Extract edges of this region
+            kernel = np.ones((3, 3), np.uint8)
+            dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
+            eroded = cv2.erode(mask.astype(np.uint8), kernel, iterations=1)
+            edge = dilated.astype(bool) & (~eroded.astype(bool))
+            
+            # Build label text
+            label = f"{unique_id}"
+            
+            # First draw the main body of the region
+            vis_mask = vis_mask.draw_binary_mask_with_number(
+                mask, 
+                text=label,
+                label_mode=label_mode,
+                alpha=adaptive_alpha,
+                anno_mode=anno_mode,
+                color=color,
+                font_size=20
+            )
+            
+            # Enhance edges (add border effect for all parts)
+            edge_color = [min(c*1.3, 1.0) for c in color]  # Slightly brighter edge color
+            vis_mask = vis_mask.draw_binary_mask(
+                edge,
+                alpha=0.8,  # Lower transparency for edges to make them more visible
+                color=edge_color
+            )
+            
+    im = vis_mask.get_image()
+    return im
+
 # -------------------------------------------------------
 # MAIN SEGMENTATION FUNCTION
 # -------------------------------------------------------
@@ -473,6 +551,13 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
         print(f"Original segment IDs: {sorted(original_unique_ids.tolist())}")
         print(f"Merge groups to apply: {merge_groups}")
         
+        # Save original visualization before merging
+        original_vis = create_labeled_visualization(group_ids, visual, image, label_mode=label_mode, anno_mode=anno_mode)
+        if save_dir and img_name:
+            original_vis_path = os.path.join(save_dir, f"{img_name}_mask_segments_original_labeled.png")
+            original_vis.save(original_vis_path)
+            print(f"[OK] Original mask visualization saved to: {original_vis_path}")
+        
         # Start with current group_ids
         merged_group_ids = group_ids
         
@@ -534,64 +619,6 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
         print(f"After splitting disconnected parts, now have {len(np.unique(group_ids))-1} regions (excluding background)")
 
     # Create visualization with clear labeling
-    vis_mask = visual
-    # First draw background areas (ID -1)
-    background_mask = (group_ids == -1)
-    if np.any(background_mask):
-        vis_mask = visual.draw_binary_mask(background_mask, color=[1.0, 1.0, 1.0], alpha=0.0)
-
-    # Then draw each segment with unique colors and labels
-    for unique_id in np.unique(group_ids):
-        if unique_id == -1:  # Skip background
-            continue
-        mask = (group_ids == unique_id)
-        
-        # Calculate center point and area of this region
-        y_indices, x_indices = np.where(mask)
-        if len(y_indices) > 0 and len(x_indices) > 0:
-            area = len(y_indices)  # Calculate region area
-            
-            print(f"Labeling region {unique_id}, area: {area} pixels")
-            if area < 30:  # Skip very small regions
-                continue
-            
-            # Use different colors for different IDs to enhance visual distinction
-            color_r = (unique_id * 50 + 80) % 200 / 255.0 + 0.2
-            color_g = (unique_id * 120 + 40) % 200 / 255.0 + 0.2
-            color_b = (unique_id * 180 + 20) % 200 / 255.0 + 0.2
-            color = [color_r, color_g, color_b]
-            
-            # Adjust transparency based on area size
-            adaptive_alpha = min(0.3, max(0.1, 0.1 + area / 100000))
-            
-            # Extract edges of this region
-            kernel = np.ones((3, 3), np.uint8)
-            dilated = cv2.dilate(mask.astype(np.uint8), kernel, iterations=1)
-            eroded = cv2.erode(mask.astype(np.uint8), kernel, iterations=1)
-            edge = dilated.astype(bool) & (~eroded.astype(bool))
-            
-            # Build label text
-            label = f"{unique_id}"
-            
-            # First draw the main body of the region
-            vis_mask = visual.draw_binary_mask_with_number(
-                mask, 
-                text=label,
-                label_mode=label_mode,
-                alpha=adaptive_alpha,
-                anno_mode=anno_mode,
-                color=color,
-                font_size=20
-            )
-            
-            # Enhance edges (add border effect for all parts)
-            edge_color = [min(c*1.3, 1.0) for c in color]  # Slightly brighter edge color
-            vis_mask = visual.draw_binary_mask(
-                edge,
-                alpha=0.8,  # Lower transparency for edges to make them more visible
-                color=edge_color
-            )
-            
-    im = vis_mask.get_image()
+    im = create_labeled_visualization(group_ids, visual, image, label_mode=label_mode, anno_mode=anno_mode)
     
     return group_ids, im

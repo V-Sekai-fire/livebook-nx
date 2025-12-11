@@ -786,7 +786,8 @@ if auto_generate_mask:
             ids = [int(x.strip()) for x in group_set.split(',') if x.strip()]
             if ids:
                 merge_groups.append(ids)
-        print(f"Merge groups: {merge_groups}")
+        print(f"\n=== Merge Groups Provided ===")
+        print(f"Merge groups to apply after segmentation: {merge_groups}")
     
     # Get segmentation
     group_ids, vis_image = get_sam_mask(
@@ -805,7 +806,9 @@ if auto_generate_mask:
     
     # Save visualization with group numbers
     if vis_image is not None:
-        vis_path = Path(output_dir) / f"{img_name}_mask_segments_labeled.png"
+        # Use "merged" suffix if merge groups were applied, otherwise just "labeled"
+        suffix = "merged_labeled" if merge_groups else "labeled"
+        vis_path = Path(output_dir) / f"{img_name}_mask_segments_{suffix}.png"
         # Convert to PIL Image if it's a numpy array
         if isinstance(vis_image, np.ndarray):
             # Ensure it's uint8 and has the right shape
@@ -820,6 +823,10 @@ if auto_generate_mask:
                 vis_image = Image.fromarray(vis_image)
         vis_image.save(str(vis_path))
         print(f"[OK] Mask visualization with group numbers saved to: {vis_path}")
+    
+    # Also save the colored mask version (without labels) for comparison
+    from modules.label_2d_mask.label_parts import get_mask
+    get_mask(group_ids, image, ids="colored", img_name=img_name, save_dir=str(output_dir))
     
     # Show segment IDs
     unique_ids = np.unique(group_ids)
