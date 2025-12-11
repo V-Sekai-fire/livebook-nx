@@ -33,22 +33,40 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
         if i == 0:
             continue
         if save_video:
-            # Render Gaussian splat videos with photogrammetry quality
-            # Photogrammetry quality: 2048 resolution, SSAA=2 for anti-aliasing, 300 frames for smooth rotation
+            # Render radiance field videos (original OmniPart default)
+            if 'radiance_field' in outputs and i < len(outputs['radiance_field']):
+                print(f"[INFO] Rendering radiance field video for part {i}...")
+                try:
+                    video = render_utils.render_video(
+                        outputs['radiance_field'][i], 
+                        resolution=512,  # Original OmniPart default
+                        ssaa=1,  # Original OmniPart default
+                        num_frames=300
+                    )['color']
+                    rf_video_path = f"{output_dir}/part{i}_rf.mp4"
+                    if os.path.exists(rf_video_path):
+                        os.remove(rf_video_path)
+                    imageio.mimsave(rf_video_path, video, fps=30)
+                    print(f"[OK] Radiance field video saved: {rf_video_path}")
+                except Exception as e:
+                    print(f"[WARN] Failed to render radiance field video for part {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
+            # Render Gaussian splat videos (original OmniPart default)
             if 'gaussian' in outputs and i < len(outputs['gaussian']):
-                print(f"[INFO] Rendering Gaussian splat video for part {i} (photogrammetry quality: 2048px, SSAA=2)...")
+                print(f"[INFO] Rendering Gaussian splat video for part {i}...")
                 try:
                     video = render_utils.render_video(
                         outputs['gaussian'][i], 
-                        resolution=2048,  # Photogrammetry quality: 2048 (matches texture size)
-                        ssaa=2,  # Supersampling anti-aliasing for smooth edges
-                        num_frames=300  # Smooth rotation (300 frames)
+                        resolution=512,  # Original OmniPart default
+                        ssaa=1,  # Original OmniPart default for Gaussian
+                        num_frames=300
                     )['color']
                     gs_video_path = f"{output_dir}/part{i}_gs.mp4"
                     if os.path.exists(gs_video_path):
                         os.remove(gs_video_path)
                     imageio.mimsave(gs_video_path, video, fps=30)
-                    print(f"[OK] Gaussian splat video saved (photogrammetry quality): {gs_video_path}")
+                    print(f"[OK] Gaussian splat video saved: {gs_video_path}")
                 except Exception as e:
                     print(f"[WARN] Failed to render Gaussian splat video for part {i}: {e}")
                     import traceback

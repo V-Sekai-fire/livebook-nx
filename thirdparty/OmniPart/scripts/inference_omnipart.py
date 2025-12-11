@@ -160,9 +160,9 @@ if __name__ == "__main__":
         part_synthesis_output, 
         output_dir=output_dir, 
         simplify_ratio=args.simplify_ratio, 
-        save_video=False,  # Video creation disabled
-        save_glb=True,  # Enable GLB export
-        textured=False,  # Texture baking disabled
+        save_video=False,  # Video creation disabled (original default)
+        save_glb=True,  # Enable GLB export (original default)
+        textured=True,  # Enable texture baking (original default)
     )
     print("[DEBUG] save_parts_outputs completed")
     

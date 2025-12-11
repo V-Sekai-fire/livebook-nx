@@ -516,12 +516,10 @@ def bake_texture(
                 rast = utils3d.torch.rasterize_triangle_faces(
                     rastctx, vertices[None], faces, observation.shape[1], observation.shape[0], uv=uvs[None], view=view, projection=projection
                 )
-                # Flip Y to match texture convention (same as fast mode)
-                # Keep batch dimension for dr.texture which expects (B, H, W, 2)
-                uv_flipped = rast['uv'].detach().flip(1)  # Flip height dimension (dim 1) while keeping batch
-                uv_dr_flipped = rast['uv_dr'].detach().flip(1)
-                _uv.append(uv_flipped)
-                _uv_dr.append(uv_dr_flipped)  # Gradient information for differentiable rendering
+                # Do NOT flip UV maps in opt mode - only flip final texture output (matches original OmniPart)
+                # dr.texture expects (B, H, W, 2) shape with batch dimension
+                _uv.append(rast['uv'].detach())
+                _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
         # Use small random values instead of zeros to break symmetry and allow gradients to flow
@@ -710,7 +708,7 @@ def to_glb(
                 print(f"[DEBUG] After parametrize_mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces, {uvs.shape[0]} UVs")
 
             # Render multi-view images from the appearance representation for texturing
-            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=2048, nviews=120)
+            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=100)
             # Create masks from the rendered images
             masks = [np.any(observation > 0, axis=-1) for observation in observations]
             # Convert camera parameters to numpy
