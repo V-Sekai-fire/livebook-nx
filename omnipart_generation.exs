@@ -997,21 +997,18 @@ try:
     torch.manual_seed(seed)
     
     # Load part_synthesis model with half precision for memory efficiency
-    logger.info("Loading PartSynthesis model with half precision...")
+    # Load models (reduced verbosity)
     part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
     part_synthesis_pipeline.to(device)
     torch.cuda.empty_cache()
-    logger.info("PartSynthesis model loaded (half precision enabled)")
     
     # Load bbox_gen model
-    logger.info("Loading BboxGen model...")
     bbox_gen_config = OmegaConf.load("configs/bbox_gen.yaml").model.args
     bbox_gen_config.partfield_encoder_path = partfield_encoder_path
     bbox_gen_model = BboxGen(bbox_gen_config)
     bbox_gen_model.load_state_dict(torch.load(bbox_gen_ckpt), strict=False)
     bbox_gen_model.to(device)
     bbox_gen_model.eval().half()
-    logger.info("BboxGen model loaded")
     
     # Load image and mask
     img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(image_path, mask_path)
@@ -1021,41 +1018,35 @@ try:
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
-    logger.info("Generating voxel coordinates...")
+    # Generate voxel coordinates (reduced verbosity)
     voxel_coords = part_synthesis_pipeline.get_coords(img_black_bg, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
     voxel_coords_ply.export(os.path.join(inference_output_dir, "voxel_coords_vis.ply"))
-    logger.info("Voxel coordinates saved")
     # Clear cache after voxel coordinate generation
     torch.cuda.empty_cache()
     
-    # Generate bounding boxes
-    logger.info("Generating bounding boxes...")
+    # Generate bounding boxes (reduced verbosity)
     bbox_gen_input = prepare_bbox_gen_input(os.path.join(inference_output_dir, "voxel_coords.npy"), img_white_bg, ordered_mask_input)
     bbox_gen_output = bbox_gen_model.generate(bbox_gen_input)
     np.save(os.path.join(inference_output_dir, "bboxes.npy"), bbox_gen_output['bboxes'][0])
     bboxes_vis = gen_mesh_from_bounds(bbox_gen_output['bboxes'][0])
     bboxes_vis.export(os.path.join(inference_output_dir, "bboxes_vis.glb"))
-    logger.info("BboxGen output saved")
     
-    # Unload bbox_gen model to free GPU memory before SLAT sampling
-    logger.info("Unloading BboxGen model to free GPU memory...")
+    # Unload bbox_gen model to free GPU memory before SLAT sampling (reduced verbosity)
     del bbox_gen_model
     torch.cuda.empty_cache()
     import gc
     gc.collect()
-    logger.info("BboxGen model unloaded")
     
     # Prepare part synthesis input
     part_synthesis_input = prepare_part_synthesis_input(os.path.join(inference_output_dir, "voxel_coords.npy"), os.path.join(inference_output_dir, "bboxes.npy"), ordered_mask_input)
     
-    # Validate inputs
-    logger.info("Validating inputs...")
-    logger.debug(f"Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
-    logger.debug(f"Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
-    logger.debug(f"Masks shape: {part_synthesis_input['masks'].shape}")
+    # Validate inputs (reduced verbosity - debug only)
+    # logger.debug(f"Coords shape: {part_synthesis_input['coords'].shape if isinstance(part_synthesis_input['coords'], torch.Tensor) else len(part_synthesis_input['coords'])}")
+    # logger.debug(f"Part layouts: {len(part_synthesis_input['part_layouts'])} parts")
+    # logger.debug(f"Masks shape: {part_synthesis_input['masks'].shape}")
     
     # Sample SLAT with performance optimizations
     torch.backends.cudnn.enabled = True
@@ -1066,7 +1057,7 @@ try:
         torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=False, enable_mem_efficient=True)
     except:
         pass
-    logger.info("Sampling SLAT...")
+    # Sampling SLAT (reduced verbosity)
     torch.cuda.empty_cache()
     
     if isinstance(img_black_bg, torch.Tensor):
@@ -1082,7 +1073,6 @@ try:
         part_synthesis_input['masks'],
         sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
     )
-    logger.info("SLAT sampling completed")
     
     # Divide SLAT into parts
     divided_slat = part_synthesis_pipeline.divide_slat(slat, [part_synthesis_input['part_layouts']])
@@ -1092,15 +1082,12 @@ try:
     formats_to_generate = ['mesh', 'gaussian', 'radiance_field']
     
     for fmt in formats_to_generate:
-        print(f"[INFO] Decoding {fmt} format...")
         try:
             torch.cuda.empty_cache()
             fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
             if fmt in fmt_output:
                 part_synthesis_output[fmt] = fmt_output[fmt]
-                print(f"[OK] Successfully decoded {fmt} format")
-            else:
-                print(f"[WARN] {fmt} format not in output")
+            # Success messages removed to reduce verbosity
             # Clear cache after each format to free memory
             torch.cuda.empty_cache()
         except Exception as e:

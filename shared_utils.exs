@@ -633,9 +633,69 @@ defmodule SpanCollector do
         result
       rescue
         e ->
-          OpenTelemetry.Tracer.record_exception(e, [])
-          OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
-          raise e
+          # Handle SystemExit(0) as success, not error
+          case e do
+            %Pythonx.Error{type: type, value: value} ->
+              try do
+                type_name = Pythonx.call(type, :__name__, [])
+                if type_name == "SystemExit" do
+                  exit_code = try do
+                    Pythonx.call(value, :__int__, [])
+                  rescue
+                    _ ->
+                      # Try to get exit code from args
+                      try do
+                        args = Pythonx.call(value, :args, [])
+                        case args do
+                          [code] when is_integer(code) -> code
+                          _ -> 0
+                        end
+                      rescue
+                        _ -> 0
+                      end
+                  end
+                  
+                  if exit_code == 0 do
+                    # SystemExit(0) is success, not an error
+                    OpenTelemetry.Tracer.set_status(:ok)
+                    :ok
+                  else
+                    # Non-zero exit code is an error
+                    OpenTelemetry.Tracer.record_exception(e, [])
+                    OpenTelemetry.Tracer.set_status(:error, "SystemExit(#{exit_code})")
+                    raise e
+                  end
+                else
+                  # Other Python exceptions are errors
+                  OpenTelemetry.Tracer.record_exception(e, [])
+                  try do
+                    OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
+                  rescue
+                    _ -> OpenTelemetry.Tracer.set_status(:error, "Python exception: #{inspect(type_name)}")
+                  end
+                  raise e
+                end
+              rescue
+                _ ->
+                  # If we can't determine the exception type, treat as error
+                  OpenTelemetry.Tracer.record_exception(e, [])
+                  try do
+                    OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
+                  rescue
+                    _ -> OpenTelemetry.Tracer.set_status(:error, "Python exception")
+                  end
+                  raise e
+              end
+            _ ->
+              # Non-Pythonx exceptions
+              OpenTelemetry.Tracer.record_exception(e, [])
+              try do
+                OpenTelemetry.Tracer.set_status(:error, Exception.message(e))
+              rescue
+                _ -> OpenTelemetry.Tracer.set_status(:error, inspect(e))
+              end
+              raise e
+          end
       end
     end
   end

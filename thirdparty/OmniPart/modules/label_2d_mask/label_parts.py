@@ -217,6 +217,8 @@ def split_disconnected_parts(group_ids, size_threshold=None):
             next_id += 1
         else:  # Multiple disconnected components
             split_count = 0
+            skipped_count = 0
+            skipped_total_pixels = 0
             print(f"Part {part_id} has {num_labels-1} disconnected regions, splitting...")
             
             # For each connected component (skipping background label 0)
@@ -230,7 +232,11 @@ def split_disconnected_parts(group_ids, size_threshold=None):
                     split_count += 1
                     next_id += 1
                 else:
-                    print(f"  Skipping small disconnected region ({region_size} pixels)")
+                    skipped_count += 1
+                    skipped_total_pixels += region_size
+            
+            if skipped_count > 0:
+                print(f"  Skipped {skipped_count} small disconnected region(s) ({skipped_total_pixels} total pixels)")
             
             total_split_regions += split_count
             
@@ -286,9 +292,11 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
                 background_mask = rgba_array[:, :, 3] <= 10  # Areas with very low alpha are background
 
         # First pass: assign original group IDs
+        skipped_small = 0
+        skipped_background = 0
         for i in range(0, num_masks):
             if area_sorted_masks[i]["area"] < size_threshold:
-                print(f"Skipping mask {i}, area too small: {area_sorted_masks[i]['area']} < {size_threshold}")
+                skipped_small += 1
                 continue
             
             mask = area_sorted_masks[i]["segmentation"]
@@ -302,13 +310,17 @@ def get_sam_mask(image, mask_generator, visual, merge_groups=None, existing_grou
                 
                 # Skip mask if background proportion is too high (>10%)
                 if background_ratio > 0.1:
-                    print(f"  Skipping mask {i}, background ratio: {background_ratio:.2f}")
+                    skipped_background += 1
                     continue
             
             # Assign group ID to this mask's pixels
             group_ids[mask] = group_counter
-            print(f"Assigned mask {i} with area {area_sorted_masks[i]['area']} to group {group_counter}")
             group_counter += 1
+        
+        if skipped_small > 0:
+            print(f"Skipped {skipped_small} mask(s) with area < {size_threshold}")
+        if skipped_background > 0:
+            print(f"Skipped {skipped_background} mask(s) with high background ratio")
         
         # Split disconnected parts immediately after SAM segmentation
         print("Splitting disconnected parts in initial segmentation...")
