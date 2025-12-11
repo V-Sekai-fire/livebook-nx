@@ -426,6 +426,27 @@ defmodule OtelJsonExporter do
       %{state | logs: [log_entry | state.logs]}
     end)
   end
+
+  def add_python_log(level, message, metadata \\ [], trace_context \\ nil) do
+    log_entry = %{
+      timestamp: System.monotonic_time(:millisecond),
+      level: level,
+      message: message,
+      metadata: convert_metadata(metadata),
+      source: "python",
+      trace_context: trace_context
+    }
+    
+    Agent.update(__MODULE__, fn state ->
+      %{state | logs: [log_entry | state.logs]}
+    end)
+  end
+
+  def add_python_span(span_data) do
+    Agent.update(__MODULE__, fn state ->
+      %{state | spans: [span_data | state.spans]}
+    end)
+  end
   
   # OpenTelemetry exporter callback
   def export(traces, _opts) when is_list(traces) do
@@ -487,11 +508,15 @@ defmodule OtelJsonExporter do
   
   defp convert_metadata(metadata) when is_list(metadata) do
     Enum.map(metadata, fn
-      {key, value} -> {inspect(key), convert_value(value)}
+      {key, value} -> {convert_key(key), convert_value(value)}
       other -> inspect(other)
     end)
   end
   defp convert_metadata(metadata), do: inspect(metadata)
+  
+  defp convert_key(key) when is_atom(key), do: Atom.to_string(key)
+  defp convert_key(key) when is_binary(key), do: key
+  defp convert_key(key), do: inspect(key)
   
   defp collect_spans_from_trace(trace) do
     # Extract spans from trace - structure depends on OpenTelemetry SDK
@@ -706,6 +731,48 @@ defmodule SpanCollector do
 
   def add_span_attribute(key, value) do
     OpenTelemetry.Tracer.set_attribute(key, value)
+  end
+
+  def get_trace_context do
+    # Get current trace context for propagation to Python
+    # Returns TRACEPARENT format string for W3C trace context propagation
+    try do
+      # Get current span context
+      span_ctx = OpenTelemetry.Tracer.current_span_ctx()
+      
+      if span_ctx do
+        # Extract trace_id and span_id from span context
+        # OpenTelemetry span context is a tuple/record with trace_id and span_id
+        # Try to extract using pattern matching or element access
+        trace_id = try do
+          :erlang.element(2, span_ctx)  # trace_id is typically at position 2
+        rescue
+          _ -> nil
+        end
+        
+        span_id = try do
+          :erlang.element(3, span_ctx)  # span_id is typically at position 3
+        rescue
+          _ -> nil
+        end
+        
+        if trace_id && span_id do
+          # Format as TRACEPARENT (version-trace_id-span_id-trace_flags)
+          # version = 00, trace_id = 32 hex chars, span_id = 16 hex chars, trace_flags = 2 hex chars
+          trace_id_hex = trace_id |> Integer.to_string(16) |> String.pad_leading(32, "0")
+          span_id_hex = span_id |> Integer.to_string(16) |> String.pad_leading(16, "0")
+          trace_flags_hex = "01"  # Default: sampled
+          
+          "00-#{trace_id_hex}-#{span_id_hex}-#{trace_flags_hex}"
+        else
+          nil
+        end
+      else
+        nil
+      end
+    rescue
+      _ -> nil
+    end
   end
 
   def record_metric(_name, _value, _unit \\ nil) do

@@ -111,6 +111,9 @@ dependencies = [
   "plyfile",
   "psutil",
   "transparent-background>=1.3.4",  # Free open-source background removal using InSPyReNet (ACCV 2022)
+  "opentelemetry-api>=1.20.0",
+  "opentelemetry-sdk>=1.20.0",
+  "opentelemetry-instrumentation-logging>=0.42b0",
   "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
   "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
@@ -545,6 +548,13 @@ end)
 # Process using OmniPart
 SpanCollector.track_span("omnipart.generation", fn ->
 try do
+  # Get trace context for propagation to Python
+  trace_context = SpanCollector.get_trace_context()
+  
+  # Set OTEL_LOG_DIR for Python to write logs/spans
+  log_dir = System.get_env("TMPDIR", System.get_env("TMP", "/tmp"))
+  System.put_env("OTEL_LOG_DIR", log_dir)
+  
   # Use spawn to run Python in separate process to avoid GIL issues
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -552,19 +562,139 @@ import sys
 import os
 from pathlib import Path
 import shutil
+import time
 
 # Enable OpenEXR support in OpenCV (required for .exr file writing)
 os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 
-# Setup Python logging with proper levels
-# Note: Python logs are separate from OpenTelemetry and will appear in stdout/stderr
-# Elixir-side logging uses OpenTelemetry via OtelLogger/Logger modules
-import logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s: %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Setup Python OpenTelemetry with trace context propagation
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.sdk.resources import Resource
+    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+    from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    import logging
+    
+    # Get trace context from Elixir (passed via environment or Pythonx context)
+    trace_context_str = """ <> (if trace_context, do: "\"#{trace_context}\"", else: "None") <> """
+    
+    # Initialize OpenTelemetry SDK
+    resource = Resource.create({"service.name": "omnipart-generation", "service.version": "1.0.0"})
+    tracer_provider = TracerProvider(resource=resource)
+    
+    # Create custom exporter that writes to shared file for Elixir to read
+    class ElixirOtelExporter:
+        def __init__(self, log_file_path):
+            self.log_file_path = log_file_path
+            self.span_file_path = log_file_path.replace('.log', '.spans.jsonl')
+            # Ensure directories exist
+            Path(self.log_file_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(self.span_file_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        def export(self, spans):
+            # Write spans to JSONL file for Elixir to read
+            try:
+                with open(self.span_file_path, 'a') as f:
+                    for span in spans:
+                        span_data = {
+                            'name': span.name,
+                            'trace_id': format(span.context.trace_id, '032x'),
+                            'span_id': format(span.context.span_id, '016x'),
+                            'parent_span_id': format(span.parent.span_id, '016x') if span.parent else None,
+                            'start_time': span.start_time,
+                            'end_time': span.end_time,
+                            'duration_ns': span.end_time - span.start_time if span.end_time and span.start_time else None,
+                            'attributes': dict(span.attributes) if span.attributes else {},
+                            'status': {'status_code': span.status.status_code.name if span.status else None},
+                            'events': [{'name': e.name, 'timestamp': e.timestamp, 'attributes': dict(e.attributes)} for e in (span.events or [])]
+                        }
+                        f.write(json.dumps(span_data) + '\n')
+            except Exception as e:
+                pass  # Silently fail to avoid breaking execution
+        
+        def shutdown(self):
+            pass
+    
+    # Set up exporter
+    log_dir = Path(os.environ.get('OTEL_LOG_DIR', '/tmp'))
+    exporter = ElixirOtelExporter(str(log_dir / 'python_otel.log'))
+    span_processor = BatchSpanProcessor(exporter)
+    tracer_provider.add_span_processor(span_processor)
+    
+    # Set global tracer provider
+    trace.set_tracer_provider(tracer_provider)
+    
+    # Propagate trace context from Elixir if available
+    if trace_context_str and trace_context_str != "None":
+        try:
+            propagator = TraceContextTextMapPropagator()
+            carrier = {'traceparent': trace_context_str}
+            context = propagator.extract(carrier)
+            trace.set_tracer(__name__).start_as_current_span("python.omnipart", context=context)
+        except Exception:
+            pass  # If propagation fails, continue without it
+    
+    # Instrument logging to send logs to OpenTelemetry
+    LoggingInstrumentor().instrument(set_logging_format=True)
+    
+    # Setup Python logging with OpenTelemetry integration
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    
+    # Also create a custom handler that writes logs to file for Elixir
+    class ElixirLogHandler(logging.Handler):
+        def __init__(self, log_file_path):
+            super().__init__()
+            self.log_file_path = log_file_path
+            Path(self.log_file_path).parent.mkdir(parents=True, exist_ok=True)
+        
+        def emit(self, record):
+            try:
+                log_entry = {
+                    'timestamp': int(time.time() * 1000),
+                    'level': record.levelname.lower(),
+                    'message': self.format(record),
+                    'metadata': {
+                        'module': record.module,
+                        'funcName': record.funcName,
+                        'lineno': record.lineno
+                    }
+                }
+                with open(self.log_file_path, 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
+            except Exception:
+                pass  # Silently fail
+    
+    elixir_handler = ElixirLogHandler(str(log_dir / 'python_otel.log'))
+    elixir_handler.setLevel(logging.INFO)
+    logger.addHandler(elixir_handler)
+    
+    # Set OTEL_LOG_DIR for Python to know where to write
+    os.environ['OTEL_LOG_DIR'] = str(log_dir)
+    
+except ImportError:
+    # If OpenTelemetry not available, fall back to basic logging
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    logger.warning("OpenTelemetry packages not available, using basic logging")
+except Exception as e:
+    # If OpenTelemetry setup fails, fall back to basic logging
+    import logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(levelname)s: %(message)s'
+    )
+    logger = logging.getLogger(__name__)
+    logger.warning(f"OpenTelemetry setup failed: {e}, using basic logging")
 
 # Verify torch is available
 try:
@@ -1830,6 +1960,60 @@ end
 # Track completion as span attribute
 SpanCollector.add_span_attribute("status", "completed")
 end)
+
+# Read Python OpenTelemetry logs and spans from file
+try do
+  log_dir = System.get_env("OTEL_LOG_DIR", "/tmp")
+  python_log_file = Path.join(log_dir, "python_otel.log")
+  python_spans_file = Path.join(log_dir, "python_otel.spans.jsonl")
+  
+  # Read Python logs
+  if File.exists?(python_log_file) do
+    case File.read(python_log_file) do
+      {:ok, content} ->
+        content
+        |> String.split("\n")
+        |> Enum.filter(&(&1 != ""))
+        |> Enum.each(fn line ->
+          case Jason.decode(line) do
+            {:ok, log_data} ->
+              OtelJsonExporter.add_python_log(
+                String.to_atom(log_data["level"] || "info"),
+                log_data["message"] || "",
+                log_data["metadata"] || [],
+                log_data["trace_context"]
+              )
+            {:error, _} -> :ok
+          end
+        end)
+      {:error, _} -> :ok
+    end
+  end
+  
+  # Read Python spans
+  if File.exists?(python_spans_file) do
+    case File.read(python_spans_file) do
+      {:ok, content} ->
+        content
+        |> String.split("\n")
+        |> Enum.filter(&(&1 != ""))
+        |> Enum.each(fn line ->
+          case Jason.decode(line) do
+            {:ok, span_data} ->
+              OtelJsonExporter.add_python_span(span_data)
+            {:error, _} -> :ok
+          end
+        end)
+      {:error, _} -> :ok
+    end
+  end
+rescue
+  e ->
+    OtelLogger.warn("Failed to read Python OpenTelemetry data", [
+      {"error.type", "python_otel_read"},
+      {"error.message", inspect(e)}
+    ])
+end
 
 # Export spans and metrics as JSON
 # Wrap in try-catch to ensure logs are displayed even if there's a crash
