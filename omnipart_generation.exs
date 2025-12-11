@@ -59,6 +59,7 @@ name = "omnipart-generation"
 version = "0.0.0"
 requires-python = "==3.10.*"
 dependencies = [
+  "fast_simplification",
   "torch==2.4.0",
   "torchvision==0.19.0",
   "pillow==10.4.0",
@@ -106,6 +107,7 @@ dependencies = [
   "diff_gaussian_rasterization @ https://huggingface.co/spaces/JeffreyXiang/TRELLIS/resolve/main/wheels/diff_gaussian_rasterization-0.0.0-cp310-cp310-linux_x86_64.whl?download=true",
   "pytorch3d @ https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.9/pytorch3d-0.7.9+pt2.4.0cu121-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "pytorch3d @ https://github.com/MiroPsota/torch_packages_builder/releases/download/pytorch3d-0.7.9/pytorch3d-0.7.9+pt2.4.0cu121-cp310-cp310-win_amd64.whl ; sys_platform == 'win32'",
+  "nvdiffrast @ https://huggingface.co/spaces/JeffreyXiang/TRELLIS/resolve/main/wheels/nvdiffrast-0.3.3-cp310-cp310-linux_x86_64.whl",
 ]
 
 [tool.uv.sources]
