@@ -802,6 +802,26 @@ with open(output_config_path, 'w') as f:
     json.dump(config_dict, f, indent=2)
 print(f"[OK] Input config saved to: {output_config_path}")
 
+# Copy input images to output directory for self-contained output
+import shutil
+for image_path in image_paths:
+    src_path = Path(image_path)
+    if src_path.exists():
+        dst_path = Path(output_dir) / src_path.name
+        shutil.copy2(src_path, dst_path)
+        print(f"[OK] Copied input image to: {dst_path}")
+    else:
+        print(f"[WARN] Input image not found, skipping copy: {image_path}")
+
+# Copy mask files if they exist
+for mask_path in mask_paths:
+    if mask_path:
+        src_path = Path(mask_path)
+        if src_path.exists():
+            dst_path = Path(output_dir) / src_path.name
+            shutil.copy2(src_path, dst_path)
+            print(f"[OK] Copied input mask to: {dst_path}")
+
 # Process each image separately for segmentation
 processed_images = []
 processed_masks = []
