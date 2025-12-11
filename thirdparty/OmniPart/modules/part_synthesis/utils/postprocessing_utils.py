@@ -146,6 +146,9 @@ def _fill_holes(
     
     # Prepare for mincut-based mesh cleaning
     ## Construct edge data structures
+    # Ensure faces are int32 for utils3d operations (compute_edges expects int32)
+    if faces.dtype != torch.int32:
+        faces = faces.int()
     edges, face2edge, edge_degrees = utils3d.torch.compute_edges(faces)
     boundary_edge_indices = torch.nonzero(edge_degrees == 1).reshape(-1)
     connected_components = utils3d.torch.compute_connected_components(faces, edges, face2edge)
@@ -230,7 +233,11 @@ def _fill_holes(
         cc_new_boundary_edge_indices = cc_boundary_edge_indices[~torch.isin(cc_boundary_edge_indices, boundary_edge_indices)]
         if len(cc_new_boundary_edge_indices) > 0:
             # Group boundary edges into connected components
-            cc_new_boundary_edge_cc = utils3d.torch.compute_edge_connected_components(edges[cc_new_boundary_edge_indices])
+            # Ensure edges are int32 for utils3d operations
+            cc_new_boundary_edges = edges[cc_new_boundary_edge_indices]
+            if cc_new_boundary_edges.dtype != torch.int32:
+                cc_new_boundary_edges = cc_new_boundary_edges.int()
+            cc_new_boundary_edge_cc = utils3d.torch.compute_edge_connected_components(cc_new_boundary_edges)
             # Calculate the center of each boundary loop - ensure float32
             cc_new_boundary_edges_cc_center = [verts[edges[cc_new_boundary_edge_indices[edge_cc]]].mean(dim=1).mean(dim=0).float() for edge_cc in cc_new_boundary_edge_cc]
             cc_new_boundary_edges_cc_area = []
