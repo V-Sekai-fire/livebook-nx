@@ -97,9 +97,12 @@ def _fill_holes(
         pitchs.append(p)
     yaws = torch.tensor(yaws, dtype=torch.float32).cuda()
     pitchs = torch.tensor(pitchs, dtype=torch.float32).cuda()
-    radius = 2.0  # Camera distance from origin
-    fov = torch.deg2rad(torch.tensor(40, dtype=torch.float32)).cuda()  # Camera field of view
+    radius = torch.tensor(2.0, dtype=torch.float32, device=verts.device)  # Camera distance from origin
+    fov = torch.deg2rad(torch.tensor(40, dtype=torch.float32, device=verts.device))  # Camera field of view
     projection = utils3d.torch.perspective_from_fov_xy(fov, fov, 1, 3)  # Create projection matrix
+    # Ensure projection is float32
+    if projection.dtype != torch.float32:
+        projection = projection.float()
     views = []
     for (yaw, pitch) in zip(yaws, pitchs):
         # Calculate camera position from spherical coordinates
@@ -107,11 +110,17 @@ def _fill_holes(
             torch.sin(yaw) * torch.cos(pitch),
             torch.cos(yaw) * torch.cos(pitch),
             torch.sin(pitch),
-        ], dtype=torch.float32).cuda() * radius
+        ], dtype=torch.float32, device=verts.device) * radius
         # Create view matrix looking at origin
-        view = utils3d.torch.view_look_at(orig, torch.tensor([0, 0, 0], dtype=torch.float32).cuda(), torch.tensor([0, 0, 1], dtype=torch.float32).cuda())
+        view = utils3d.torch.view_look_at(orig, torch.tensor([0, 0, 0], dtype=torch.float32, device=verts.device), torch.tensor([0, 0, 1], dtype=torch.float32, device=verts.device))
+        # Ensure view is float32
+        if view.dtype != torch.float32:
+            view = view.float()
         views.append(view)
     views = torch.stack(views, dim=0)
+    # Ensure views stack is float32
+    if views.dtype != torch.float32:
+        views = views.float()
 
     # Rasterize mesh from multiple viewpoints to determine visible faces
     visblity = torch.zeros(faces.shape[0], dtype=torch.int32, device=verts.device)
