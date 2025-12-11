@@ -248,8 +248,8 @@ defmodule ArgsParser do
     auto_generate_mask = !mask_path || !File.exists?(mask_path)
     if mask_path && !File.exists?(mask_path) do
       # Track as span attribute instead of log
-      OpenTelemetry.Tracer.set_attribute("mask.auto_generate", true)
-      OpenTelemetry.Tracer.set_attribute("mask.path", mask_path)
+      SpanCollector.add_span_attribute("mask.auto_generate", true)
+      SpanCollector.add_span_attribute("mask.path", mask_path)
       ^mask_path = nil
       ^auto_generate_mask = true
     end
@@ -314,8 +314,7 @@ config_with_paths = Map.merge(config, %{
 {config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "omnipart_config")
 
 # Download checkpoints using Elixir downloader
-require OpenTelemetry.Tracer
-OpenTelemetry.Tracer.with_span "omnipart.download_weights" do
+SpanCollector.track_span("omnipart.download_weights", fn ->
   checkpoint_dir = config_with_paths.checkpoint_dir
   File.mkdir_p!(checkpoint_dir)
   
@@ -323,26 +322,26 @@ OpenTelemetry.Tracer.with_span "omnipart.download_weights" do
   omnipart_modules_dir = Path.join([checkpoint_dir, "..", "OmniPart_modules"])
   case HuggingFaceDownloader.download_repo("omnipart/OmniPart_modules", omnipart_modules_dir, "OmniPart Modules", true) do
     {:ok, _} ->
-      OpenTelemetry.Tracer.set_attribute("download.status", "success")
+      SpanCollector.add_span_attribute("download.status", "success")
       # Move SAM checkpoint to checkpoint_dir if needed
       sam_ckpt_src = Path.join([omnipart_modules_dir, "sam_vit_h_4b8939.pth"])
       sam_ckpt_dst = Path.join([checkpoint_dir, "sam_vit_h_4b8939.pth"])
       if File.exists?(sam_ckpt_src) and not File.exists?(sam_ckpt_dst) do
         File.cp!(sam_ckpt_src, sam_ckpt_dst)
-        OpenTelemetry.Tracer.set_attribute("sam_checkpoint.copied", true)
+        SpanCollector.add_span_attribute("sam_checkpoint.copied", true)
       end
     {:error, reason} ->
-      OpenTelemetry.Tracer.set_attribute("download.status", "error")
-      OpenTelemetry.Tracer.set_attribute("download.error", inspect(reason))
+      SpanCollector.add_span_attribute("download.status", "error")
+      SpanCollector.add_span_attribute("download.error", inspect(reason))
       # Only log errors - metrics will show the status
       OtelLogger.error("OmniPart modules download failed", [{"error", inspect(reason)}])
   end
   
-  OpenTelemetry.Tracer.set_attribute("checkpoint.dir", checkpoint_dir)
-end
+  SpanCollector.add_span_attribute("checkpoint.dir", checkpoint_dir)
+end)
 
 # Process using OmniPart
-OpenTelemetry.Tracer.with_span "omnipart.generation" do
+SpanCollector.track_span("omnipart.generation", fn ->
 try do
   {_, _python_globals} = Pythonx.eval(~S"""
 import json
@@ -1208,9 +1207,8 @@ after
 end
 
 # Track completion as span attribute
-OpenTelemetry.Tracer.set_attribute("status", "completed")
-OpenTelemetry.Tracer.set_status(:ok)
-end
+SpanCollector.add_span_attribute("status", "completed")
+end)
 
 # Export spans and metrics as JSON
 SpanCollector.display_trace()

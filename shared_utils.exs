@@ -329,7 +329,7 @@ defmodule OtelSetup do
     case Logger.add_backend(OtelLogHandler) do
       {:ok, _} -> :ok
       {:error, :already_exists} -> :ok  # Already added, that's fine
-      error -> 
+      _error -> 
         # Fallback: try the :logger API
         try do
           :logger.add_handler(:otel_json_handler, OtelLogHandler, %{
@@ -353,7 +353,7 @@ defmodule OtelLogHandler do
     {:ok, %{}}
   end
   
-  def handle_event({level, _gl, {Logger, msg, ts, md}}, state) do
+  def handle_event({level, _gl, {Logger, msg, _ts, md}}, state) do
     # Extract log message and metadata
     message = format_message(msg, md)
     metadata = extract_metadata(md)
@@ -368,7 +368,7 @@ defmodule OtelLogHandler do
     {:ok, state}
   end
   
-  def handle_call({:configure, opts}, state) do
+  def handle_call({:configure, _opts}, state) do
     {:ok, :ok, state}
   end
   
@@ -543,11 +543,11 @@ defmodule OtelJsonExporter do
           # Generic tuple extraction
           %{
             name: inspect(:erlang.element(2, tuple)),
-            trace_id: format_id(try(do: :erlang.element(3, tuple), rescue: _ -> nil)),
-            span_id: format_id(try(do: :erlang.element(4, tuple), rescue: _ -> nil)),
-            start_time: try(do: :erlang.element(5, tuple), rescue: _ -> nil),
-            end_time: try(do: :erlang.element(6, tuple), rescue: _ -> nil),
-            attributes: try(do: convert_attributes(:erlang.element(7, tuple)), rescue: _ -> []),
+            trace_id: format_id(safe_element(tuple, 3)),
+            span_id: format_id(safe_element(tuple, 4)),
+            start_time: safe_element(tuple, 5),
+            end_time: safe_element(tuple, 6),
+            attributes: safe_convert_attributes(tuple, 7),
             raw: inspect(tuple, limit: 200)
           }
         _ ->
@@ -595,6 +595,22 @@ defmodule OtelJsonExporter do
   end
   defp format_id(nil), do: nil
   defp format_id(id), do: inspect(id)
+  
+  defp safe_element(tuple, index) do
+    try do
+      :erlang.element(index, tuple)
+    rescue
+      _ -> nil
+    end
+  end
+  
+  defp safe_convert_attributes(tuple, index) do
+    try do
+      convert_attributes(:erlang.element(index, tuple))
+    rescue
+      _ -> []
+    end
+  end
 end
 
 defmodule SpanCollector do
@@ -628,7 +644,7 @@ defmodule SpanCollector do
     OpenTelemetry.Tracer.set_attribute(key, value)
   end
 
-  def record_metric(name, value, unit \\ nil) do
+  def record_metric(_name, _value, _unit \\ nil) do
     # Use OpenTelemetry Metrics API when available
     # For now, we'll need to use a metrics exporter or custom collection
     # This is a placeholder - proper implementation would use OpenTelemetry.Metrics
@@ -682,60 +698,4 @@ defmodule OtelLogger do
   def ok(message, attrs \\ []) do
     Logger.info(message, Keyword.merge([severity: "ok"], to_keyword_list(attrs)))
   end
-end
-
-defmodule OtelLogHandler do
-  @moduledoc """
-  Logger backend that captures logs and sends them to OtelJsonExporter.
-  Uses the modern Logger backend API.
-  """
-  @behaviour :gen_event
-  
-  def init(_args) do
-    {:ok, %{}}
-  end
-  
-  def handle_event({level, _gl, {Logger, msg, ts, md}}, state) do
-    # Extract log message and metadata
-    message = format_message(msg, md)
-    metadata = extract_metadata(md)
-    
-    # Send to OtelJsonExporter
-    OtelJsonExporter.add_log(level, message, metadata)
-    
-    {:ok, state}
-  end
-  
-  def handle_event(_event, state) do
-    {:ok, state}
-  end
-  
-  def handle_call({:configure, opts}, state) do
-    {:ok, :ok, state}
-  end
-  
-  def handle_info(_msg, state) do
-    {:ok, state}
-  end
-  
-  def code_change(_old_vsn, state, _extra) do
-    {:ok, state}
-  end
-  
-  def terminate(_reason, _state) do
-    :ok
-  end
-  
-  defp format_message(msg, _md) when is_binary(msg), do: msg
-  defp format_message({:string, chardata}, _md), do: IO.chardata_to_string(chardata)
-  defp format_message({:report, report}, _md) when is_map(report), do: inspect(report)
-  defp format_message(other, _md), do: inspect(other)
-  
-  defp extract_metadata(md) when is_list(md) do
-    Enum.map(md, fn
-      {key, value} -> {key, value}
-      other -> other
-    end)
-  end
-  defp extract_metadata(md), do: md
 end
