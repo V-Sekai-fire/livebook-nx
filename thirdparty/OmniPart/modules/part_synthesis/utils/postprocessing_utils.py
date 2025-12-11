@@ -505,9 +505,10 @@ def bake_texture(
             raise ImportError("nvdiffrast is required for optimization-based texture baking. Please install nvdiffrast.")
         
         rastctx = utils3d.torch.RastContext(backend='cuda')
-        # Do NOT flip observations - texture will be flipped at the end to match convention
-        # observations = [obs.flip(0) for obs in observations]  # Flip Y for rendering
-        # masks = [m.flip(0) for m in masks]
+        # Flip observations vertically to match rendering coordinate system (matches original OmniPart)
+        # Observations are torch tensors at this point (converted from numpy in bake_texture)
+        observations = [obs.flip(0) for obs in observations]  # Flip Y for rendering
+        masks = [m.flip(0) for m in masks]
         
         # Precompute UV maps for efficiency
         _uv = []
@@ -542,7 +543,8 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        total_steps = 2500
+        # Reduced from 2500 to 500 for faster texture baking (can be increased for higher quality)
+        total_steps = 500
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
             if verbose and len(_uv) > 0:
@@ -709,7 +711,8 @@ def to_glb(
                 print(f"[DEBUG] After parametrize_mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces, {uvs.shape[0]} UVs")
 
             # Render multi-view images from the appearance representation for texturing
-            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=100)
+            # Reduced from 100 to 30 views for faster texture baking (can be increased for higher quality)
+            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=1024, nviews=30)
             # Create masks from the rendered images
             masks = [np.any(observation > 0, axis=-1) for observation in observations]
             # Convert camera parameters to numpy
