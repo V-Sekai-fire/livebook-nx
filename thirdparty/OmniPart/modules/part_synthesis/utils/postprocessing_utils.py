@@ -607,8 +607,8 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        # Reduced from 2500 to 500 for faster texture baking (can be increased for higher quality)
-        total_steps = 500
+        # Reduced from 500 to 250 for memory efficiency (can be increased for higher quality)
+        total_steps = 250
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
             if verbose and len(_uv) > 0:
@@ -644,6 +644,10 @@ def bake_texture(
                 optimizer.param_groups[0]['lr'] = cosine_anealing(optimizer, step, total_steps, 1e-2, 1e-5)
                 pbar.set_postfix({'loss': loss.item()})
                 pbar.update()
+                
+                # Clear memory periodically to prevent OOM
+                if (step + 1) % 50 == 0:
+                    torch.cuda.empty_cache()
         
         if srgb_space:
             # convert the texture from rgb space to srgb 
@@ -785,7 +789,23 @@ def to_glb(
             
             # Bake texture from the rendered views onto the mesh
             # Use vertices as-is (no normalization) - mesh and Gaussian should already be in same coordinate system
+            # Reduce texture size if GPU memory is low to prevent OOM
             try:
+                import torch
+                if torch.cuda.is_available():
+                    # Check available GPU memory
+                    free_memory = torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)
+                    free_memory_gb = free_memory / (1024**3)
+                    # If less than 5GB free, reduce texture size
+                    if free_memory_gb < 5.0 and texture_size > 1024:
+                        if verbose:
+                            print(f"[INFO] Low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 1024")
+                        texture_size = 1024
+                    elif free_memory_gb < 2.0 and texture_size > 512:
+                        if verbose:
+                            print(f"[INFO] Very low GPU memory ({free_memory_gb:.2f} GB free), reducing texture size from {texture_size} to 512")
+                        texture_size = 512
+                
                 texture = bake_texture(
                     vertices, faces, uvs,
                     observations, masks, extrinsics, intrinsics,
