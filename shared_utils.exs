@@ -507,16 +507,25 @@ defmodule OtelJsonExporter do
   end
   
   defp convert_metadata(metadata) when is_list(metadata) do
-    Enum.map(metadata, fn
+    # Convert list of tuples to a map for JSON encoding
+    metadata
+    |> Enum.map(fn
       {key, value} -> {convert_key(key), convert_value(value)}
-      other -> inspect(other)
+      other -> {"_other", inspect(other)}
     end)
+    |> Enum.into(%{})
   end
-  defp convert_metadata(metadata), do: inspect(metadata)
+  defp convert_metadata(metadata) when is_map(metadata) do
+    # Convert map keys and values to JSON-encodable format
+    metadata
+    |> Enum.map(fn {key, value} -> {convert_key(key), convert_value(value)} end)
+    |> Enum.into(%{})
+  end
+  defp convert_metadata(metadata), do: %{"_raw" => inspect(metadata)}
   
   defp convert_key(key) when is_atom(key), do: Atom.to_string(key)
   defp convert_key(key) when is_binary(key), do: key
-  defp convert_key(key), do: inspect(key)
+  defp convert_key(key), do: to_string(key)
   
   defp collect_spans_from_trace(trace) do
     # Extract spans from trace - structure depends on OpenTelemetry SDK
@@ -597,22 +606,45 @@ defmodule OtelJsonExporter do
   end
   
   defp convert_attributes(attrs) when is_list(attrs) do
-    Enum.map(attrs, fn
-      {key, value} -> {inspect(key), convert_value(value)}
-      other -> inspect(other)
+    # Convert list of tuples to a map for JSON encoding
+    attrs
+    |> Enum.map(fn
+      {key, value} -> {convert_key(key), convert_value(value)}
+      other -> {"_other", inspect(other)}
     end)
+    |> Enum.into(%{})
   end
-  defp convert_attributes(attrs), do: inspect(attrs)
+  defp convert_attributes(attrs) when is_map(attrs) do
+    # Convert map keys and values to JSON-encodable format
+    attrs
+    |> Enum.map(fn {key, value} -> {convert_key(key), convert_value(value)} end)
+    |> Enum.into(%{})
+  end
+  defp convert_attributes(attrs), do: %{"_raw" => inspect(attrs)}
   
   defp convert_events(events) when is_list(events) do
     Enum.map(events, &inspect/1)
   end
   defp convert_events(events), do: inspect(events)
   
-  defp convert_value(value) when is_atom(value), do: inspect(value)
+  defp convert_value(value) when is_atom(value), do: Atom.to_string(value)
   defp convert_value(value) when is_binary(value), do: value
   defp convert_value(value) when is_number(value), do: value
   defp convert_value(value) when is_boolean(value), do: value
+  defp convert_value(value) when is_list(value) do
+    # Recursively convert list items
+    Enum.map(value, &convert_value/1)
+  end
+  defp convert_value(value) when is_map(value) do
+    # Recursively convert map keys and values
+    value
+    |> Enum.map(fn {k, v} -> {convert_key(k), convert_value(v)} end)
+    |> Enum.into(%{})
+  end
+  defp convert_value(value) when is_tuple(value) do
+    # Convert tuple to list for JSON encoding
+    value |> Tuple.to_list() |> Enum.map(&convert_value/1)
+  end
   defp convert_value(value), do: inspect(value, limit: 100)
   
   defp format_id(id) when is_integer(id) do
