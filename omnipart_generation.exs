@@ -473,7 +473,9 @@ if length(config_with_paths.image_paths) > 1 do
 end
 
 # Save config to JSON for Python to read
+IO.puts("[DEBUG] Creating config file...")
 {config_file, config_file_normalized} = ConfigFile.create(config_with_paths, "omnipart_config")
+IO.puts("[DEBUG] Config file created: #{config_file_normalized}")
 
 # Debug: Verify config was written correctly
 case File.read(config_file) do
@@ -520,15 +522,20 @@ SpanCollector.track_span("omnipart.download_weights", fn ->
 end)
 
 # Process using OmniPart
+IO.puts("[DEBUG] Starting OmniPart generation span...")
 SpanCollector.track_span("omnipart.generation", fn ->
 try do
+  IO.puts("[DEBUG] Inside try block, setting up Python execution...")
   # Set OTEL_LOG_DIR for Python to write logs/spans
   log_dir = System.get_env("TMPDIR", System.get_env("TMP", "/tmp"))
   System.put_env("OTEL_LOG_DIR", log_dir)
+  IO.puts("[DEBUG] OTEL_LOG_DIR set to: #{log_dir}")
   
   # Use spawn to run Python in separate process to avoid GIL issues
   # Build Python code string using iodata (list of strings) - no concatenation, no interpolation
+  IO.puts("[DEBUG] Building Python code string...")
   config_file_code = ConfigFile.python_path_string(config_file_normalized)
+  IO.puts("[DEBUG] Config file code generated, length: #{String.length(config_file_code)}")
   
   python_code_iodata = [
     ~S"""
@@ -732,10 +739,11 @@ if len(image_paths) == 0 and config.get('image_path'):
             merge_groups_list = merge_groups_str
 
 # Debug: Verify images were read correctly
-print(f"[DEBUG] Read {len(image_paths)} image(s) from config")
+print(f"[DEBUG] Read {len(image_paths)} image(s) from config", flush=True)
 if len(image_paths) > 1:
-    print(f"[DEBUG] Image paths: {[Path(p).name for p in image_paths]}")
-    print(f"[DEBUG] Merge groups list: {merge_groups_list} (type: {type(merge_groups_list).__name__}, length: {len(merge_groups_list)})")
+    print(f"[DEBUG] Image paths: {[Path(p).name for p in image_paths]}", flush=True)
+    print(f"[DEBUG] Merge groups list: {merge_groups_list} (type: {type(merge_groups_list).__name__}, length: {len(merge_groups_list)})", flush=True)
+print(f"[DEBUG] Starting to process {len(image_paths)} image(s)...", flush=True)
 
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
@@ -936,7 +944,8 @@ if not apply_merge:
     sam_mask_generator = SamAutomaticMaskGenerator(sam_model)
 
 for img_idx, image_path in enumerate(image_paths):
-    print(f"\n--- Processing image {img_idx + 1}/{len(image_paths)}: {Path(image_path).name} ---")
+    print(f"\n--- Processing image {img_idx + 1}/{len(image_paths)}: {Path(image_path).name} ---", flush=True)
+    print(f"[DEBUG] Loop iteration {img_idx + 1}, total images: {len(image_paths)}, processed so far: {len(processed_image_paths)}", flush=True)
     mask_path = mask_paths[img_idx] if img_idx < len(mask_paths) else None
     auto_generate_mask = auto_generate_masks[img_idx] if img_idx < len(auto_generate_masks) else True
     merge_groups_str = merge_groups_list[img_idx] if img_idx < len(merge_groups_list) and merge_groups_list[img_idx] else None
@@ -1364,6 +1373,13 @@ for img_idx, image_path in enumerate(image_paths):
         # Continue with next image
         continue
 
+# After processing all images, verify we processed all of them
+print(f"\n[DEBUG] Image processing loop complete. Processed {len(processed_image_paths)} out of {len(image_paths)} image(s)", flush=True)
+if len(processed_image_paths) != len(image_paths):
+    print(f"[WARN] Mismatch: Expected {len(image_paths)} images but only processed {len(processed_image_paths)}", flush=True)
+    print(f"[DEBUG] Expected: {[Path(p).name for p in image_paths]}", flush=True)
+    print(f"[DEBUG] Processed: {[Path(p).name for p in processed_image_paths]}", flush=True)
+
 # After processing all images, unload SAM models
 if len(processed_images) > 0:
     print("\n[INFO] Unloading SAM models and clearing GPU cache after segmentation stage...")
@@ -1396,9 +1412,10 @@ image_path = processed_image_paths[0] if processed_image_paths else None
 if not image_path:
     raise ValueError("No processed images available for 3D generation")
 
-print(f"\nUsing {len(processed_image_paths)} image(s) for 3D generation")
+print(f"\nUsing {len(processed_image_paths)} image(s) for 3D generation", flush=True)
+print(f"[DEBUG] processed_image_paths: {[Path(p).name for p in processed_image_paths]}", flush=True)
 if mask_path:
-    print(f"Using mask from first image: {mask_path}")
+    print(f"Using mask from first image: {mask_path}", flush=True)
 
 print("\n=== Step 3: Run OmniPart Inference ===")
 print(f"Generating 3D shape with part-aware control from {len(processed_image_paths)} view(s)...")
@@ -1579,8 +1596,9 @@ try:
     img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
     
     # Load all images as PIL Images for multiview
+    print(f"[DEBUG] About to load {len(processed_image_paths)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}", flush=True)
     images_list = [Image.open(img_path) for img_path in processed_image_paths]
-    print(f"[DEBUG] Loaded {len(images_list)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}")
+    print(f"[DEBUG] Loaded {len(images_list)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}", flush=True)
     
     # Generate voxel coordinates with performance optimizations
     torch.backends.cudnn.enabled = True
@@ -1965,7 +1983,13 @@ else:
   # Convert iodata to binary using IO.iodata_to_binary (no concatenation)
   python_code_binary = IO.iodata_to_binary(python_code_iodata)
   
+  IO.puts("[DEBUG] About to execute Python code via Pythonx.eval...")
+  IO.puts("[DEBUG] Config file: #{config_file_normalized}")
+  IO.puts("[DEBUG] Python code size: #{byte_size(python_code_binary)} bytes")
+  
   {_, _python_globals} = Pythonx.eval(python_code_binary, %{})
+  
+  IO.puts("[DEBUG] Python code execution completed")
 rescue
   e ->
     # Clean up temp file on error
