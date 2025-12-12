@@ -645,8 +645,20 @@ def bake_texture(
                 _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
-        # Use small random values instead of zeros to break symmetry and allow gradients to flow
-        texture = torch.nn.Parameter(torch.randn((1, texture_size, texture_size, 3), dtype=torch.float32).cuda() * 0.01)
+        # Initialize with mean observation value + small noise to avoid dark textures
+        # Calculate mean observation value across all views for better initialization
+        mean_obs = torch.stack([obs[mask].mean() for obs, mask in zip(observations, masks) if mask.sum() > 0])
+        if len(mean_obs) > 0:
+            init_mean = mean_obs.mean().item()
+        else:
+            init_mean = 0.5  # Default to mid-gray if no valid observations
+        
+        # Initialize texture with mean observation value + small noise (clamped to [0, 1])
+        # This prevents dark textures and helps optimization converge faster
+        texture_init = torch.full((1, texture_size, texture_size, 3), init_mean, dtype=torch.float32).cuda()
+        texture_init = texture_init + torch.randn_like(texture_init) * 0.1  # Add small noise
+        texture_init = torch.clamp(texture_init, 0.0, 1.0)  # Ensure valid range
+        texture = torch.nn.Parameter(texture_init)
         optimizer = torch.optim.Adam([texture], betas=(0.5, 0.9), lr=1e-2)
 
         # Learning rate scheduling functions
@@ -699,6 +711,10 @@ def bake_texture(
                 loss_value = loss.item()
                 loss.backward()
                 optimizer.step()
+                # Clamp texture values to [0, 1] range after each step to prevent dark/oversaturated textures
+                # This ensures the texture stays in valid color range during optimization
+                with torch.no_grad():
+                    texture.data.clamp_(0.0, 1.0)
                 # Learning rate annealing
                 optimizer.param_groups[0]['lr'] = cosine_anealing(optimizer, step, total_steps, 1e-2, 1e-5)
                 pbar.set_postfix({'loss': loss_value})
