@@ -3,30 +3,65 @@
 # SPDX-License-Identifier: MIT
 # SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
 
-# Configure OpenTelemetry for console-only logging
-Application.put_env(:opentelemetry, :span_processor, :batch)
-Application.put_env(:opentelemetry, :traces_exporter, :none)
-Application.put_env(:opentelemetry, :metrics_exporter, :none)
-Application.put_env(:opentelemetry, :logs_exporter, :none)
-
 Mix.install([
   {:pythonx, "~> 0.4.7"},
   {:jason, "~> 1.4.4"},
   {:req, "~> 0.5.0"},
   {:opentelemetry_api, "~> 1.3"},
   {:opentelemetry, "~> 1.3"},
-  {:opentelemetry_exporter, "~> 1.0"},
+  {:opentelemetry_exporter, "~> 1.6"},
 ])
 
 require Logger
 
 Logger.configure(level: :info)
 
+# Parse arguments early to check for disable-telemetry flag before showing notice
+disable_telemetry = case OptionParser.parse(System.argv(), switches: [disable_telemetry: :boolean]) do
+  {opts, _, _} -> Keyword.get(opts, :disable_telemetry, false)
+end
+
+# Print information collection notice (only if telemetry is enabled)
+unless disable_telemetry do
+  IO.puts("""
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    Information Collection Notice                             ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+This software collects and transmits telemetry data to help improve the software
+and monitor its performance. The information collected includes:
+
+  • Performance metrics (execution time, resource usage, GPU usage)
+  • Error and exception information (error messages, stack traces)
+  • Usage patterns (which features are used, configuration settings)
+  • System metadata (hostname, environment name, working directory path)
+  • File paths (input image paths, output directory paths, checkpoint paths)
+
+This data is sent to AppSignal (https://appsignal.com) for analysis and monitoring
+purposes. We keep this data for a limited period to debug and fix performance
+issues, monitor system health, and improve the software.
+
+By using this software, you consent to the collection and transmission of this
+telemetry data. If you prefer not to share this information, you may disable
+telemetry collection by using the --disable-telemetry command-line option, or by
+modifying the OpenTelemetry configuration in the shared_utils.exs file.
+
+╚══════════════════════════════════════════════════════════════════════════════╝
+""")
+end
+
 # Load shared utilities
 Code.eval_file("shared_utils.exs")
 
-# Initialize OpenTelemetry
-OtelSetup.configure()
+# Initialize OpenTelemetry unless disabled
+unless disable_telemetry do
+  OtelSetup.configure()
+else
+  # If telemetry is disabled, configure to use no exporters
+  Application.put_env(:opentelemetry, :traces_exporter, :none)
+  Application.put_env(:opentelemetry, :metrics_exporter, :none)
+  Application.put_env(:opentelemetry, :logs_exporter, :none)
+end
 
 # Initialize Python environment with required dependencies
 # OmniPart uses TRELLIS framework and various 3D processing libraries
@@ -83,6 +118,7 @@ dependencies = [
   "opentelemetry-api>=1.20.0",
   "opentelemetry-sdk>=1.20.0",
   "opentelemetry-instrumentation-logging>=0.42b0",
+  "opentelemetry-exporter-otlp-proto-http>=1.20.0",
   "flash_attn @ https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.0.post2/flash_attn-2.7.0.post2+cu12torch2.4cxx11abiFALSE-cp310-cp310-linux_x86_64.whl ; sys_platform == 'linux'",
   "utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
   "segment-anything @ git+https://github.com/facebookresearch/segment-anything.git",
@@ -141,7 +177,8 @@ defmodule ArgsParser do
       --num-inference-steps <int>   Number of inference steps (default: 25)
       --guidance-scale <float>      Guidance scale for SLat sampler (default: 7.5)
       --simplify-ratio <float>      Mesh simplification ratio (default: 0.15)
-      --textured                     Enable texture baking for GLB files (default: disabled)
+      --textured                     Enable texture baking for GLB files (default: enabled)
+      --disable-telemetry            Disable telemetry data collection
       --gpu <int>                   GPU ID to use (default: 0)
       --seed <int>                  Random seed (default: 42)
       --help, -h                     Show this help message
@@ -191,6 +228,7 @@ defmodule ArgsParser do
         guidance_scale: :float,
         simplify_ratio: :float,
         textured: :boolean,
+        disable_telemetry: :boolean,
         gpu: :integer,
         seed: :integer,
         help: :boolean
@@ -409,6 +447,18 @@ try do
   System.put_env("OTEL_LOG_DIR", log_dir)
   IO.puts("[DEBUG] OTEL_LOG_DIR set to: #{log_dir}")
   
+  # Set AppSignal configuration for Python OpenTelemetry (unless telemetry is disabled)
+  if disable_telemetry do
+    # Unset the environment variables to signal Python that telemetry is disabled
+    System.delete_env("OTEL_EXPORTER_OTLP_ENDPOINT")
+    System.delete_env("OTEL_EXPORTER_OTLP_HEADERS")
+    System.delete_env("OTEL_EXPORTER_OTLP_PROTOCOL")
+  else
+    System.put_env("OTEL_EXPORTER_OTLP_ENDPOINT", "https://fwbkb568.eu-central.appsignal-collector.net")
+    System.put_env("OTEL_EXPORTER_OTLP_HEADERS", "appsignal-api-key=8d71abfe-5465-46d7-87e7-77f76d80198b")
+    System.put_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+  end
+  
   # Use spawn to run Python in separate process to avoid GIL issues
   # Build Python code string using iodata (list of strings) - no concatenation, no interpolation
   IO.puts("[DEBUG] Building Python code string...")
@@ -438,10 +488,11 @@ os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
 try:
     from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
     from opentelemetry.sdk.resources import Resource
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
     import logging
     
     # Get trace context from Elixir (passed via environment or Pythonx context)
@@ -449,11 +500,23 @@ try:
     trace_context_str_for_python,
     ~S"""
     
-    # Initialize OpenTelemetry SDK
-    resource = Resource.create({"service.name": "omnipart-generation", "service.version": "1.0.0"})
+    # Check if telemetry is disabled (if endpoint is not set, telemetry is disabled)
+    telemetry_disabled = os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT') is None
+    
+    # Get AppSignal configuration from environment (set by Elixir)
+    appsignal_collector_url = os.environ.get('OTEL_EXPORTER_OTLP_ENDPOINT', 'https://fwbkb568.eu-central.appsignal-collector.net')
+    appsignal_api_key = os.environ.get('OTEL_EXPORTER_OTLP_HEADERS', '').replace('appsignal-api-key=', '') if os.environ.get('OTEL_EXPORTER_OTLP_HEADERS') else '8d71abfe-5465-46d7-87e7-77f76d80198b'
+    
+    # Initialize OpenTelemetry SDK with resource attributes matching Elixir
+    resource = Resource.create({
+        "service.name": "omnipart-generation",
+        "service.version": "1.0.0",
+        "appsignal.config.push_api_key": appsignal_api_key if not telemetry_disabled else "",
+        "appsignal.config.language_integration": "python"
+    })
     tracer_provider = TracerProvider(resource=resource)
     
-    # Create custom exporter that writes to shared file for Elixir to read
+    # Create custom exporter that writes to shared file for Elixir to read (for local debugging)
     class ElixirOtelExporter:
         def __init__(self, log_file_path):
             self.log_file_path = log_file_path
@@ -486,11 +549,24 @@ try:
         def shutdown(self):
             pass
     
-    # Set up exporter
+    # Set up OTLP exporter for AppSignal (only if telemetry is enabled)
+    # Use HTTP/protobuf protocol (required by AppSignal)
+    if not telemetry_disabled:
+        # Ensure protocol is set to http/protobuf
+        os.environ.setdefault('OTEL_EXPORTER_OTLP_PROTOCOL', 'http/protobuf')
+        
+        otlp_exporter = OTLPSpanExporter(
+            endpoint=appsignal_collector_url,
+            headers={"appsignal-api-key": appsignal_api_key}
+        )
+        otlp_processor = BatchSpanProcessor(otlp_exporter)
+        tracer_provider.add_span_processor(otlp_processor)
+    
+    # Also set up local file exporter for Elixir to read (for debugging)
     log_dir = Path(os.environ.get('OTEL_LOG_DIR', '/tmp'))
-    exporter = ElixirOtelExporter(str(log_dir / 'python_otel.log'))
-    span_processor = BatchSpanProcessor(exporter)
-    tracer_provider.add_span_processor(span_processor)
+    elixir_exporter = ElixirOtelExporter(str(log_dir / 'python_otel.log'))
+    elixir_processor = BatchSpanProcessor(elixir_exporter)
+    tracer_provider.add_span_processor(elixir_processor)
     
     # Set global tracer provider
     trace.set_tracer_provider(tracer_provider)

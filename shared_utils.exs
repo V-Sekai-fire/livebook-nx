@@ -18,7 +18,7 @@
 #
 # For scripts with OpenTelemetry:
 #   Mix.install([{:pythonx, "~> 0.4.7"}, {:jason, "~> 1.4.4"}, {:req, "~> 0.5.0"},
-#                {:opentelemetry_api, "~> 1.3"}, {:opentelemetry, "~> 1.3"}, {:opentelemetry_exporter, "~> 1.0"}])
+#                {:opentelemetry_api, "~> 1.2"}, {:opentelemetry, "~> 1.3"}, {:opentelemetry_exporter, "~> 1.6"}])
 #   Logger.configure(level: :info)
 #   Code.eval_file("shared_utils.exs")
 
@@ -292,22 +292,50 @@ end
 defmodule OtelSetup do
   @moduledoc """
   Configures OpenTelemetry using the official library from hex.pm.
-  Sets up a JSON console exporter for spans and metrics.
+  Sets up AppSignal OTLP exporter for traces, metrics, and logs.
   """
   require OpenTelemetry.Tracer
   
+  @appsignal_api_key "8d71abfe-5465-46d7-87e7-77f76d80198b"
+  @appsignal_collector_url "https://fwbkb568.eu-central.appsignal-collector.net"
+  
   def configure do
+    # Get application name and environment
+    app_name = get_app_name()
+    environment = get_environment()
+    service_name = get_service_name()
+    
+    # Get hostname and revision
+    {:ok, hostname} = :inet.gethostname()
+    revision = get_git_revision()
+    app_path = File.cwd!()
+    
     # Configure batch processor for better performance
     Application.put_env(:opentelemetry, :span_processor, :batch)
     
-    # Start our JSON exporter agent to collect spans
-    OtelJsonExporter.start_link([])
+    # Configure resource attributes for AppSignal
+    Application.put_env(:opentelemetry, :resource, [
+      {"appsignal.config.name", app_name},
+      {"appsignal.config.environment", environment},
+      {"appsignal.config.push_api_key", @appsignal_api_key},
+      {"appsignal.config.revision", revision},
+      {"appsignal.config.language_integration", "elixir"},
+      {"appsignal.config.app_path", app_path},
+      {"host.name", to_string(hostname)},
+      {"service.name", service_name}
+    ])
     
-    # Use a custom span processor that collects spans
-    # The exporter will be called by the SDK's batch processor
-    Application.put_env(:opentelemetry, :traces_exporter, OtelJsonExporter)
-    Application.put_env(:opentelemetry, :metrics_exporter, OtelJsonExporter)
-    Application.put_env(:opentelemetry, :logs_exporter, OtelJsonExporter)
+    # Configure OTLP exporter for AppSignal
+    Application.put_env(:opentelemetry, :traces_exporter, :otlp)
+    Application.put_env(:opentelemetry, :metrics_exporter, :otlp)
+    Application.put_env(:opentelemetry, :logs_exporter, :otlp)
+    
+    # Configure OTLP exporter endpoint and protocol
+    Application.put_env(:opentelemetry_exporter, :otlp_protocol, :http_protobuf)
+    Application.put_env(:opentelemetry_exporter, :otlp_endpoint, @appsignal_collector_url)
+    
+    # Also start our JSON exporter agent for local debugging/backup
+    OtelJsonExporter.start_link([])
     
     # Set up Logger backend to capture logs
     setup_log_backend()
@@ -321,6 +349,38 @@ defmodule OtelSetup do
         ])
         {:error, error}
     end
+  end
+  
+  defp get_app_name do
+    # Try to get from environment variable, or use a default
+    System.get_env("APPSIGNAL_APP_NAME", "livebook-nx")
+  end
+  
+  defp get_environment do
+    # Try to get from Mix.env() or environment variable
+    cond do
+      Kernel.function_exported?(Mix, :env, 0) ->
+        to_string(Mix.env())
+      System.get_env("MIX_ENV") != nil ->
+        System.get_env("MIX_ENV")
+      true ->
+        "development"
+    end
+  end
+  
+  defp get_service_name do
+    # Use environment variable or default
+    System.get_env("APPSIGNAL_SERVICE_NAME", "omnipart-generation")
+  end
+  
+  defp get_git_revision do
+    # Try to get git revision
+    case System.cmd("git", ["log", "--pretty=format:%h", "-n", "1"]) do
+      {revision, 0} -> String.trim(revision)
+      _ -> "unknown"
+    end
+  rescue
+    _ -> "unknown"
   end
   
   defp setup_log_backend do
