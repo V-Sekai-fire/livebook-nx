@@ -84,14 +84,14 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                     print(f"[WARN] Failed to render radiance field video for part {i}: {e}")
                     import traceback
                     traceback.print_exc()
-            # Render Gaussian splat videos (high quality)
+            # Render Gaussian splat videos (original OmniPart default)
             if 'gaussian' in outputs and i < len(outputs['gaussian']):
                 print(f"[INFO] Rendering Gaussian splat video for part {i}...")
                 try:
                     video = render_utils.render_video(
                         outputs['gaussian'][i], 
-                        resolution=1024,  # High-resolution rendering (2x detail)
-                        ssaa=4,  # 4x super-sampling anti-aliasing for highest quality (matches Octree renderer standard)
+                        resolution=512,  # Original OmniPart default
+                        ssaa=1,  # Original OmniPart default for Gaussian
                         num_frames=300
                     )['color']
                     gs_video_path = f"{output_dir}/part{i}_gs.mp4"
