@@ -660,48 +660,7 @@ def bake_texture(
                 _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
-        # Use harmonic mean for better optimization initialization (less sensitive to dark outliers)
-        # Harmonic mean: n / sum(1/x) - gives more weight to brighter values, better for optimization
-        # This is more robust than arithmetic mean when dealing with dark observations
-        all_obs_values = []
-        for obs, mask in zip(observations, masks):
-            if mask.sum() > 0:
-                masked_obs = obs[mask]
-                all_obs_values.append(masked_obs.flatten())
-        
-        if len(all_obs_values) > 0:
-            # Concatenate all observation values
-            all_values = torch.cat(all_obs_values)
-            # Remove zeros to avoid division by zero in harmonic mean
-            non_zero = all_values[all_values > 1e-6]
-            
-            if len(non_zero) > 0:
-                # Harmonic mean: n / sum(1/x)
-                # More robust for optimization - less affected by very dark values
-                harmonic_mean = len(non_zero) / (1.0 / non_zero).sum().item()
-                
-                # Also compute median as fallback (more robust to outliers)
-                median_val = non_zero.median().item()
-                
-                # Use harmonic mean if reasonable, otherwise use median or neutral
-                # Harmonic mean tends to be higher than arithmetic mean, which helps with dark observations
-                if harmonic_mean > 0.01 and harmonic_mean < 1.0:
-                    init_mean = harmonic_mean
-                elif median_val > 0.01:
-                    init_mean = median_val
-                else:
-                    init_mean = 0.5  # Neutral gray if both are too dark
-            else:
-                init_mean = 0.5  # Default if all values are near zero
-        else:
-            init_mean = 0.5  # Default to mid-gray if no valid observations
-        
-        # Initialize texture with calculated mean + small noise (clamped to [0, 1])
-        # Small noise breaks symmetry and allows gradients to flow
-        texture_init = torch.full((1, texture_size, texture_size, 3), init_mean, dtype=torch.float32).cuda()
-        texture_init = texture_init + torch.randn_like(texture_init) * 0.1  # Add small noise
-        texture_init = torch.clamp(texture_init, 0.0, 1.0)  # Ensure valid range
-        texture = torch.nn.Parameter(texture_init)
+        texture = torch.nn.Parameter(torch.zeros((1, texture_size, texture_size, 3), dtype=torch.float32).cuda())
         optimizer = torch.optim.Adam([texture], betas=(0.5, 0.9), lr=1e-2)
 
         # Learning rate scheduling functions
