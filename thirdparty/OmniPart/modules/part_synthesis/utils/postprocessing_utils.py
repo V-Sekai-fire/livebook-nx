@@ -909,8 +909,8 @@ def to_glb(
                 texture = bake_texture(
                     vertices, faces, uvs,
                     observations, masks, extrinsics, intrinsics,
-                    texture_size=texture_size, mode='fast',  # Use fast texture baking (weighted average)
-                    lambda_tv=0.01,  # Total variation regularization (not used in fast mode)
+                    texture_size=texture_size, mode='opt',  # Use optimization-based texture baking
+                    lambda_tv=0.01,  # Total variation regularization
                     verbose=verbose
                 )
                 texture = Image.fromarray(texture)
