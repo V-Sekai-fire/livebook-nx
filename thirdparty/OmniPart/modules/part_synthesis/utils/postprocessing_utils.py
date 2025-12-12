@@ -398,23 +398,31 @@ def postprocess_mesh(
                     mesh_center = vertices.mean(axis=0)
                     mesh_extent = np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))
                     
-                    # Use meshoptimizer autolod algorithm (from Godot)
-                    # This automatically calculates error scale using meshopt_simplifyScale
-                    # No need to manually set target_error - autolod handles it
+                    # Use meshoptimizer with aggressive decimation options (from Godot)
+                    # Use meshopt_SimplifyPrune for more aggressive simplification (removes disconnected parts)
+                    # Use FLT_MAX (float('inf')) to disable error limit and force reaching target_index_count
+                    import ctypes
+                    MESHOPT_SIMPLIFY_PRUNE = 1 << 3  # meshopt_SimplifyPrune flag
                     
-                    # Simplify with meshoptimizer using autolod
+                    # For aggressive decimation, use a very large error value (effectively disables error limit)
+                    # This allows the simplifier to reach the target_index_count more aggressively
+                    # FLT_MAX in C is approximately 3.4028235e+38, using 1e10 as a large finite value
+                    # This matches Godot's approach for aggressive LOD generation when target count is more important than error
+                    aggressive_target_error = 1e10  # Very large error to effectively disable error limit
+                    
+                    # Simplify with meshoptimizer using aggressive options
                     result = simplify_with_screen_error(
                         vertices,
                         indices,
                         target_index_count=target_indices,
-                        target_error=None,  # None = use autolod to calculate automatically
+                        target_error=aggressive_target_error,  # Disable error limit for aggressive decimation
                         camera_position=mesh_center + np.array([0, 0, mesh_extent * 2], dtype=np.float32),
                         camera_direction=np.array([0, 0, -1], dtype=np.float32),
                         fov=40.0,
                         screen_width=1920,
                         screen_height=1080,
-                        options=0,
-                        use_autolod=True,  # Enable autolod algorithm from Godot
+                        options=MESHOPT_SIMPLIFY_PRUNE,  # Enable prune option for aggressive simplification
+                        use_autolod=False,  # Disable autolod when using aggressive error
                     )
                     
                     # Handle return value (may be 2 or 3 elements depending on version)
