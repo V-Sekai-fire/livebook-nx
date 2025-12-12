@@ -59,8 +59,37 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
         else:
             print(f"[WARN] Could not determine initial face count, using provided simplify_ratio: {simplify_ratio}")
     
+    # Save Gaussian PLY files BEFORE mesh baking
+    print("[INFO] Saving Gaussian PLY files before mesh baking...")
     gs_list = []
     
+    # Collect gaussians for parts > 0
+    for i in range(num_parts):
+        if i == 0:
+            # Save part 0 gaussian if available
+            if 'gaussian' in outputs and 0 < len(outputs['gaussian']):
+                ply_path = f"{output_dir}/part0_gs.ply"
+                if os.path.exists(ply_path):
+                    os.remove(ply_path)
+                outputs['gaussian'][0].save_ply(ply_path)
+                print(f"[OK] Saved part0_gs.ply")
+        else:
+            if 'gaussian' in outputs and i < len(outputs['gaussian']):
+                gs_list.append(outputs['gaussian'][i])
+    
+    # Save merged and exploded gaussians
+    if gs_list:
+        merged_gaussian = merge_gaussians(gs_list)
+        merged_gaussian.save_ply(f"{output_dir}/merged_gs.ply")
+        print(f"[OK] Saved merged_gs.ply")
+        
+        exploded_gs = exploded_gaussians(gs_list, explosion_scale=0.3)
+        exploded_gs.save_ply(f"{output_dir}/exploded_gs.ply")
+        print(f"[OK] Saved exploded_gs.ply")
+    else:
+        print("[WARN] No gaussians to merge (gs_list is empty). Skipping merged/exploded gaussian export.")
+    
+    # Now proceed with mesh baking and GLB generation
     for i in range(num_parts):
         if i == 0:
             continue
@@ -138,26 +167,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
             if os.path.exists(glb_path):
                 os.remove(glb_path)
             glb.export(glb_path)
-            
-            if i == 0:
-                ply_path = f"{output_dir}/part{i}_gs.ply"
-                if os.path.exists(ply_path):
-                    os.remove(ply_path)
-                if 'gaussian' in outputs and i < len(outputs['gaussian']):
-                    outputs['gaussian'][i].save_ply(ply_path)
-            else:
-                if 'gaussian' in outputs and i < len(outputs['gaussian']):
-                    gs_list.append(outputs['gaussian'][i])
-                
-    # Only merge gaussians if we have any to merge
-    if gs_list:
-        merged_gaussian = merge_gaussians(gs_list)
-        merged_gaussian.save_ply(f"{output_dir}/merged_gs.ply")
-        
-        exploded_gs = exploded_gaussians(gs_list, explosion_scale=0.3)
-        exploded_gs.save_ply(f"{output_dir}/exploded_gs.ply")
-    else:
-        print("[WARN] No gaussians to merge (gs_list is empty). Skipping merged/exploded gaussian export.")
+            print(f"[OK] Saved part{i}.glb")
 
 
 def merge_gaussians(gaussians_list):
