@@ -1720,11 +1720,11 @@ try:
     save_parts_outputs(
         part_synthesis_output, 
         output_dir=inference_output_dir, 
-        simplify_ratio=1.0,  # % of original faces
+        simplify_ratio=simplify_ratio,  # Use config simplify_ratio (default 0.3)
         save_video=False,
         save_glb=True,
         textured=textured,  # Use CLI option for texture baking
-        target_total_triangles=50000,
+        target_total_triangles=None,  # Use simplify_ratio directly instead of calculating from target
     )
     
     # Merge parts
