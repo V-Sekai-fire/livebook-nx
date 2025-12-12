@@ -654,18 +654,39 @@ def bake_texture(
                 _uv_dr.append(rast['uv_dr'].detach())  # Gradient information for differentiable rendering
 
         # Initialize texture as a learnable parameter
-        # Calculate mean observation value across all views for better initialization
-        # If observations are very dark (< 0.1), use neutral initialization instead
-        # This prevents the optimizer from being forced to match unrealistically dark observations
-        mean_obs = torch.stack([obs[mask].mean() for obs, mask in zip(observations, masks) if mask.sum() > 0])
-        if len(mean_obs) > 0:
-            obs_mean = mean_obs.mean().item()
-            # If observations are very dark, they might be incorrect - use neutral initialization
-            # Otherwise, use observation mean for better starting point
-            if obs_mean < 0.1:
-                init_mean = 0.5  # Neutral gray when observations are suspiciously dark
+        # Use harmonic mean for better optimization initialization (less sensitive to dark outliers)
+        # Harmonic mean: n / sum(1/x) - gives more weight to brighter values, better for optimization
+        # This is more robust than arithmetic mean when dealing with dark observations
+        all_obs_values = []
+        for obs, mask in zip(observations, masks):
+            if mask.sum() > 0:
+                masked_obs = obs[mask]
+                all_obs_values.append(masked_obs.flatten())
+        
+        if len(all_obs_values) > 0:
+            # Concatenate all observation values
+            all_values = torch.cat(all_obs_values)
+            # Remove zeros to avoid division by zero in harmonic mean
+            non_zero = all_values[all_values > 1e-6]
+            
+            if len(non_zero) > 0:
+                # Harmonic mean: n / sum(1/x)
+                # More robust for optimization - less affected by very dark values
+                harmonic_mean = len(non_zero) / (1.0 / non_zero).sum().item()
+                
+                # Also compute median as fallback (more robust to outliers)
+                median_val = non_zero.median().item()
+                
+                # Use harmonic mean if reasonable, otherwise use median or neutral
+                # Harmonic mean tends to be higher than arithmetic mean, which helps with dark observations
+                if harmonic_mean > 0.01 and harmonic_mean < 1.0:
+                    init_mean = harmonic_mean
+                elif median_val > 0.01:
+                    init_mean = median_val
+                else:
+                    init_mean = 0.5  # Neutral gray if both are too dark
             else:
-                init_mean = obs_mean  # Use observation mean when reasonable
+                init_mean = 0.5  # Default if all values are near zero
         else:
             init_mean = 0.5  # Default to mid-gray if no valid observations
         
