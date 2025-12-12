@@ -118,7 +118,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                 gaussian,
                 outputs['mesh'][i],
                 simplify=simplify_ratio,  # Mesh simplification factor
-                texture_size=1024,  # Standard texture resolution
+                texture_size=2048,  # High-resolution texture (2K)
                 textured=textured,
             )
             # If textured failed, try untextured
@@ -128,7 +128,7 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
                     gaussian,
                     outputs['mesh'][i],
                     simplify=simplify_ratio,
-                    texture_size=1024,  # Standard texture resolution
+                    texture_size=2048,  # High-resolution texture (2K)
                     textured=False,  # Disable texture baking
                 )
             if glb is None:
