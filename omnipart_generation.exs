@@ -273,7 +273,7 @@ defmodule ArgsParser do
       merge_groups: merge_groups_str,
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
-      simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
+      simplify_ratio: Keyword.get(opts, :simplify_ratio, 1.0),
       textured: Keyword.get(opts, :textured, false),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
