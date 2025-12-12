@@ -1896,16 +1896,15 @@ try:
     
     # Save outputs
     print("[INFO] Saving outputs...")
-    # Target 50,000 triangles for merged mesh (within 15,000-70,000 range)
-    target_total_triangles = 50000
+    # Use 30% simplify ratio for mesh decimation
     save_parts_outputs(
         part_synthesis_output, 
         output_dir=inference_output_dir, 
-        simplify_ratio=simplify_ratio, 
+        simplify_ratio=0.3,  # 30% of original faces
         save_video=False,
         save_glb=True,
         textured=textured,  # Use CLI option for texture baking
-        target_total_triangles=target_total_triangles,  # Target total triangles for merged mesh
+        target_total_triangles=None,  # Use simplify_ratio directly instead of fixed target
     )
     
     # Merge parts
