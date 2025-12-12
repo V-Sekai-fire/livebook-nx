@@ -587,23 +587,35 @@ try:
     tracer = trace.get_tracer(__name__)
     
     # Propagate trace context from Elixir if available and create root span
-    python_root_span = None
+    # For a root span that needs to stay active, we'll use start_as_current_span
+    # and keep the context manager active for the entire execution
+    python_root_span_context = None
     if trace_context_str and trace_context_str != "None":
         try:
             propagator = TraceContextTextMapPropagator()
             carrier = {'traceparent': trace_context_str}
             context = propagator.extract(carrier)
             # Create root span that will stay active for the entire Python execution
-            python_root_span = tracer.start_as_current_span("python.omnipart", context=context)
-            python_root_span.set_status(Status(StatusCode.OK))
+            python_root_span_context = tracer.start_as_current_span("python.omnipart", context=context)
+            python_root_span_context.__enter__()  # Enter the context to activate the span
+            # Get the current span to set status
+            current_span = trace.get_current_span()
+            if current_span:
+                current_span.set_status(Status(StatusCode.OK))
         except Exception as e:
             # If propagation fails, create a new root span
-            python_root_span = tracer.start_as_current_span("python.omnipart")
-            python_root_span.set_status(Status(StatusCode.OK))
+            python_root_span_context = tracer.start_as_current_span("python.omnipart")
+            python_root_span_context.__enter__()
+            current_span = trace.get_current_span()
+            if current_span:
+                current_span.set_status(Status(StatusCode.OK))
     else:
         # No trace context, create new root span
-        python_root_span = tracer.start_as_current_span("python.omnipart")
-        python_root_span.set_status(Status(StatusCode.OK))
+        python_root_span_context = tracer.start_as_current_span("python.omnipart")
+        python_root_span_context.__enter__()
+        current_span = trace.get_current_span()
+        if current_span:
+            current_span.set_status(Status(StatusCode.OK))
     
     # Instrument logging to send logs to OpenTelemetry (will use current span context)
     LoggingInstrumentor().instrument(set_logging_format=True)
@@ -1863,10 +1875,16 @@ try:
     
     print("[OK] OmniPart inference completed successfully")
     
-    # Close root span if it exists
-    if python_root_span:
-        python_root_span.set_status(Status(StatusCode.OK))
-        python_root_span.end()
+    # Close root span context if it exists
+    # Set status to OK before closing
+    if python_root_span_context:
+        try:
+            current_span = trace.get_current_span()
+            if current_span:
+                current_span.set_status(Status(StatusCode.OK))
+            python_root_span_context.__exit__(None, None, None)  # Exit the context to close the span
+        except Exception:
+            pass  # Ignore errors when closing
     
     # Unload models and clear GPU cache after 3D generation stage
     print("\n[INFO] Unloading models and clearing GPU cache...")
