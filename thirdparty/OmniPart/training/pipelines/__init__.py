@@ -19,7 +19,12 @@ def from_pretrained(path: str):
         config_file = f"{path}/pipeline.json"
     else:
         from huggingface_hub import hf_hub_download
-        config_file = hf_hub_download(path, "pipeline.json")
+        # Try local cache first to avoid online checks
+        try:
+            config_file = hf_hub_download(path, "pipeline.json", local_files_only=True)
+        except (FileNotFoundError, OSError):
+            # File not in cache, download from online
+            config_file = hf_hub_download(path, "pipeline.json")
 
     with open(config_file, 'r') as f:
         config = json.load(f)
