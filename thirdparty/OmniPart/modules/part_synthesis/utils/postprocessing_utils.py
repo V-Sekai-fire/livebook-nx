@@ -655,18 +655,22 @@ def bake_texture(
 
         # Initialize texture as a learnable parameter
         # Calculate mean observation value across all views for better initialization
-        # But use a minimum threshold to avoid dark initialization when observations are very dark
+        # If observations are very dark (< 0.1), use neutral initialization instead
+        # This prevents the optimizer from being forced to match unrealistically dark observations
         mean_obs = torch.stack([obs[mask].mean() for obs, mask in zip(observations, masks) if mask.sum() > 0])
         if len(mean_obs) > 0:
             obs_mean = mean_obs.mean().item()
-            # Use minimum of 0.3 to avoid dark initialization (observations might be dark due to rendering)
-            # This allows the optimizer to learn the correct brightness
-            init_mean = max(obs_mean, 0.3)
+            # If observations are very dark, they might be incorrect - use neutral initialization
+            # Otherwise, use observation mean for better starting point
+            if obs_mean < 0.1:
+                init_mean = 0.5  # Neutral gray when observations are suspiciously dark
+            else:
+                init_mean = obs_mean  # Use observation mean when reasonable
         else:
             init_mean = 0.5  # Default to mid-gray if no valid observations
         
-        # Initialize texture with mean observation value + small noise (clamped to [0, 1])
-        # Using a minimum threshold prevents dark textures from dark observations
+        # Initialize texture with calculated mean + small noise (clamped to [0, 1])
+        # Small noise breaks symmetry and allows gradients to flow
         texture_init = torch.full((1, texture_size, texture_size, 3), init_mean, dtype=torch.float32).cuda()
         texture_init = texture_init + torch.randn_like(texture_init) * 0.1  # Add small noise
         texture_init = torch.clamp(texture_init, 0.0, 1.0)  # Ensure valid range
@@ -723,12 +727,10 @@ def bake_texture(
                 loss_value = loss.item()
                 loss.backward()
                 optimizer.step()
-                # Clamp texture values to [0, 1] range periodically (not every step) to allow optimization flexibility
-                # Clamping every step can prevent the optimizer from recovering from dark initialization
-                # Only clamp every 10 steps to maintain valid range while allowing optimization
-                if step % 10 == 0:
-                    with torch.no_grad():
-                        texture.data.clamp_(0.0, 1.0)
+                # Clamp texture values to [0, 1] range after each step to maintain valid color range
+                # This is necessary to prevent invalid values while allowing optimization
+                with torch.no_grad():
+                    texture.data.clamp_(0.0, 1.0)
                 # Learning rate annealing
                 optimizer.param_groups[0]['lr'] = cosine_anealing(optimizer, step, total_steps, 1e-2, 1e-5)
                 pbar.set_postfix({'loss': loss_value})
