@@ -363,7 +363,7 @@ defmodule ArgsParser do
       merge_groups: merge_groups_list,
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
-      simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.15),
+      simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
       textured: Keyword.get(opts, :textured, false),
       gpu: Keyword.get(opts, :gpu, 0),
       seed: Keyword.get(opts, :seed, 42)
@@ -1900,11 +1900,11 @@ try:
     save_parts_outputs(
         part_synthesis_output, 
         output_dir=inference_output_dir, 
-        simplify_ratio=0.3,  # 30% of original faces
+        simplify_ratio=1.0,  # % of original faces
         save_video=False,
         save_glb=True,
         textured=textured,  # Use CLI option for texture baking
-        target_total_triangles=None,  # Use simplify_ratio directly instead of fixed target
+        target_total_triangles=50000,
     )
     
     # Merge parts
