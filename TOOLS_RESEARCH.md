@@ -212,32 +212,7 @@ Your Elixir scripts follow a consistent pattern:
   - Mobile-optimized
   - Fully open-source (Apache 2.0)
 
-### 12. 3D Shape Generation
-
-#### OmniPart
-
-- **Repository**: https://github.com/HKU-MMLab/OmniPart
-- **Project Page**: https://omnipart.github.io/
-- **Paper**: arXiv:2507.06165
-- **Published**: October 2025 (SIGGRAPH Asia 2025)
-- **License**: MIT ✅ FOSS (OSI-approved)
-- **Style Match**: ✅ High - Part-aware 3D generation with semantic decoupling
-- **Integration**: 3D shape generation with part-level control
-- **Script Name**: `omnipart_generation.exs`
-- **Features**:
-  - Part-aware 3D generation with semantic decoupling and structural cohesion
-  - Input: image + segmentation mask (2D part IDs)
-  - Generates 3D shapes with part-level semantic control
-  - Based on TRELLIS framework
-  - Interactive Gradio demo included
-  - Supports training on custom datasets
-  - Automatic model weight download
-  - Part-level voxelization and feature extraction
-  - DINO feature extraction for parts and overall shapes
-  - SLat encoding and merging for part-aware generation
-- **Note**: SIGGRAPH Asia 2025, enables fine-grained part-level control in 3D generation
-
-### 13. Mesh Remeshing / Quad Topology
+### 12. Mesh Remeshing / Quad Topology
 
 #### QRemeshify
 
