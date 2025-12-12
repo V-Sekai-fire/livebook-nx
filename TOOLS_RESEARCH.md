@@ -14,7 +14,7 @@ Your Elixir scripts follow a consistent pattern:
 ## Existing Tools (Avoid These)
 
 - **Text-to-Image**: Z-Image-Turbo
-- **Image-to-3D**: PartCrafter
+- **Image-to-3D**: PartCrafter, Omnipart
 - **Vision-Language**: Qwen3-VL
 - **Video Processing**: SAM3 (segmentation)
 - **Audio TTS**: Kokoro TTS
