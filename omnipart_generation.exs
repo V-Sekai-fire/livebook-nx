@@ -701,7 +701,14 @@ except ImportError as e:
 image_paths = config.get('image_paths', [])
 mask_paths = config.get('mask_paths', [])
 auto_generate_masks = config.get('auto_generate_masks', [])
+# Ensure merge_groups_list is a list
 merge_groups_list = config.get('merge_groups', [])
+if not isinstance(merge_groups_list, list):
+    # If it's a string (backward compatibility), convert to list
+    if isinstance(merge_groups_list, str):
+        merge_groups_list = [merge_groups_list]
+    else:
+        merge_groups_list = []
 
 # Ensure image_paths is a list
 if not isinstance(image_paths, list):
@@ -716,16 +723,19 @@ if len(image_paths) == 0 and config.get('image_path'):
     image_paths = [config.get('image_path')]
     mask_paths = [config.get('mask_path')] if config.get('mask_path') else []
     auto_generate_masks = [config.get('auto_generate_mask', False)]
+    # Only override merge_groups_list if it's empty and we have a string value
     merge_groups_str = config.get('merge_groups')
-    if merge_groups_str:
-        merge_groups_list = [merge_groups_str]
-    else:
-        merge_groups_list = []
+    if not merge_groups_list and merge_groups_str:
+        if isinstance(merge_groups_str, str):
+            merge_groups_list = [merge_groups_str]
+        elif isinstance(merge_groups_str, list):
+            merge_groups_list = merge_groups_str
 
 # Debug: Verify images were read correctly
 print(f"[DEBUG] Read {len(image_paths)} image(s) from config")
 if len(image_paths) > 1:
     print(f"[DEBUG] Image paths: {[Path(p).name for p in image_paths]}")
+    print(f"[DEBUG] Merge groups list: {merge_groups_list} (type: {type(merge_groups_list).__name__}, length: {len(merge_groups_list)})")
 
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
