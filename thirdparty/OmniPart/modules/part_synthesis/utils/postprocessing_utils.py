@@ -692,8 +692,8 @@ def bake_texture(
                    torch.nn.functional.l1_loss(texture[:, :, :-1, :], texture[:, :, 1:, :])
     
         # Optimization loop
-        # Increased to 1500 iterations for higher quality optimization (texture size reduced to 512 for efficiency)
-        total_steps = 1500
+        # Reduced to 500 iterations for faster texture baking
+        total_steps = 500
         
         with tqdm(total=total_steps, disable=not verbose, desc='Texture baking (opt): optimizing') as pbar:
             # Debug: Print initial statistics
@@ -888,8 +888,8 @@ def to_glb(
                 texture = bake_texture(
                     vertices, faces, uvs,
                     observations, masks, extrinsics, intrinsics,
-                    texture_size=texture_size, mode='opt',  # Use optimization-based texturing
-                    lambda_tv=0.01,  # Total variation regularization
+                    texture_size=texture_size, mode='fast',  # Use fast texture baking (weighted average)
+                    lambda_tv=0.01,  # Total variation regularization (not used in fast mode)
                     verbose=verbose
                 )
                 texture = Image.fromarray(texture)
