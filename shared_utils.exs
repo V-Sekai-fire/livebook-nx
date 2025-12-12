@@ -217,20 +217,11 @@ defmodule ConfigFile do
   end
 
   def python_path_string(config_file_normalized) do
-    # Use environment variable to avoid string escaping issues
-    # This is the safest approach for paths with special characters
-    ~s"""
-config_file_path = os.environ.get('CONFIG_FILE_PATH')
-if not config_file_path:
-    raise ValueError("CONFIG_FILE_PATH environment variable not set")
+    """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
 with open(config_file_path, 'r', encoding='utf-8') as f:
     config = json.load(f)
 """
-  end
-  
-  def set_config_env(config_file_normalized) do
-    # Set the config file path as an environment variable
-    System.put_env("CONFIG_FILE_PATH", config_file_normalized)
   end
 end
 
