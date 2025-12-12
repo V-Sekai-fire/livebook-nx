@@ -310,6 +310,17 @@ defmodule OtelSetup do
     revision = get_git_revision()
     app_path = File.cwd!()
     
+    # Set environment variables for OTLP exporter (required by opentelemetry_exporter)
+    # These MUST be set before the opentelemetry application starts
+    System.put_env("OTEL_EXPORTER_OTLP_ENDPOINT", @appsignal_collector_url)
+    System.put_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    System.put_env("OTEL_EXPORTER_OTLP_HEADERS", "appsignal-api-key=#{@appsignal_api_key}")
+    
+    # Also configure via Application environment (some libraries read from here)
+    Application.put_env(:opentelemetry_exporter, :otlp_endpoint, @appsignal_collector_url)
+    Application.put_env(:opentelemetry_exporter, :otlp_protocol, :http_protobuf)
+    Application.put_env(:opentelemetry_exporter, :otlp_headers, [{"appsignal-api-key", @appsignal_api_key}])
+    
     # Configure batch processor for better performance
     Application.put_env(:opentelemetry, :span_processor, :batch)
     
@@ -330,15 +341,22 @@ defmodule OtelSetup do
     Application.put_env(:opentelemetry, :metrics_exporter, :otlp)
     Application.put_env(:opentelemetry, :logs_exporter, :otlp)
     
-    # Configure OTLP exporter endpoint and protocol
-    Application.put_env(:opentelemetry_exporter, :otlp_protocol, :http_protobuf)
-    Application.put_env(:opentelemetry_exporter, :otlp_endpoint, @appsignal_collector_url)
-    
     # Also start our JSON exporter agent for local debugging/backup
     OtelJsonExporter.start_link([])
     
     # Set up Logger backend to capture logs
     setup_log_backend()
+
+    # Verify configuration is set correctly
+    endpoint = System.get_env("OTEL_EXPORTER_OTLP_ENDPOINT")
+    protocol = System.get_env("OTEL_EXPORTER_OTLP_PROTOCOL")
+    if endpoint do
+      require Logger
+      Logger.info("OpenTelemetry OTLP endpoint configured: #{endpoint} (protocol: #{protocol || "default"})")
+    else
+      require Logger
+      Logger.warn("OTEL_EXPORTER_OTLP_ENDPOINT not set, using default")
+    end
 
     case Application.ensure_all_started(:opentelemetry) do
       {:ok, _} ->

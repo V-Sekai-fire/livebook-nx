@@ -459,11 +459,22 @@ try do
     System.put_env("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
   end
   
+  # Get trace context from current Elixir span for propagation to Python
+  trace_context_str_for_python = if disable_telemetry do
+    "None"
+  else
+    case SpanCollector.get_trace_context() do
+      nil -> "None"
+      ctx -> ctx
+    end
+  end
+  
   # Use spawn to run Python in separate process to avoid GIL issues
   # Build Python code string using iodata (list of strings) - no concatenation, no interpolation
   IO.puts("[DEBUG] Building Python code string...")
   config_file_code = ConfigFile.python_path_string(config_file_normalized)
   IO.puts("[DEBUG] Config file code generated, length: #{String.length(config_file_code)}")
+  IO.puts("[DEBUG] Trace context for Python: #{if trace_context_str_for_python == "None", do: "None", else: String.slice(trace_context_str_for_python, 0..50) <> "..."}")
   
   python_code_iodata = [
     ~S"""
@@ -493,6 +504,7 @@ try:
     from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
     from opentelemetry.instrumentation.logging import LoggingInstrumentor
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.trace import Status, StatusCode
     import logging
     
     # Get trace context from Elixir (passed via environment or Pythonx context)
@@ -571,17 +583,29 @@ try:
     # Set global tracer provider
     trace.set_tracer_provider(tracer_provider)
     
-    # Propagate trace context from Elixir if available
+    # Get tracer for creating spans
+    tracer = trace.get_tracer(__name__)
+    
+    # Propagate trace context from Elixir if available and create root span
+    python_root_span = None
     if trace_context_str and trace_context_str != "None":
         try:
             propagator = TraceContextTextMapPropagator()
             carrier = {'traceparent': trace_context_str}
             context = propagator.extract(carrier)
-            trace.set_tracer(__name__).start_as_current_span("python.omnipart", context=context)
-        except Exception:
-            pass  # If propagation fails, continue without it
+            # Create root span that will stay active for the entire Python execution
+            python_root_span = tracer.start_as_current_span("python.omnipart", context=context)
+            python_root_span.set_status(Status(StatusCode.OK))
+        except Exception as e:
+            # If propagation fails, create a new root span
+            python_root_span = tracer.start_as_current_span("python.omnipart")
+            python_root_span.set_status(Status(StatusCode.OK))
+    else:
+        # No trace context, create new root span
+        python_root_span = tracer.start_as_current_span("python.omnipart")
+        python_root_span.set_status(Status(StatusCode.OK))
     
-    # Instrument logging to send logs to OpenTelemetry
+    # Instrument logging to send logs to OpenTelemetry (will use current span context)
     LoggingInstrumentor().instrument(set_logging_format=True)
     
     # Setup Python logging with OpenTelemetry integration
@@ -1451,9 +1475,15 @@ try:
     
     # Load part_synthesis model with half precision for memory efficiency
     # Load models (reduced verbosity)
-    part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
-    # Explicitly move to device and ensure not using DataParallel (which uses multiple GPUs)
-    part_synthesis_pipeline.to(device)
+    # Load part_synthesis model with OpenTelemetry span
+    with tracer.start_as_current_span("omnipart.load_model") as span:
+        span.set_attribute("model.type", "part_synthesis")
+        span.set_attribute("model.checkpoint", str(part_synthesis_ckpt))
+        span.set_attribute("device", device)
+        part_synthesis_pipeline = OmniPartImageTo3DPipeline.from_pretrained(part_synthesis_ckpt, use_fp16=True)
+        # Explicitly move to device and ensure not using DataParallel (which uses multiple GPUs)
+        part_synthesis_pipeline.to(device)
+        span.set_status(Status(StatusCode.OK))
     # Ensure all sub-models are on the correct device and not wrapped in DataParallel
     if hasattr(part_synthesis_pipeline, 'models'):
         for model_name, model in part_synthesis_pipeline.models.items():
@@ -1501,7 +1531,14 @@ try:
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
     # Generate voxel coordinates from single image
     print(f"[INFO] Generating voxel coordinates from single view...")
-    voxel_coords = part_synthesis_pipeline.get_coords(image, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
+    with tracer.start_as_current_span("omnipart.generate_voxel_coords") as span:
+        span.set_attribute("num_samples", 1)
+        span.set_attribute("seed", seed)
+        span.set_attribute("steps", 25)
+        span.set_attribute("cfg_strength", 7.5)
+        voxel_coords = part_synthesis_pipeline.get_coords(image, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
+        span.set_attribute("voxel_coords.shape", str(voxel_coords.shape) if hasattr(voxel_coords, 'shape') else "unknown")
+        span.set_status(Status(StatusCode.OK))
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
@@ -1563,14 +1600,21 @@ try:
     torch.cuda.empty_cache()
     gc.collect()
     
-    torch.manual_seed(seed)
-    slat = part_synthesis_pipeline.sample_slat(
-        cond, 
-        part_synthesis_input['coords'], 
-        [part_synthesis_input['part_layouts']], 
-        part_synthesis_input['masks'],
-        sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
-    )
+    # Sample SLAT with OpenTelemetry span
+    with tracer.start_as_current_span("omnipart.sample_slat") as span:
+        span.set_attribute("seed", seed)
+        span.set_attribute("steps", num_inference_steps)
+        span.set_attribute("guidance_scale", guidance_scale)
+        span.set_attribute("formats", str(['mesh', 'gaussian']))
+        torch.manual_seed(seed)
+        slat = part_synthesis_pipeline.sample_slat(
+            cond, 
+            part_synthesis_input['coords'], 
+            [part_synthesis_input['part_layouts']], 
+            part_synthesis_input['masks'],
+            sampler_params={"steps": num_inference_steps, "cfg_strength": guidance_scale},
+        )
+        span.set_status(Status(StatusCode.OK))
     
     # Clear cond and intermediate tensors after SLAT sampling
     del cond
@@ -1758,10 +1802,13 @@ try:
                     allocated_before = torch.cuda.memory_allocated(0) / (1024**3)
                     print(f"[INFO] Decoding {fmt} format (GPU memory before: {allocated_before:.2f} GB)...")
                 
-                fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
-                if fmt in fmt_output:
-                    part_synthesis_output[fmt] = fmt_output[fmt]
-                    print(f"[OK] Successfully decoded {fmt} format")
+                with tracer.start_as_current_span(f"omnipart.decode_{fmt}") as decode_span:
+                    decode_span.set_attribute("format", fmt)
+                    fmt_output = part_synthesis_pipeline.decode_slat(divided_slat, [fmt])
+                    if fmt in fmt_output:
+                        part_synthesis_output[fmt] = fmt_output[fmt]
+                        print(f"[OK] Successfully decoded {fmt} format")
+                        decode_span.set_status(Status(StatusCode.OK))
                 
                 del fmt_output
                 torch.cuda.empty_cache()
@@ -1792,22 +1839,34 @@ try:
     
     # Save outputs
     print("[INFO] Saving outputs...")
-    # Use 30% simplify ratio for mesh decimation
-    save_parts_outputs(
-        part_synthesis_output, 
-        output_dir=inference_output_dir, 
-        simplify_ratio=simplify_ratio,  # Use config simplify_ratio (default 0.3)
-        save_video=False,
-        save_glb=True,
-        textured=textured,  # Use CLI option for texture baking
-        target_total_triangles=None,  # Use simplify_ratio directly instead of calculating from target
-    )
+    with tracer.start_as_current_span("omnipart.save_outputs") as span:
+        span.set_attribute("simplify_ratio", simplify_ratio)
+        span.set_attribute("textured", textured)
+        span.set_attribute("output_dir", str(inference_output_dir))
+        # Use 30% simplify ratio for mesh decimation
+        save_parts_outputs(
+            part_synthesis_output, 
+            output_dir=inference_output_dir, 
+            simplify_ratio=simplify_ratio,  # Use config simplify_ratio (default 0.3)
+            save_video=False,
+            save_glb=True,
+            textured=textured,  # Use CLI option for texture baking
+            target_total_triangles=None,  # Use simplify_ratio directly instead of calculating from target
+        )
+        span.set_status(Status(StatusCode.OK))
     
     # Merge parts
     print("[INFO] Merging parts...")
-    merge_parts(inference_output_dir)
+    with tracer.start_as_current_span("omnipart.merge_parts") as span:
+        merge_parts(inference_output_dir)
+        span.set_status(Status(StatusCode.OK))
     
     print("[OK] OmniPart inference completed successfully")
+    
+    # Close root span if it exists
+    if python_root_span:
+        python_root_span.set_status(Status(StatusCode.OK))
+        python_root_span.end()
     
     # Unload models and clear GPU cache after 3D generation stage
     print("\n[INFO] Unloading models and clearing GPU cache...")
