@@ -5,7 +5,15 @@ from modules.part_synthesis.utils import render_utils, postprocessing_utils
 from modules.part_synthesis.representations.gaussian.gaussian_model import Gaussian
 
 
-def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, save_glb=True, textured=True):
+def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, save_glb=True, textured=True, target_total_triangles=None):
+    """
+    Save part outputs with optional target total triangle count for merged mesh.
+    
+    Args:
+        target_total_triangles: Target total triangles for merged mesh (15,000-70,000).
+                               If None, uses simplify_ratio directly.
+                               If specified, calculates simplify_ratio to achieve target.
+    """
     os.makedirs(output_dir, exist_ok=True)
     
     # Debug: Print settings
@@ -27,6 +35,30 @@ def save_parts_outputs(outputs, output_dir, simplify_ratio, save_video=False, sa
     else:
         print("[WARN] No valid output formats available. Skipping save_parts_outputs.")
         return
+    
+    # If target_total_triangles is specified, calculate simplify_ratio from total initial faces
+    if target_total_triangles is not None and save_glb:
+        # First pass: count total initial faces across all parts
+        total_initial_faces = 0
+        for i in range(num_parts):
+            if i == 0:
+                continue  # Skip part 0 (overall model)
+            if 'mesh' in outputs and i < len(outputs['mesh']) and outputs['mesh'][i] is not None:
+                faces = outputs['mesh'][i].faces
+                if faces is not None:
+                    total_initial_faces += faces.shape[0]
+        
+        if total_initial_faces > 0:
+            # Calculate simplify_ratio to achieve target
+            # simplify_ratio = target_triangles / total_initial_triangles
+            target_ratio = target_total_triangles / total_initial_faces
+            # Clamp to reasonable range (0.01 to 1.0)
+            target_ratio = max(0.01, min(1.0, target_ratio))
+            simplify_ratio = target_ratio
+            print(f"[INFO] Target total triangles: {target_total_triangles:,}, initial total: {total_initial_faces:,}, calculated simplify_ratio: {simplify_ratio:.4f}")
+        else:
+            print(f"[WARN] Could not determine initial face count, using provided simplify_ratio: {simplify_ratio}")
+    
     gs_list = []
     
     for i in range(num_parts):

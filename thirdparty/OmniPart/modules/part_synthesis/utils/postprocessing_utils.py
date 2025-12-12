@@ -397,23 +397,23 @@ def postprocess_mesh(
                     mesh_center = vertices.mean(axis=0)
                     mesh_extent = np.linalg.norm(vertices.max(axis=0) - vertices.min(axis=0))
                     
-                    # Calculate target error based on screen arc angle
-                    # For screen-space: error should be relative to viewing distance
-                    # Default: 1% of mesh extent, adjusted for screen projection
-                    target_error = 0.01  # 1% relative error
+                    # Use meshoptimizer autolod algorithm (from Godot)
+                    # This automatically calculates error scale using meshopt_simplifyScale
+                    # No need to manually set target_error - autolod handles it
                     
-                    # Simplify with meshoptimizer
+                    # Simplify with meshoptimizer using autolod
                     result = simplify_with_screen_error(
                         vertices,
                         indices,
                         target_index_count=target_indices,
-                        target_error=target_error,
+                        target_error=None,  # None = use autolod to calculate automatically
                         camera_position=mesh_center + np.array([0, 0, mesh_extent * 2], dtype=np.float32),
                         camera_direction=np.array([0, 0, -1], dtype=np.float32),
                         fov=40.0,
                         screen_width=1920,
                         screen_height=1080,
                         options=0,
+                        use_autolod=True,  # Enable autolod algorithm from Godot
                     )
                     
                     # Handle return value (may be 2 or 3 elements depending on version)

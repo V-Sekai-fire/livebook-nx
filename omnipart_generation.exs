@@ -1869,6 +1869,8 @@ try:
     
     # Save outputs
     print("[INFO] Saving outputs...")
+    # Target 50,000 triangles for merged mesh (within 15,000-70,000 range)
+    target_total_triangles = 50000
     save_parts_outputs(
         part_synthesis_output, 
         output_dir=inference_output_dir, 
@@ -1876,6 +1878,7 @@ try:
         save_video=False,
         save_glb=True,
         textured=textured,  # Use CLI option for texture baking
+        target_total_triangles=target_total_triangles,  # Target total triangles for merged mesh
     )
     
     # Merge parts

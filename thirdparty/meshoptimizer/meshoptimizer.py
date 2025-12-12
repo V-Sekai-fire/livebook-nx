@@ -91,18 +91,23 @@ def simplify(
     vertices: np.ndarray,
     indices: np.ndarray,
     target_index_count: int,
-    target_error: float = 0.01,
+    target_error: float = None,
     options: int = 0,
+    use_autolod: bool = True,
 ) -> tuple:
     """
-    Simplify mesh using meshoptimizer.
+    Simplify mesh using meshoptimizer with automatic LOD (autolod) algorithm.
+    
+    Uses meshopt_simplifyScale to automatically determine error scale, similar to Godot's implementation.
     
     Args:
         vertices: (N, 3) float32 array of vertex positions
         indices: (M,) uint32 array of triangle indices
         target_index_count: Target number of indices after simplification
-        target_error: Maximum relative error (0.01 = 1%)
+        target_error: Maximum relative error. If None and use_autolod=True, uses meshopt_simplifyScale.
+                     If use_autolod=False, defaults to 0.01 (1%)
         options: meshoptimizer options bitmask (0 = default)
+        use_autolod: If True, uses meshopt_simplifyScale to automatically calculate error scale
     
     Returns:
         new_indices: Simplified index buffer
@@ -113,6 +118,24 @@ def simplify(
     # Ensure correct types
     vertices = np.ascontiguousarray(vertices, dtype=np.float32)
     indices = np.ascontiguousarray(indices, dtype=np.uint32)
+    
+    # Use autolod: calculate error scale automatically using meshopt_simplifyScale
+    if use_autolod and target_error is None:
+        # Get pointer to vertex positions
+        vertices_ptr = vertices.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        
+        # Calculate scale factor using meshoptimizer's autolod algorithm
+        scale = lib.meshopt_simplifyScale(
+            vertices_ptr,
+            len(vertices),
+            12,  # stride = 3 floats * 4 bytes
+        )
+        
+        # Use 1% relative error, scaled by the mesh extent
+        # This is the standard autolod approach used in Godot
+        target_error = 0.01 * scale if scale > 0 else 0.01
+    elif target_error is None:
+        target_error = 0.01  # Default 1% relative error
     
     # Allocate output buffer (worst case is same size as input)
     output_indices = np.empty_like(indices)
@@ -147,33 +170,53 @@ def simplify_with_screen_error(
     vertices: np.ndarray,
     indices: np.ndarray,
     target_index_count: int,
-    target_error: float = 0.01,
+    target_error: float = None,
     camera_position: np.ndarray = None,
     camera_direction: np.ndarray = None,
     fov: float = 40.0,
     screen_width: int = 1920,
     screen_height: int = 1080,
     options: int = 0,
+    use_autolod: bool = True,
 ) -> tuple:
     """
-    Simplify mesh using meshoptimizer with screen-space arc angle error metric.
+    Simplify mesh using meshoptimizer with screen-space arc angle error metric and autolod.
+    
+    Uses meshopt_simplifyScale (autolod) to automatically determine error scale, similar to Godot's implementation.
     
     Args:
         vertices: (N, 3) float32 array of vertex positions
         indices: (M,) uint32 array of triangle indices
         target_index_count: Target number of indices after simplification
-        target_error: Maximum relative error (0.01 = 1%)
+        target_error: Maximum relative error. If None, uses autolod to calculate automatically.
         camera_position: (3,) camera position in world space. If None, uses origin.
         camera_direction: (3,) camera forward direction. If None, uses [0, 0, -1].
         fov: Field of view in degrees
         screen_width: Screen width in pixels
         screen_height: Screen height in pixels
         options: meshoptimizer options bitmask (0 = default)
+        use_autolod: If True, uses meshopt_simplifyScale to automatically calculate error scale
     
     Returns:
         new_indices: Simplified index buffer
         result_error: Actual error achieved
     """
+    # Use autolod to calculate base error scale
+    if use_autolod and target_error is None:
+        lib = _load_meshoptimizer_lib()
+        vertices_contiguous = np.ascontiguousarray(vertices, dtype=np.float32)
+        vertices_ptr = vertices_contiguous.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+        
+        # Calculate scale factor using meshoptimizer's autolod algorithm
+        scale = lib.meshopt_simplifyScale(
+            vertices_ptr,
+            len(vertices_contiguous),
+            12,  # stride = 3 floats * 4 bytes
+        )
+        
+        # Use 1% relative error, scaled by the mesh extent
+        target_error = 0.01 * scale if scale > 0 else 0.01
+    
     # Calculate screen-space error scale
     # Convert geometric error to screen-space arc angle error
     if camera_position is not None:
@@ -193,6 +236,6 @@ def simplify_with_screen_error(
             screen_error_scale = distance / screen_scale
             target_error = target_error * screen_error_scale
     
-    # Call base simplify function
-    return simplify(vertices, indices, target_index_count, target_error, options)
+    # Call base simplify function with autolod
+    return simplify(vertices, indices, target_index_count, target_error, options, use_autolod=use_autolod)
 
