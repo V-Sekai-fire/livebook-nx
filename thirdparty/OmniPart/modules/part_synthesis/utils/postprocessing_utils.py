@@ -20,6 +20,7 @@ import igraph
 import cv2
 from PIL import Image
 from .random_utils import sphere_hammersley_sequence
+from .render_utils import render_multiview
 from ..renderers import GaussianRenderer
 from ..representations import Strivec, Gaussian, MeshExtractResult
 
@@ -853,17 +854,14 @@ def to_glb(
             if verbose:
                 print(f"[DEBUG] After parametrize_mesh: {vertices.shape[0]} vertices, {faces.shape[0]} faces, {uvs.shape[0]} UVs")
 
-            # Render single view from the appearance representation for texturing
-            # Use front-facing view (yaw=0, pitch=0)
-            from .render_utils import yaw_pitch_r_fov_to_extrinsics_intrinsics, render_frames
-            extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics([0], [0], [2], [40])
-            res = render_frames(app_rep, extrinsics, intrinsics, {'resolution': 2048, 'bg_color': (0, 0, 0)}, verbose=False)
-            observations = [res['color'][0]]
-            # Create mask from the rendered image
-            masks = [np.any(observations[0] > 0, axis=-1)]
+            # Render multi-view images from the appearance representation for texturing
+            # Reduced from 100 to 30 views for faster texture baking (can be increased for higher quality)
+            observations, extrinsics, intrinsics = render_multiview(app_rep, resolution=2048, nviews=30)
+            # Create masks from the rendered images
+            masks = [np.any(observation > 0, axis=-1) for observation in observations]
             # Convert camera parameters to numpy
-            extrinsics = [extrinsics[0].cpu().numpy()]
-            intrinsics = [intrinsics[0].cpu().numpy()]
+            extrinsics = [extrinsics[i].cpu().numpy() for i in range(len(extrinsics))]
+            intrinsics = [intrinsics[i].cpu().numpy() for i in range(len(intrinsics))]
             
             # Bake texture from the rendered views onto the mesh
             # Use vertices as-is (no normalization) - mesh and Gaussian should already be in same coordinate system
@@ -925,11 +923,9 @@ def simplify_gs(
     if simplify <= 0:
         return gs
     
-    # Render single view from the original Gaussian representation
-    from .render_utils import yaw_pitch_r_fov_to_extrinsics_intrinsics, render_frames
-    extrinsics, intrinsics = yaw_pitch_r_fov_to_extrinsics_intrinsics([0], [0], [2], [40])
-    res = render_frames(gs, extrinsics, intrinsics, {'resolution': 1024, 'bg_color': (0, 0, 0)}, verbose=False)
-    observations = [torch.tensor(res['color'][0] / 255.0).float().cuda().permute(2, 0, 1)]
+    # Render multi-view images from the original Gaussian representation
+    observations, extrinsics, intrinsics = render_multiview(gs, resolution=1024, nviews=100)
+    observations = [torch.tensor(obs / 255.0).float().cuda().permute(2, 0, 1) for obs in observations]
     
     # Following https://arxiv.org/pdf/2411.06019
     # Initialize renderer

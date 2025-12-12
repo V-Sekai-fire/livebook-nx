@@ -1561,24 +1561,23 @@ try:
     bbox_gen_model.to(device)
     bbox_gen_model.eval().half()
     
-    # Load first image for single-view generation
-    print(f"[INFO] Loading first image for 3D generation...")
+    # Load all images for multiview generation
+    print(f"[INFO] Loading {len(processed_image_paths)} image(s) for multiview 3D generation...")
     
     # Load mask from first image (for part layout)
     img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(processed_image_paths[0], mask_path)
     img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
     
-    # Load only first image
-    first_image = Image.open(processed_image_paths[0])
-    images_list = [first_image]
-    print(f"[DEBUG] Using single image: {Path(processed_image_paths[0]).name}")
+    # Load all images as PIL Images for multiview
+    images_list = [Image.open(img_path) for img_path in processed_image_paths]
+    print(f"[DEBUG] Loaded {len(images_list)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}")
     
     # Generate voxel coordinates with performance optimizations
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
-    # Generate voxel coordinates from first image
-    print(f"[INFO] Generating voxel coordinates from single view...")
+    # Generate voxel coordinates from all images (multiview)
+    print(f"[INFO] Generating voxel coordinates from {len(images_list)} view(s)...")
     voxel_coords = part_synthesis_pipeline.get_coords(images_list, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
@@ -1630,9 +1629,9 @@ try:
     import gc
     gc.collect()
     
-    # Use first image for conditioning
-    print(f"[INFO] Using single image for SLAT generation...")
-    print(f"[DEBUG] Conditioning on image: {Path(processed_image_paths[0]).name}")
+    # Use all images for multiview conditioning
+    print(f"[INFO] Using {len(images_list)} image(s) for SLAT generation...")
+    print(f"[DEBUG] Conditioning on images: {[Path(p).name for p in processed_image_paths]}")
     cond = part_synthesis_pipeline.get_cond(images_list)
     print(f"[DEBUG] Condition shape: {cond['cond'].shape if isinstance(cond, dict) and 'cond' in cond else 'N/A'}")
     
