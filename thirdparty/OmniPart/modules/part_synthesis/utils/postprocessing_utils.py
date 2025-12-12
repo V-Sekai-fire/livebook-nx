@@ -368,8 +368,13 @@ def postprocess_mesh(
             
             # Calculate target number of indices (3 per face)
             target_indices = int(faces.shape[0] * simplify_ratio * 3)
+            target_triangles = target_indices // 3
             if target_indices < 12:  # Minimum 4 faces = 12 indices
                 target_indices = 12
+                target_triangles = 4
+            
+            if verbose:
+                tqdm.write(f'[MESHOPT] Current: {faces.shape[0]} faces, Target: {target_triangles} triangles (simplify_ratio={simplify_ratio:.4f})')
             
             if target_indices >= faces.shape[0] * 3:
                 # No decimation needed
@@ -388,7 +393,8 @@ def postprocess_mesh(
                         meshopt_source = "wrapper (local path)"
                     
                     if verbose:
-                        tqdm.write(f'Using meshoptimizer for decimation (source: {meshopt_source})')
+                        tqdm.write(f'[MESHOPT] Using meshoptimizer for decimation (source: {meshopt_source})')
+                        tqdm.write(f'[MESHOPT] Calling simplify_with_screen_error with target_index_count={target_indices} (target_triangles={target_triangles})')
                     
                     # Convert faces to flat index array
                     indices = faces.flatten().astype(np.uint32)

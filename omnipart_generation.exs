@@ -208,113 +208,45 @@ defmodule ArgsParser do
       System.halt(0)
     end
 
-    # Get image paths - support comma-separated values
-    image_paths = case Keyword.get(opts, :image) do
+    # Get single image path (no multiview support)
+    image_path = case Keyword.get(opts, :image) do
       nil ->
-        # No --image flag, use positional args
-        args
+        # No --image flag, use first positional arg
+        List.first(args)
       image_val when is_binary(image_val) ->
-        # Split comma-separated values
         image_val
-        |> String.split(",")
-        |> Enum.map(&String.trim/1)
-        |> Enum.filter(&(&1 != ""))
       image_val ->
-        # Convert to string and split
         to_string(image_val)
-        |> String.split(",")
-        |> Enum.map(&String.trim/1)
-        |> Enum.filter(&(&1 != ""))
     end
     
-    # Debug: Verify all images are parsed
-    if length(image_paths) > 1 do
-      require Logger
-      Logger.debug("Parsed #{length(image_paths)} images: #{inspect(Enum.map(image_paths, &Path.basename/1))}")
-      OtelLogger.info("Parsed multiple images", [{"image.count", length(image_paths)}])
-    end
-
-    # Get mask paths - support comma-separated values
-    mask_paths = case Keyword.get(opts, :mask) do
-      nil ->
-        # No --mask flag, try positional args after images
-        if length(image_paths) > 0 do
-          Enum.drop(args, length(image_paths))
-        else
-          []
-        end
-      mask_val when is_binary(mask_val) ->
-        # Split comma-separated values
-        mask_val
-        |> String.split(",")
-        |> Enum.map(&String.trim/1)
-        |> Enum.filter(&(&1 != ""))
-      mask_val ->
-        # Convert to string and split
-        to_string(mask_val)
-        |> String.split(",")
-        |> Enum.map(&String.trim/1)
-        |> Enum.filter(&(&1 != ""))
-    end
-
-    if length(image_paths) == 0 do
-      OtelLogger.error("At least one image path is required", [
-        {"error.type", "validation"},
-        {"error.message", "No image paths provided"}
-      ])
-      IO.puts("""
-      Error: At least one image path is required.
-      
-      Usage:
-        elixir omnipart_generation.exs <image_path> [image_path2 ...] [mask_path ...] [options]
-        elixir omnipart_generation.exs --image <path1>,<path2>,<path3> [--mask <path1>,<path2>] [options]
-      
-      Use --help or -h for more information.
-      """)
+    if is_nil(image_path) do
+      IO.puts("Error: --image flag or image path argument is required")
       System.halt(1)
     end
 
-    # Check if all image files exist
-    Enum.each(image_paths, fn image_path ->
-      if !File.exists?(image_path) do
-        OtelLogger.error("Image file not found", [{"file.path", image_path}])
-        System.halt(1)
-      end
-    end)
+    # Get single mask path (no multiview support)
+    mask_path = case Keyword.get(opts, :mask) do
+      nil -> nil
+      mask_val when is_binary(mask_val) -> mask_val
+      mask_val -> to_string(mask_val)
+    end
 
-    # Validate mask paths (must match number of images or be empty)
-    if length(mask_paths) > 0 && length(mask_paths) != length(image_paths) do
-      OtelLogger.error("Number of mask paths must match number of image paths", [
-        {"error.type", "validation"},
-        {"mask.count", length(mask_paths)},
-        {"image.count", length(image_paths)}
-      ])
-      IO.puts("""
-      Error: Number of mask paths (#{length(mask_paths)}) must match number of image paths (#{length(image_paths)})
-      """)
+    # Check if image file exists
+    if !File.exists?(image_path) do
+      OtelLogger.error("Image file not found", [{"file.path", image_path}])
+      IO.puts("Error: Image file not found: #{image_path}")
       System.halt(1)
     end
 
-    # Check mask files exist, set auto_generate flags
-    {mask_paths_valid, auto_generate_flags} = Enum.with_index(mask_paths)
-      |> Enum.map_reduce([], fn {mask_path, idx}, acc ->
-        if mask_path && File.exists?(mask_path) do
-          {mask_path, [false | acc]}
-        else
-          if mask_path do
-            SpanCollector.add_span_attribute("mask.auto_generate.#{idx}", true)
-            SpanCollector.add_span_attribute("mask.path.#{idx}", mask_path)
-          end
-          {nil, [true | acc]}
-        end
-      end)
-    
-    auto_generate_flags = Enum.reverse(auto_generate_flags)
-    # If no masks provided, auto-generate all
-    {mask_paths_valid, auto_generate_flags} = if length(mask_paths) == 0 do
-      {List.duplicate(nil, length(image_paths)), List.duplicate(true, length(image_paths))}
+    # Check mask file exists, set auto_generate flag
+    {mask_path_valid, auto_generate_mask} = if mask_path && File.exists?(mask_path) do
+      {mask_path, false}
     else
-      {mask_paths_valid, auto_generate_flags}
+      if mask_path do
+        SpanCollector.add_span_attribute("mask.auto_generate", true)
+        SpanCollector.add_span_attribute("mask.path", mask_path)
+      end
+      {nil, true}
     end
 
     segment_only = Keyword.get(opts, :segment_only, false)
@@ -327,40 +259,18 @@ defmodule ArgsParser do
       System.halt(1)
     end
     
-    # Parse merge groups - support multiple (separated by ||)
+    # Parse merge groups (single string, no multiview support)
     merge_groups_str = Keyword.get(opts, :merge_groups)
-    merge_groups_list = if merge_groups_str do
-      merge_groups_str
-      |> String.split("||")
-      |> Enum.map(&String.trim/1)
-      |> Enum.filter(&(&1 != ""))
-    else
-      []
-    end
-    
-    # Validate merge groups count matches images (or is empty)
-    if length(merge_groups_list) > 0 && length(merge_groups_list) != length(image_paths) do
-      OtelLogger.error("Number of merge groups must match number of image paths", [
-        {"error.type", "validation"},
-        {"merge_groups.count", length(merge_groups_list)},
-        {"image.count", length(image_paths)}
-      ])
-      IO.puts("""
-      Error: Number of merge groups (#{length(merge_groups_list)}) must match number of image paths (#{length(image_paths)})
-      Use || to separate merge groups for each image, e.g., "0,1;3,4||2,3||1,2"
-      """)
-      System.halt(1)
-    end
     
     %{
-      image_paths: image_paths,
-      mask_paths: mask_paths_valid,
-      auto_generate_masks: auto_generate_flags,
+      image_path: image_path,
+      mask_path: mask_path_valid,
+      auto_generate_mask: auto_generate_mask,
       segment_only: segment_only,
       apply_merge: apply_merge,
       output_dir: Keyword.get(opts, :output_dir, "output"),
       size_threshold: Keyword.get(opts, :size_threshold, 2000),
-      merge_groups: merge_groups_list,
+      merge_groups: merge_groups_str,
       num_inference_steps: Keyword.get(opts, :num_inference_steps, 25),
       guidance_scale: Keyword.get(opts, :guidance_scale, 7.5),
       simplify_ratio: Keyword.get(opts, :simplify_ratio, 0.3),
@@ -380,52 +290,31 @@ mode = cond do
   true -> "Full Generation"
 end
 
-images_str = if is_list(config.image_paths) and length(config.image_paths) > 0 do
-  if length(config.image_paths) == 1 do
-    Path.basename(List.first(config.image_paths))
-  else
-    "#{length(config.image_paths)} image(s): #{Enum.join(Enum.map(config.image_paths, &Path.basename/1), ", ")}"
-  end
+images_str = if config.image_path do
+  Path.basename(config.image_path)
 else
-  if config.image_paths do
-    # Handle case where image_paths might be a single string (shouldn't happen, but be safe)
-    if is_binary(config.image_paths) do
-      Path.basename(config.image_paths)
-    else
-      "No images specified"
-    end
-  else
-    "No images specified"
-  end
+  "No image specified"
 end
 
-masks_str = if is_list(config.mask_paths) and length(config.mask_paths) > 0 do
-  "#{length(config.mask_paths)} mask(s)"
+masks_str = if config.mask_path do
+  Path.basename(config.mask_path)
 else
-  if config.mask_paths && length(config.mask_paths) > 0 && hd(config.mask_paths) do
-    Path.basename(hd(config.mask_paths))
-  else
-    "Auto-generate using SAM"
-  end
+  "Auto-generate using SAM"
 end
 
-merge_groups_str = if is_list(config.merge_groups) and length(config.merge_groups) > 0 do
-  "#{length(config.merge_groups)} merge group set(s)"
+merge_groups_str = if config.merge_groups do
+  config.merge_groups
 else
-  if config.merge_groups && length(config.merge_groups) > 0 do
-    inspect(config.merge_groups)
-  else
-    nil
-  end
+  nil
 end
 
 # Log configuration using OpenTelemetry
 OtelLogger.info("OmniPart Generation starting", [
   {"mode", mode},
-  {"image.count", length(config.image_paths)},
-  {"mask.count", length(Enum.filter(config.mask_paths, &(&1 != nil)))},
+  {"image.path", config.image_path},
+  {"mask.path", config.mask_path || "auto-generate"},
   {"output.dir", config.output_dir},
-  {"size_threshold", if(config.segment_only || (config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks)), do: config.size_threshold, else: nil)},
+  {"size_threshold", if(config.segment_only || config.auto_generate_mask, do: config.size_threshold, else: nil)},
   {"inference_steps", if(config.segment_only, do: nil, else: config.num_inference_steps)},
   {"guidance_scale", if(config.segment_only, do: nil, else: config.guidance_scale)},
   {"simplify_ratio", if(config.segment_only, do: nil, else: config.simplify_ratio)},
@@ -440,7 +329,7 @@ Mode: #{mode}
 Images: #{images_str}
 Masks: #{masks_str}
 Output Directory: #{config.output_dir}
-#{if config.auto_generate_masks && length(config.auto_generate_masks) > 0 && Enum.any?(config.auto_generate_masks) || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if merge_groups_str, do: "Merge Groups: #{merge_groups_str}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\nTextured: #{config.textured}\n", else: ""}GPU: #{config.gpu}
+#{if config.auto_generate_mask || config.segment_only, do: "Size Threshold: #{config.size_threshold}\n", else: ""}#{if merge_groups_str, do: "Merge Groups: #{merge_groups_str}\n", else: ""}#{if not config.segment_only, do: "Inference Steps: #{config.num_inference_steps}\nGuidance Scale: #{config.guidance_scale}\nSimplify Ratio: #{config.simplify_ratio}\nTextured: #{config.textured}\n", else: ""}GPU: #{config.gpu}
 Seed: #{config.seed}
 """)
 
@@ -453,23 +342,15 @@ config_with_paths = Map.merge(config, %{
   apply_merge: config.apply_merge
 })
 
-# Validate that image_paths is a list with all images
-if not is_list(config_with_paths.image_paths) or length(config_with_paths.image_paths) == 0 do
-  OtelLogger.error("image_paths must be a non-empty list", [
+# Validate that image_path is provided
+if is_nil(config_with_paths.image_path) or config_with_paths.image_path == "" do
+  OtelLogger.error("image_path is required", [
     {"error.type", "validation"},
-    {"image_paths.value", inspect(config_with_paths.image_paths)}
+    {"image_path.value", inspect(config_with_paths.image_path)}
   ])
-  IO.puts("Error: image_paths must be a non-empty list")
-  IO.puts("  Got: #{inspect(config_with_paths.image_paths)}")
+  IO.puts("Error: image_path is required")
+  IO.puts("  Got: #{inspect(config_with_paths.image_path)}")
   System.halt(1)
-end
-
-# Debug: Log how many images are in config before serialization
-require Logger
-Logger.debug("Config contains #{length(config_with_paths.image_paths)} image(s) before serialization")
-if length(config_with_paths.image_paths) > 1 do
-  Logger.debug("Image paths in config: #{inspect(Enum.map(config_with_paths.image_paths, &Path.basename/1))}")
-  OtelLogger.info("Config contains multiple images", [{"image.count", length(config_with_paths.image_paths)}])
 end
 
 # Save config to JSON for Python to read
@@ -482,12 +363,9 @@ case File.read(config_file) do
   {:ok, content} ->
     case Jason.decode(content) do
       {:ok, decoded} ->
-        image_count = if is_list(decoded["image_paths"]), do: length(decoded["image_paths"]), else: 0
-        if image_count != length(config_with_paths.image_paths) do
-          OtelLogger.warn("Config file image count mismatch", [
-            {"expected.count", length(config_with_paths.image_paths)},
-            {"actual.count", image_count}
-          ])
+        # Config validation - image_path should be present
+        if is_nil(decoded["image_path"]) or decoded["image_path"] == "" do
+          OtelLogger.warn("Config file missing image_path")
         end
       {:error, _} -> :ok
     end
@@ -704,46 +582,16 @@ except ImportError as e:
     config_file_code,
     ~S"""
 
-# Support multiple images - read as lists
-image_paths = config.get('image_paths', [])
-mask_paths = config.get('mask_paths', [])
-auto_generate_masks = config.get('auto_generate_masks', [])
-# Ensure merge_groups_list is a list
-merge_groups_list = config.get('merge_groups', [])
-if not isinstance(merge_groups_list, list):
-    # If it's a string (backward compatibility), convert to list
-    if isinstance(merge_groups_list, str):
-        merge_groups_list = [merge_groups_list]
-    else:
-        merge_groups_list = []
+# Single image support (no multiview)
+image_path = config.get('image_path')
+mask_path = config.get('mask_path')
+auto_generate_mask = config.get('auto_generate_mask', True)
+merge_groups_str = config.get('merge_groups')
 
-# Ensure image_paths is a list
-if not isinstance(image_paths, list):
-    # If it's a string (single image), convert to list
-    if isinstance(image_paths, str):
-        image_paths = [image_paths]
-    else:
-        image_paths = []
+if not image_path:
+    raise ValueError("image_path is required")
 
-# Backward compatibility: if old single image format, convert to list
-if len(image_paths) == 0 and config.get('image_path'):
-    image_paths = [config.get('image_path')]
-    mask_paths = [config.get('mask_path')] if config.get('mask_path') else []
-    auto_generate_masks = [config.get('auto_generate_mask', False)]
-    # Only override merge_groups_list if it's empty and we have a string value
-    merge_groups_str = config.get('merge_groups')
-    if not merge_groups_list and merge_groups_str:
-        if isinstance(merge_groups_str, str):
-            merge_groups_list = [merge_groups_str]
-        elif isinstance(merge_groups_str, list):
-            merge_groups_list = merge_groups_str
-
-# Debug: Verify images were read correctly
-print(f"[DEBUG] Read {len(image_paths)} image(s) from config", flush=True)
-if len(image_paths) > 1:
-    print(f"[DEBUG] Image paths: {[Path(p).name for p in image_paths]}", flush=True)
-    print(f"[DEBUG] Merge groups list: {merge_groups_list} (type: {type(merge_groups_list).__name__}, length: {len(merge_groups_list)})", flush=True)
-print(f"[DEBUG] Starting to process {len(image_paths)} image(s)...", flush=True)
+print(f"[DEBUG] Processing single image: {Path(image_path).name}", flush=True)
 
 segment_only = config.get('segment_only', False)
 apply_merge = config.get('apply_merge', False)
@@ -759,37 +607,28 @@ omnipart_dir = config.get('omnipart_dir')
 checkpoint_dir = config.get('checkpoint_dir')
 
 # Resolve all paths to absolute
-image_paths = [str(Path(p).resolve()) for p in image_paths]
-mask_paths = [str(Path(p).resolve()) if p else None for p in mask_paths]
+image_path = str(Path(image_path).resolve())
+mask_path = str(Path(mask_path).resolve()) if mask_path else None
 output_dir_base = Path(output_dir).resolve()
 omnipart_dir = str(Path(omnipart_dir).resolve())
 checkpoint_dir = str(Path(checkpoint_dir).resolve())
 
-# Verify all input images exist
-for image_path in image_paths:
-    if not Path(image_path).exists():
-        raise FileNotFoundError(f"Image file not found: {image_path}")
+# Verify input image exists
+if not Path(image_path).exists():
+    raise FileNotFoundError(f"Image file not found: {image_path}")
 
-# Handle mask paths - ensure lists match length
-while len(mask_paths) < len(image_paths):
-    mask_paths.append(None)
-while len(auto_generate_masks) < len(image_paths):
-    auto_generate_masks.append(True)
-while len(merge_groups_list) < len(image_paths):
-    merge_groups_list.append(None)
-
-for i, mask_path in enumerate(mask_paths):
-    if mask_path:
-        if not Path(mask_path).exists():
-            logger.warning(f"Mask file not found: {mask_path}")
-            logger.info("Will auto-generate mask using SAM")
-            auto_generate_masks[i] = True
-            mask_paths[i] = None
-        elif not mask_path.lower().endswith('.exr'):
-            logger.warning(f"Mask file is not .exr format: {mask_path}")
-            logger.info("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
-    else:
-        auto_generate_masks[i] = True
+# Handle mask path
+if mask_path:
+    if not Path(mask_path).exists():
+        logger.warning(f"Mask file not found: {mask_path}")
+        logger.info("Will auto-generate mask using SAM")
+        auto_generate_mask = True
+        mask_path = None
+    elif not mask_path.lower().endswith('.exr'):
+        logger.warning(f"Mask file is not .exr format: {mask_path}")
+        logger.info("OmniPart expects .exr files with shape [h, w, 3] containing 2D part IDs")
+else:
+    auto_generate_mask = True
 
 # Verify OmniPart directory exists (optional - can use from Hugging Face)
 if not Path(omnipart_dir).exists():
@@ -797,10 +636,7 @@ if not Path(omnipart_dir).exists():
     print("Will attempt to use OmniPart from Python package or Hugging Face")
 
 print("\n=== Step 2: Prepare Input Data ===")
-if len(image_paths) == 1:
-    print(f"Images (1): {Path(image_paths[0]).name}")
-else:
-    print(f"Images ({len(image_paths)}): {', '.join([Path(p).name for p in image_paths])}")
+print(f"Image: {Path(image_path).name}")
 
 # Create output directory with timestamped subdirectory (matching other generation scripts)
 output_dir_base.mkdir(parents=True, exist_ok=True)
@@ -812,10 +648,10 @@ Path(output_dir).mkdir(parents=True, exist_ok=True)
 # Save input config JSON to output directory for reference
 output_config_path = Path(output_dir) / "input_config.json"
 config_dict = {
-    'image_paths': image_paths,
-    'mask_paths': mask_paths,
-    'auto_generate_masks': auto_generate_masks,
-    'merge_groups': merge_groups_list,
+    'image_path': image_path,
+    'mask_path': mask_path,
+    'auto_generate_mask': auto_generate_mask,
+    'merge_groups': merge_groups_str,
     'output_dir': output_dir,
     'segment_only': segment_only,
     'apply_merge': apply_merge,
@@ -832,33 +668,30 @@ with open(output_config_path, 'w') as f:
     json.dump(config_dict, f, indent=2)
 print(f"[OK] Input config saved to: {output_config_path}")
 
-# Copy input images to output directory for self-contained output
+# Copy input image to output directory for self-contained output
 import shutil
-for image_path in image_paths:
-    src_path = Path(image_path)
+src_path = Path(image_path)
+if src_path.exists():
+    dst_path = Path(output_dir) / src_path.name
+    shutil.copy2(src_path, dst_path)
+    print(f"[OK] Copied input image to: {dst_path}")
+else:
+    print(f"[WARN] Input image not found, skipping copy: {image_path}")
+
+# Copy mask file if it exists
+if mask_path:
+    src_path = Path(mask_path)
     if src_path.exists():
         dst_path = Path(output_dir) / src_path.name
         shutil.copy2(src_path, dst_path)
-        print(f"[OK] Copied input image to: {dst_path}")
-    else:
-        print(f"[WARN] Input image not found, skipping copy: {image_path}")
+        print(f"[OK] Copied input mask to: {dst_path}")
 
-# Copy mask files if they exist
-for mask_path in mask_paths:
-    if mask_path:
-        src_path = Path(mask_path)
-        if src_path.exists():
-            dst_path = Path(output_dir) / src_path.name
-            shutil.copy2(src_path, dst_path)
-            print(f"[OK] Copied input mask to: {dst_path}")
+# Process single image for segmentation
+processed_image = None
+processed_mask = None
+processed_image_path = None
 
-# Process each image separately for segmentation
-processed_images = []
-processed_masks = []
-processed_image_paths = []
-
-# Load SAM models once before loop for efficiency (for regular segmentation mode)
-# Note: apply_merge mode loads its own SAM models per image
+# Load SAM models for segmentation
 sam_model = None
 sam_mask_generator = None
 if not apply_merge:
@@ -938,450 +771,438 @@ if not apply_merge:
             )
             sam_ckpt_path = Path(sam_ckpt_path)
     
-    # Load SAM model once (will be reused for all images)
-    print("[INFO] Loading SAM model for segmentation (will be reused for all images)...")
+    # Load SAM model
+    print("[INFO] Loading SAM model for segmentation...")
     sam_model = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device)
     sam_mask_generator = SamAutomaticMaskGenerator(sam_model)
 
-for img_idx, image_path in enumerate(image_paths):
-    print(f"\n--- Processing image {img_idx + 1}/{len(image_paths)}: {Path(image_path).name} ---", flush=True)
-    print(f"[DEBUG] Loop iteration {img_idx + 1}, total images: {len(image_paths)}, processed so far: {len(processed_image_paths)}", flush=True)
-    mask_path = mask_paths[img_idx] if img_idx < len(mask_paths) else None
-    auto_generate_mask = auto_generate_masks[img_idx] if img_idx < len(auto_generate_masks) else True
-    merge_groups_str = merge_groups_list[img_idx] if img_idx < len(merge_groups_list) and merge_groups_list[img_idx] else None
-    
-    # State file for iterative workflow (per image)
-    img_name = Path(image_path).stem
-    state_file = Path(output_dir) / f"{img_name}_segmentation_state.json"
-    
-    try:
-        # Handle apply_merge mode - load existing state
-        if apply_merge:
-            if not state_file.exists():
-                raise FileNotFoundError(
-                    f"Segmentation state not found: {state_file}. "
-                    "Please run with --segment-only first to generate initial segmentation."
-                )
-            
-            print("\n=== Step 2: Apply Merge Groups ===")
-            print(f"Loading segmentation state from: {state_file}")
-            
-            import json
-            import numpy as np
-            with open(state_file, 'r') as f:
-                state = json.load(f)
-            
-            original_group_ids = np.array(state['original_group_ids'])
-            processed_image_path = state['processed_image']
-            image_array = np.array(state['image'])
-            
-            if not Path(omnipart_dir).exists():
-                raise FileNotFoundError(f"OmniPart directory not found at {omnipart_dir}")
-            
-            sys.path.insert(0, str(omnipart_dir))
-            # Add meshoptimizer to path for local development
-            meshoptimizer_dir = Path(omnipart_dir).parent.parent / "meshoptimizer"
-            if meshoptimizer_dir.exists():
-                sys.path.insert(0, str(meshoptimizer_dir))
-            
-            from segment_anything import SamAutomaticMaskGenerator, build_sam
-            from modules.label_2d_mask.label_parts import get_sam_mask, clean_segment_edges
-            try:
-                from modules.label_2d_mask.visualizer import Visualizer
-            except ImportError:
-                print("[WARN] detectron2 not available, using simplified visualizer")
-                # Create a minimal visualizer class that provides the needed methods
-                class Visualizer:
-                    def __init__(self, image):
-                        if isinstance(image, np.ndarray):
-                            self.img = image.copy()
-                        else:
-                            self.img = np.array(image)
-                        self.output = Image.fromarray(self.img)
-                    
-                    def draw_binary_mask(self, binary_mask, color=None, edge_color=None, text=None, alpha=0.7, area_threshold=10):
-                        # Simplified binary mask drawing without detectron2
-                        if np.sum(binary_mask) < area_threshold:
-                            return self.output
+# Process single image
+print(f"\n--- Processing image: {Path(image_path).name} ---", flush=True)
+
+# State file for iterative workflow
+img_name = Path(image_path).stem
+state_file = Path(output_dir) / f"{img_name}_segmentation_state.json"
+
+try:
+    # Handle apply_merge mode - load existing state
+    if apply_merge:
+        if not state_file.exists():
+            raise FileNotFoundError(
+                f"Segmentation state not found: {state_file}. "
+                "Please run with --segment-only first to generate initial segmentation."
+            )
+        
+        print("\n=== Step 2: Apply Merge Groups ===")
+        print(f"Loading segmentation state from: {state_file}")
+        
+        import json
+        import numpy as np
+        with open(state_file, 'r') as f:
+            state = json.load(f)
+        
+        original_group_ids = np.array(state['original_group_ids'])
+        processed_image_path = state['processed_image']
+        image_array = np.array(state['image'])
+        
+        if not Path(omnipart_dir).exists():
+            raise FileNotFoundError(f"OmniPart directory not found at {omnipart_dir}")
+        
+        sys.path.insert(0, str(omnipart_dir))
+        # Add meshoptimizer to path for local development
+        meshoptimizer_dir = Path(omnipart_dir).parent.parent / "meshoptimizer"
+        if meshoptimizer_dir.exists():
+            sys.path.insert(0, str(meshoptimizer_dir))
+        
+        from segment_anything import SamAutomaticMaskGenerator, build_sam
+        from modules.label_2d_mask.label_parts import get_sam_mask, clean_segment_edges
+        try:
+            from modules.label_2d_mask.visualizer import Visualizer
+        except ImportError:
+            print("[WARN] detectron2 not available, using simplified visualizer")
+            # Create a minimal visualizer class that provides the needed methods
+            class Visualizer:
+                def __init__(self, image):
+                    if isinstance(image, np.ndarray):
+                        self.img = image.copy()
+                    else:
+                        self.img = np.array(image)
+                    self.output = Image.fromarray(self.img)
+                
+                def draw_binary_mask(self, binary_mask, color=None, edge_color=None, text=None, alpha=0.7, area_threshold=10):
+                    # Simplified binary mask drawing without detectron2
+                    if np.sum(binary_mask) < area_threshold:
                         return self.output
-                    
-                    def draw_binary_mask_with_number(self, binary_mask, color=None, edge_color=None, text=None, 
-                                                     label_mode='1', alpha=0.1, anno_mode=['Mask'], area_threshold=10, font_size=None):
-                        # Simplified binary mask drawing with number without detectron2
-                        return self.draw_binary_mask(binary_mask, color, edge_color, text, alpha, area_threshold)
-            from PIL import Image
-            import numpy as np
-            import cv2
-            
-            # Parse merge groups
-            if not merge_groups_str:
-                raise ValueError("--merge-groups is required when using --apply-merge")
-            
-            merge_groups = []
-            group_sets = merge_groups_str.split(';')
-            for group_set in group_sets:
-                ids = [int(x.strip()) for x in group_set.split(',') if x.strip()]
-                if ids:
-                    merge_groups.append(ids)
-            
-            unique_ids = np.unique(original_group_ids)
-            unique_ids = unique_ids[unique_ids >= 0]
-            print(f"\n=== Applying Merge Groups ===")
-            print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
-            print(f"Merge groups to apply: {merge_groups}")
-            
-            # Load models (lightweight - just SAM for merging)
-            device_merge = "cuda" if torch.cuda.is_available() else "cpu"
-            sam_ckpt_path = Path(checkpoint_dir) / "sam_vit_h_4b8939.pth"
-            if not sam_ckpt_path.exists():
-                # Fallback: try to find in OmniPart_modules directory
-                omnipart_modules_dir = Path(checkpoint_dir).parent / "OmniPart_modules"
-                sam_ckpt_fallback = omnipart_modules_dir / "sam_vit_h_4b8939.pth"
-                if sam_ckpt_fallback.exists():
-                    sam_ckpt_path = sam_ckpt_fallback
+                    return self.output
+                
+                def draw_binary_mask_with_number(self, binary_mask, color=None, edge_color=None, text=None, 
+                                                 label_mode='1', alpha=0.1, anno_mode=['Mask'], area_threshold=10, font_size=None):
+                    # Simplified binary mask drawing with number without detectron2
+                    return self.draw_binary_mask(binary_mask, color, edge_color, text, alpha, area_threshold)
+        from PIL import Image
+        import numpy as np
+        import cv2
+        
+        # Parse merge groups
+        if not merge_groups_str:
+            raise ValueError("--merge-groups is required when using --apply-merge")
+        
+        merge_groups = []
+        group_sets = merge_groups_str.split(';')
+        for group_set in group_sets:
+            ids = [int(x.strip()) for x in group_set.split(',') if x.strip()]
+            if ids:
+                merge_groups.append(ids)
+        
+        unique_ids = np.unique(original_group_ids)
+        unique_ids = unique_ids[unique_ids >= 0]
+        print(f"\n=== Applying Merge Groups ===")
+        print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
+        print(f"Merge groups to apply: {merge_groups}")
+        
+        # Load models (lightweight - just SAM for merging)
+        device_merge = "cuda" if torch.cuda.is_available() else "cpu"
+        sam_ckpt_path = Path(checkpoint_dir) / "sam_vit_h_4b8939.pth"
+        if not sam_ckpt_path.exists():
+            # Fallback: try to find in OmniPart_modules directory
+            omnipart_modules_dir = Path(checkpoint_dir).parent / "OmniPart_modules"
+            sam_ckpt_fallback = omnipart_modules_dir / "sam_vit_h_4b8939.pth"
+            if sam_ckpt_fallback.exists():
+                sam_ckpt_path = sam_ckpt_fallback
+            else:
+                # Last resort: download via Python
+                print("[WARN] SAM checkpoint not found, downloading via Python...")
+                from huggingface_hub import hf_hub_download
+                sam_ckpt_path = hf_hub_download(
+                    repo_id="omnipart/OmniPart_modules",
+                    filename="sam_vit_h_4b8939.pth",
+                    local_dir=str(checkpoint_dir)
+                )
+                sam_ckpt_path = Path(sam_ckpt_path)
+        
+        sam_model_merge = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device_merge)
+        sam_mask_generator_merge = SamAutomaticMaskGenerator(sam_model_merge)
+        
+        # Apply merge
+        processed_image = Image.open(processed_image_path)
+        visual = Visualizer(image_array)
+        
+        new_group_ids, merged_im = get_sam_mask(
+            image_array,
+            sam_mask_generator_merge,
+            visual,
+            merge_groups=merge_groups,
+            existing_group_ids=original_group_ids,
+            rgba_image=processed_image,
+            skip_split=True,
+            img_name=img_name,
+            save_dir=str(output_dir),
+            size_threshold=size_threshold
+        )
+        
+        new_unique_ids = np.unique(new_group_ids)
+        new_unique_ids = new_unique_ids[new_unique_ids >= 0]
+        print(f"\n=== Merge Results ===")
+        print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
+        print(f"Applied merge groups: {merge_groups}")
+        print(f"Final segment IDs: {sorted(new_unique_ids.tolist())}")
+        print(f"Result: {len(unique_ids)} segments -> {len(new_unique_ids)} segments")
+        
+        # Clean edges
+        new_group_ids = clean_segment_edges(new_group_ids)
+        
+        # Save visualization with group numbers (merged_im already has numbers drawn)
+        if merged_im is not None:
+            vis_path = Path(output_dir) / f"{img_name}_mask_segments_merged_labeled.png"
+            # Convert to PIL Image if it's a numpy array
+            if isinstance(merged_im, np.ndarray):
+                # Ensure it's uint8 and has the right shape
+                if merged_im.dtype != np.uint8:
+                    merged_im = (merged_im * 255).astype(np.uint8) if merged_im.max() <= 1.0 else merged_im.astype(np.uint8)
+                # Handle RGB vs RGBA
+                if len(merged_im.shape) == 3 and merged_im.shape[2] == 3:
+                    merged_im = Image.fromarray(merged_im, mode='RGB')
+                elif len(merged_im.shape) == 3 and merged_im.shape[2] == 4:
+                    merged_im = Image.fromarray(merged_im, mode='RGBA')
                 else:
-                    # Last resort: download via Python
-                    print("[WARN] SAM checkpoint not found, downloading via Python...")
-                    from huggingface_hub import hf_hub_download
-                    sam_ckpt_path = hf_hub_download(
-                        repo_id="omnipart/OmniPart_modules",
-                        filename="sam_vit_h_4b8939.pth",
-                        local_dir=str(checkpoint_dir)
-                    )
-                    sam_ckpt_path = Path(sam_ckpt_path)
+                    merged_im = Image.fromarray(merged_im)
+            merged_im.save(str(vis_path))
+            print(f"[OK] Merged mask visualization with group numbers saved to: {vis_path}")
+        
+        # Also save simple colored visualization
+        from modules.label_2d_mask.label_parts import get_mask
+        get_mask(new_group_ids, image_array, ids=3, img_name=img_name, save_dir=str(output_dir))
+        
+        # Save new mask as .exr (OpenCV with OpenEXR enabled via environment variable)
+        save_mask = new_group_ids + 1
+        save_mask = save_mask.reshape(518, 518, 1).repeat(3, axis=-1)
+        mask_path = str(Path(output_dir) / f"{img_name}_mask.exr")
+        # OpenCV with OPENCV_IO_ENABLE_OPENEXR='1' can write .exr files
+        cv2.imwrite(mask_path, save_mask.astype(np.float32))
+        print(f"[OK] Updated mask saved to: {mask_path}")
+        
+        # Update state (keep original_group_ids unchanged for future merges)
+        state['group_ids'] = new_group_ids.tolist()
+        state['save_mask_path'] = mask_path
+        with open(state_file, 'w') as f:
+            json.dump(state, f)
+        
+        print("\n=== Merge Complete ===")
+        print("You can:")
+        print("  1. Run again with --apply-merge and different --merge-groups to refine further")
+        print("  2. Run without --apply-merge to generate 3D model")
+        
+        # Clean up merge-specific SAM models
+        del sam_model_merge, sam_mask_generator_merge
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            import gc
+            gc.collect()
+        
+        # Exit early - don't generate 3D (only for apply_merge mode)
+        import sys
+        sys.exit(0)
+    
+    # Handle mask - use provided mask or generate new one (only if not apply_merge)
+    if not apply_merge:
+        if not auto_generate_mask and mask_path:
+            # Use provided mask
+            print(f"\n=== Step 2a: Using Provided Mask ===")
+            print(f"Using mask: {mask_path}")
+            # Load the mask and create processed image
+            mask_array = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
+            if mask_array is None:
+                print(f"[WARN] Failed to load mask from {mask_path}, will auto-generate")
+                auto_generate_mask = True
+            else:
+                # Mask is provided and loaded successfully
+                # Load original image and process it
+                img = Image.open(image_path).convert("RGB")
+                # Use transparent-background for background removal
+                try:
+                    from transparent_background import Remover
+                    remover = Remover(mode='base', device=device)
+                    processed_image = remover.process(img, type='rgba')
+                    alpha_channel = np.array(processed_image.split()[3])
+                    alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (3, 3), 0.5).astype(np.uint8)
+                    processed_image.putalpha(Image.fromarray(alpha_channel))
+                    print("[OK] Background removed successfully using transparent-background")
+                except Exception as e:
+                    print(f"[WARN] transparent-background removal failed: {e}, using original image")
+                    processed_image = img.convert("RGBA")
+                
+                # Resize and pad to square (imported before loop)
+                from modules.label_2d_mask.label_parts import resize_and_pad_to_square
+                processed_image = resize_and_pad_to_square(processed_image)
+                
+                # Save processed image
+                processed_image_path = str(Path(output_dir) / f"{img_name}_processed.png")
+                processed_image.save(processed_image_path)
+                print(f"[OK] Processed image saved to: {processed_image_path}")
+                
+                # Store results
+                processed_image = Image.open(processed_image_path)
+                processed_mask = mask_path
+                processed_image_path = processed_image_path
+                print(f"[OK] Image processed: mask={mask_path}, processed_image={processed_image_path}")
+        
+        # Generate mask if needed
+        elif auto_generate_mask:
+            print("\n=== Step 2a: Generate Segmentation Mask ===")
+            print("Mask not provided. Generating automatically using SAM...")
             
-            sam_model_merge = build_sam(checkpoint=str(sam_ckpt_path)).to(device=device_merge)
-            sam_mask_generator_merge = SamAutomaticMaskGenerator(sam_model_merge)
+            # Use transparent-background (free open-source library) for background removal
+            # Powered by InSPyReNet (ACCV 2022) - research-backed, high-quality results
+            print("Removing background using transparent-background (InSPyReNet)...")
+            try:
+                from transparent_background import Remover
+                
+                # Load image
+                img = Image.open(image_path).convert("RGB")
+                
+                # Initialize remover with 'fast' mode for speed, or 'base' for better quality
+                # 'fast' mode is faster but 'base' provides better edge quality
+                print("Initializing transparent-background remover...")
+                remover = Remover(mode='base', device=device)  # Use 'base' for best quality
+                
+                # Remove background - returns RGBA image with transparent background
+                print("Processing image with transparent-background...")
+                processed_image = remover.process(img, type='rgba')
+                
+                # Apply slight edge smoothing to reduce aliasing (if needed)
+                # transparent-background already produces clean edges, but we can smooth slightly
+                alpha_channel = np.array(processed_image.split()[3])
+                alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (3, 3), 0.5).astype(np.uint8)
+                processed_image.putalpha(Image.fromarray(alpha_channel))
+                
+                print("[OK] Background removed successfully using transparent-background")
+                
+            except Exception as e:
+                print(f"[WARN] transparent-background removal failed: {e}, using original image")
+                img = Image.open(image_path).convert("RGB")
+                processed_image = img.convert("RGBA")
             
-            # Apply merge
-            processed_image = Image.open(processed_image_path)
-            visual = Visualizer(image_array)
+            # Use pre-loaded SAM models for part segmentation (loaded before loop)
+            if sam_model is None or sam_mask_generator is None:
+                raise RuntimeError("SAM models not loaded. This should not happen in regular segmentation mode.")
+    
+            # Resize and pad to square
+            processed_image = resize_and_pad_to_square(processed_image)
             
-            new_group_ids, merged_im = get_sam_mask(
-                image_array,
-                sam_mask_generator_merge,
-                visual,
-                merge_groups=merge_groups,
-                existing_group_ids=original_group_ids,
+            # Create white background version
+            white_bg = Image.new("RGBA", processed_image.size, (255, 255, 255, 255))
+            white_bg_img = Image.alpha_composite(white_bg, processed_image.convert("RGBA"))
+            image = np.array(white_bg_img.convert('RGB'))
+            
+            # Generate SAM masks
+            print(f"Generating segmentation masks (size threshold: {size_threshold})...")
+            visual = Visualizer(image)
+            
+            # Parse merge groups if provided
+            merge_groups = None
+            if merge_groups_str:
+                merge_groups = []
+                group_sets = merge_groups_str.split(';')
+                for group_set in group_sets:
+                    ids = [int(x.strip()) for x in group_set.split(',') if x.strip()]
+                    if ids:
+                        merge_groups.append(ids)
+                print(f"\n=== Merge Groups Provided ===")
+                print(f"Merge groups to apply after segmentation: {merge_groups}")
+            
+            # Get segmentation
+            group_ids, vis_image = get_sam_mask(
+                image, 
+                sam_mask_generator, 
+                visual, 
+                merge_groups=merge_groups, 
                 rgba_image=processed_image,
-                skip_split=True,
                 img_name=img_name,
                 save_dir=str(output_dir),
                 size_threshold=size_threshold
             )
             
-            new_unique_ids = np.unique(new_group_ids)
-            new_unique_ids = new_unique_ids[new_unique_ids >= 0]
-            print(f"\n=== Merge Results ===")
-            print(f"Original segment IDs: {sorted(unique_ids.tolist())}")
-            print(f"Applied merge groups: {merge_groups}")
-            print(f"Final segment IDs: {sorted(new_unique_ids.tolist())}")
-            print(f"Result: {len(unique_ids)} segments -> {len(new_unique_ids)} segments")
-            
             # Clean edges
-            new_group_ids = clean_segment_edges(new_group_ids)
+            group_ids = clean_segment_edges(group_ids)
             
-            # Save visualization with group numbers (merged_im already has numbers drawn)
-            if merged_im is not None:
-                vis_path = Path(output_dir) / f"{img_name}_mask_segments_merged_labeled.png"
-                # Convert to PIL Image if it's a numpy array
-                if isinstance(merged_im, np.ndarray):
-                    # Ensure it's uint8 and has the right shape
-                    if merged_im.dtype != np.uint8:
-                        merged_im = (merged_im * 255).astype(np.uint8) if merged_im.max() <= 1.0 else merged_im.astype(np.uint8)
-                    # Handle RGB vs RGBA
-                    if len(merged_im.shape) == 3 and merged_im.shape[2] == 3:
-                        merged_im = Image.fromarray(merged_im, mode='RGB')
-                    elif len(merged_im.shape) == 3 and merged_im.shape[2] == 4:
-                        merged_im = Image.fromarray(merged_im, mode='RGBA')
-                    else:
-                        merged_im = Image.fromarray(merged_im)
-                merged_im.save(str(vis_path))
-                print(f"[OK] Merged mask visualization with group numbers saved to: {vis_path}")
+            # Ensure mask indices start from 0 for this image (independent index space per image)
+            unique_ids = np.unique(group_ids)
+            unique_ids = unique_ids[unique_ids >= 0]  # Exclude background (-1)
+            if len(unique_ids) > 0:
+                # Create mapping to ensure indices start from 0
+                index_map = {}
+                for new_idx, old_idx in enumerate(sorted(unique_ids)):
+                    index_map[old_idx] = new_idx
+                # Apply remapping
+                remapped_group_ids = np.zeros_like(group_ids) - 1  # Initialize with -1 (background)
+                for old_idx, new_idx in index_map.items():
+                    remapped_group_ids[group_ids == old_idx] = new_idx
+                group_ids = remapped_group_ids
+                print(f"[INFO] Remapped mask indices to start from 0: {sorted(unique_ids.tolist())} -> {sorted([index_map[i] for i in unique_ids])}")
             
-            # Also save simple colored visualization
+            # Save visualization with group numbers
+            # get_sam_mask already saves original visualization when merge_groups are provided
+            # We just need to ensure proper file naming per image
+            if vis_image is not None:
+                # Helper function to save visualization
+                def save_vis_image(vis_img, save_path, label_type):
+                    if isinstance(vis_img, np.ndarray):
+                        # Ensure it's uint8 and has the right shape
+                        if vis_img.dtype != np.uint8:
+                            vis_img = (vis_img * 255).astype(np.uint8) if vis_img.max() <= 1.0 else vis_img.astype(np.uint8)
+                        # Handle RGB vs RGBA
+                        if len(vis_img.shape) == 3 and vis_img.shape[2] == 3:
+                            vis_img = Image.fromarray(vis_img, mode='RGB')
+                        elif len(vis_img.shape) == 3 and vis_img.shape[2] == 4:
+                            vis_img = Image.fromarray(vis_img, mode='RGBA')
+                        else:
+                            vis_img = Image.fromarray(vis_img)
+                    vis_img.save(str(save_path))
+                    print(f"[OK] {label_type} mask visualization saved to: {save_path}")
+                
+                if merge_groups:
+                    # get_sam_mask saves original as {img_name}_mask_segments_original_labeled.png
+                    # Copy/rename it to {img_name}_mask_segments_labeled.png for consistency
+                    original_vis_path = Path(output_dir) / f"{img_name}_mask_segments_original_labeled.png"
+                    labeled_vis_path = Path(output_dir) / f"{img_name}_mask_segments_labeled.png"
+                    if original_vis_path.exists():
+                        import shutil
+                        shutil.copy2(original_vis_path, labeled_vis_path)
+                        print(f"[OK] Original labeled mask visualization saved to: {labeled_vis_path}")
+                    
+                    # Save merged version (current vis_image already has merge applied)
+                    vis_path_merged = Path(output_dir) / f"{img_name}_mask_segments_merged_labeled.png"
+                    save_vis_image(vis_image, vis_path_merged, "Merged labeled")
+                else:
+                    # No merge applied, just save labeled version
+                    vis_path_labeled = Path(output_dir) / f"{img_name}_mask_segments_labeled.png"
+                    save_vis_image(vis_image, vis_path_labeled, "Labeled")
+            
+            # Also save the colored mask version (without labels) for comparison
             from modules.label_2d_mask.label_parts import get_mask
-            get_mask(new_group_ids, image_array, ids=3, img_name=img_name, save_dir=str(output_dir))
+            get_mask(group_ids, image, ids="colored", img_name=img_name, save_dir=str(output_dir))
             
-            # Save new mask as .exr (OpenCV with OpenEXR enabled via environment variable)
-            save_mask = new_group_ids + 1
-            save_mask = save_mask.reshape(518, 518, 1).repeat(3, axis=-1)
+            # Show segment IDs
+            unique_ids = np.unique(group_ids)
+            unique_ids = unique_ids[unique_ids >= 0]  # Exclude background
+            print(f"\n[INFO] Found {len(unique_ids)} segments with IDs: {sorted(unique_ids.tolist())}")
+            print("[INFO] You can merge segments using --merge-groups (e.g., '0,1;3,4')")
+            
+            # Save segmentation state for iterative workflow
+            state = {
+                'image': image.tolist(),
+                'processed_image': str(Path(output_dir) / f"{img_name}_processed.png"),
+                'group_ids': group_ids.tolist(),
+                'original_group_ids': group_ids.tolist(),  # Keep original for merge operations
+                'img_name': img_name,
+            }
+            with open(state_file, 'w') as f:
+                import json
+                json.dump(state, f)
+            print(f"[OK] Segmentation state saved to: {state_file}")
+            
+            # Save mask as .exr (OpenCV with OpenEXR enabled via environment variable)
+            save_mask = group_ids + 1  # Shift IDs so background is 0, parts start at 1
+            
+            # Ensure mask is the correct shape (518, 518)
+            h, w = save_mask.shape
+            if h != 518 or w != 518:
+                print(f"[WARN] Mask shape is {h}x{w}, resizing to 518x518")
+                save_mask = cv2.resize(save_mask.astype(np.float32), (518, 518), interpolation=cv2.INTER_NEAREST).astype(np.int32)
+            
+            # Ensure mask values are valid (non-negative integers)
+            save_mask = np.clip(save_mask, 0, 255).astype(np.int32)
+            
+            # Reshape to (518, 518, 3) for EXR format
+            save_mask = save_mask.reshape(518, 518, 1).repeat(3, axis=-1).astype(np.float32)
+            
             mask_path = str(Path(output_dir) / f"{img_name}_mask.exr")
             # OpenCV with OPENCV_IO_ENABLE_OPENEXR='1' can write .exr files
-            cv2.imwrite(mask_path, save_mask.astype(np.float32))
-            print(f"[OK] Updated mask saved to: {mask_path}")
+            success = cv2.imwrite(mask_path, save_mask)
+            if not success:
+                raise RuntimeError(f"Failed to write mask to {mask_path}")
+            print(f"[OK] Generated mask saved to: {mask_path}")
+            print(f"[INFO] Mask shape: {save_mask.shape}, value range: [{save_mask.min():.1f}, {save_mask.max():.1f}]")
             
-            # Update state (keep original_group_ids unchanged for future merges)
-            state['group_ids'] = new_group_ids.tolist()
-            state['save_mask_path'] = mask_path
-            with open(state_file, 'w') as f:
-                json.dump(state, f)
+            # Also save processed image for inference
+            processed_image_path = str(Path(output_dir) / f"{img_name}_processed.png")
+            processed_image.save(processed_image_path)
+            print(f"[OK] Processed image saved to: {processed_image_path}")
             
-            print("\n=== Merge Complete ===")
-            print("You can:")
-            print("  1. Run again with --apply-merge and different --merge-groups to refine further")
-            print("  2. Run without --apply-merge to generate 3D model")
-            
-            # Clean up merge-specific SAM models
-            del sam_model_merge, sam_mask_generator_merge
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                import gc
-                gc.collect()
-            
-            # Exit early - don't generate 3D (only for apply_merge mode)
-            import sys
-            sys.exit(0)
-        
-        # Handle mask - use provided mask or generate new one (only if not apply_merge)
-        if not apply_merge:
-            if not auto_generate_mask and mask_path:
-                # Use provided mask
-                print(f"\n=== Step 2a: Using Provided Mask ===")
-                print(f"Using mask: {mask_path}")
-                # Load the mask and create processed image
-                mask_array = cv2.imread(mask_path, cv2.IMREAD_UNCHANGED)
-                if mask_array is None:
-                    print(f"[WARN] Failed to load mask from {mask_path}, will auto-generate")
-                    auto_generate_mask = True
-                else:
-                    # Mask is provided and loaded successfully
-                    # Load original image and process it
-                    img = Image.open(image_path).convert("RGB")
-                    # Use transparent-background for background removal
-                    try:
-                        from transparent_background import Remover
-                        remover = Remover(mode='base', device=device)
-                        processed_image = remover.process(img, type='rgba')
-                        alpha_channel = np.array(processed_image.split()[3])
-                        alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (3, 3), 0.5).astype(np.uint8)
-                        processed_image.putalpha(Image.fromarray(alpha_channel))
-                        print("[OK] Background removed successfully using transparent-background")
-                    except Exception as e:
-                        print(f"[WARN] transparent-background removal failed: {e}, using original image")
-                        processed_image = img.convert("RGBA")
-                    
-                    # Resize and pad to square (imported before loop)
-                    from modules.label_2d_mask.label_parts import resize_and_pad_to_square
-                    processed_image = resize_and_pad_to_square(processed_image)
-                    
-                    # Save processed image
-                    processed_image_path = str(Path(output_dir) / f"{img_name}_processed.png")
-                    processed_image.save(processed_image_path)
-                    print(f"[OK] Processed image saved to: {processed_image_path}")
-                    
-                    # Collect results
-                    processed_images.append(Image.open(processed_image_path))
-                    processed_masks.append(mask_path)
-                    processed_image_paths.append(processed_image_path)
-                    print(f"[OK] Image {img_idx + 1} processed: mask={mask_path}, processed_image={processed_image_path}")
-            
-            # Generate mask if needed
-            elif auto_generate_mask:
-                print("\n=== Step 2a: Generate Segmentation Mask ===")
-                print("Mask not provided. Generating automatically using SAM...")
-                
-                # Use transparent-background (free open-source library) for background removal
-                # Powered by InSPyReNet (ACCV 2022) - research-backed, high-quality results
-                print("Removing background using transparent-background (InSPyReNet)...")
-                try:
-                    from transparent_background import Remover
-                    
-                    # Load image
-                    img = Image.open(image_path).convert("RGB")
-                    
-                    # Initialize remover with 'fast' mode for speed, or 'base' for better quality
-                    # 'fast' mode is faster but 'base' provides better edge quality
-                    print("Initializing transparent-background remover...")
-                    remover = Remover(mode='base', device=device)  # Use 'base' for best quality
-                    
-                    # Remove background - returns RGBA image with transparent background
-                    print("Processing image with transparent-background...")
-                    processed_image = remover.process(img, type='rgba')
-                    
-                    # Apply slight edge smoothing to reduce aliasing (if needed)
-                    # transparent-background already produces clean edges, but we can smooth slightly
-                    alpha_channel = np.array(processed_image.split()[3])
-                    alpha_channel = cv2.GaussianBlur(alpha_channel.astype(np.float32), (3, 3), 0.5).astype(np.uint8)
-                    processed_image.putalpha(Image.fromarray(alpha_channel))
-                    
-                    print("[OK] Background removed successfully using transparent-background")
-                    
-                except Exception as e:
-                    print(f"[WARN] transparent-background removal failed: {e}, using original image")
-                    img = Image.open(image_path).convert("RGB")
-                    processed_image = img.convert("RGBA")
-                
-                # Use pre-loaded SAM models for part segmentation (loaded before loop)
-                if sam_model is None or sam_mask_generator is None:
-                    raise RuntimeError("SAM models not loaded. This should not happen in regular segmentation mode.")
-        
-                # Resize and pad to square
-                processed_image = resize_and_pad_to_square(processed_image)
-                
-                # Create white background version
-                white_bg = Image.new("RGBA", processed_image.size, (255, 255, 255, 255))
-                white_bg_img = Image.alpha_composite(white_bg, processed_image.convert("RGBA"))
-                image = np.array(white_bg_img.convert('RGB'))
-                
-                # Generate SAM masks
-                print(f"Generating segmentation masks (size threshold: {size_threshold})...")
-                visual = Visualizer(image)
-                
-                # Parse merge groups if provided
-                merge_groups = None
-                if merge_groups_str:
-                    merge_groups = []
-                    group_sets = merge_groups_str.split(';')
-                    for group_set in group_sets:
-                        ids = [int(x.strip()) for x in group_set.split(',') if x.strip()]
-                        if ids:
-                            merge_groups.append(ids)
-                    print(f"\n=== Merge Groups Provided ===")
-                    print(f"Merge groups to apply after segmentation: {merge_groups}")
-                
-                # Get segmentation
-                group_ids, vis_image = get_sam_mask(
-                    image, 
-                    sam_mask_generator, 
-                    visual, 
-                    merge_groups=merge_groups, 
-                    rgba_image=processed_image,
-                    img_name=img_name,
-                    save_dir=str(output_dir),
-                    size_threshold=size_threshold
-                )
-                
-                # Clean edges
-                group_ids = clean_segment_edges(group_ids)
-                
-                # Ensure mask indices start from 0 for this image (independent index space per image)
-                unique_ids = np.unique(group_ids)
-                unique_ids = unique_ids[unique_ids >= 0]  # Exclude background (-1)
-                if len(unique_ids) > 0:
-                    # Create mapping to ensure indices start from 0
-                    index_map = {}
-                    for new_idx, old_idx in enumerate(sorted(unique_ids)):
-                        index_map[old_idx] = new_idx
-                    # Apply remapping
-                    remapped_group_ids = np.zeros_like(group_ids) - 1  # Initialize with -1 (background)
-                    for old_idx, new_idx in index_map.items():
-                        remapped_group_ids[group_ids == old_idx] = new_idx
-                    group_ids = remapped_group_ids
-                    print(f"[INFO] Remapped mask indices to start from 0: {sorted(unique_ids.tolist())} -> {sorted([index_map[i] for i in unique_ids])}")
-                
-                # Save visualization with group numbers
-                # get_sam_mask already saves original visualization when merge_groups are provided
-                # We just need to ensure proper file naming per image
-                if vis_image is not None:
-                    # Helper function to save visualization
-                    def save_vis_image(vis_img, save_path, label_type):
-                        if isinstance(vis_img, np.ndarray):
-                            # Ensure it's uint8 and has the right shape
-                            if vis_img.dtype != np.uint8:
-                                vis_img = (vis_img * 255).astype(np.uint8) if vis_img.max() <= 1.0 else vis_img.astype(np.uint8)
-                            # Handle RGB vs RGBA
-                            if len(vis_img.shape) == 3 and vis_img.shape[2] == 3:
-                                vis_img = Image.fromarray(vis_img, mode='RGB')
-                            elif len(vis_img.shape) == 3 and vis_img.shape[2] == 4:
-                                vis_img = Image.fromarray(vis_img, mode='RGBA')
-                            else:
-                                vis_img = Image.fromarray(vis_img)
-                        vis_img.save(str(save_path))
-                        print(f"[OK] {label_type} mask visualization saved to: {save_path}")
-                    
-                    if merge_groups:
-                        # get_sam_mask saves original as {img_name}_mask_segments_original_labeled.png
-                        # Copy/rename it to {img_name}_mask_segments_labeled.png for consistency
-                        original_vis_path = Path(output_dir) / f"{img_name}_mask_segments_original_labeled.png"
-                        labeled_vis_path = Path(output_dir) / f"{img_name}_mask_segments_labeled.png"
-                        if original_vis_path.exists():
-                            import shutil
-                            shutil.copy2(original_vis_path, labeled_vis_path)
-                            print(f"[OK] Original labeled mask visualization saved to: {labeled_vis_path}")
-                        
-                        # Save merged version (current vis_image already has merge applied)
-                        vis_path_merged = Path(output_dir) / f"{img_name}_mask_segments_merged_labeled.png"
-                        save_vis_image(vis_image, vis_path_merged, "Merged labeled")
-                    else:
-                        # No merge applied, just save labeled version
-                        vis_path_labeled = Path(output_dir) / f"{img_name}_mask_segments_labeled.png"
-                        save_vis_image(vis_image, vis_path_labeled, "Labeled")
-                
-                # Also save the colored mask version (without labels) for comparison
-                from modules.label_2d_mask.label_parts import get_mask
-                get_mask(group_ids, image, ids="colored", img_name=img_name, save_dir=str(output_dir))
-                
-                # Show segment IDs
-                unique_ids = np.unique(group_ids)
-                unique_ids = unique_ids[unique_ids >= 0]  # Exclude background
-                print(f"\n[INFO] Found {len(unique_ids)} segments with IDs: {sorted(unique_ids.tolist())}")
-                print("[INFO] You can merge segments using --merge-groups (e.g., '0,1;3,4')")
-                
-                # Save segmentation state for iterative workflow
-                state = {
-                    'image': image.tolist(),
-                    'processed_image': str(Path(output_dir) / f"{img_name}_processed.png"),
-                    'group_ids': group_ids.tolist(),
-                    'original_group_ids': group_ids.tolist(),  # Keep original for merge operations
-                    'img_name': img_name,
-                }
-                with open(state_file, 'w') as f:
-                    import json
-                    json.dump(state, f)
-                print(f"[OK] Segmentation state saved to: {state_file}")
-                
-                # Save mask as .exr (OpenCV with OpenEXR enabled via environment variable)
-                save_mask = group_ids + 1  # Shift IDs so background is 0, parts start at 1
-                
-                # Ensure mask is the correct shape (518, 518)
-                h, w = save_mask.shape
-                if h != 518 or w != 518:
-                    print(f"[WARN] Mask shape is {h}x{w}, resizing to 518x518")
-                    save_mask = cv2.resize(save_mask.astype(np.float32), (518, 518), interpolation=cv2.INTER_NEAREST).astype(np.int32)
-                
-                # Ensure mask values are valid (non-negative integers)
-                save_mask = np.clip(save_mask, 0, 255).astype(np.int32)
-                
-                # Reshape to (518, 518, 3) for EXR format
-                save_mask = save_mask.reshape(518, 518, 1).repeat(3, axis=-1).astype(np.float32)
-                
-                mask_path = str(Path(output_dir) / f"{img_name}_mask.exr")
-                # OpenCV with OPENCV_IO_ENABLE_OPENEXR='1' can write .exr files
-                success = cv2.imwrite(mask_path, save_mask)
-                if not success:
-                    raise RuntimeError(f"Failed to write mask to {mask_path}")
-                print(f"[OK] Generated mask saved to: {mask_path}")
-                print(f"[INFO] Mask shape: {save_mask.shape}, value range: [{save_mask.min():.1f}, {save_mask.max():.1f}]")
-                
-                # Also save processed image for inference
-                processed_image_path = str(Path(output_dir) / f"{img_name}_processed.png")
-                processed_image.save(processed_image_path)
-                print(f"[OK] Processed image saved to: {processed_image_path}")
-                
-                # Collect processed image and mask for this image
-                processed_images.append(Image.open(processed_image_path))
-                processed_masks.append(mask_path)
-                processed_image_paths.append(processed_image_path)
-                print(f"[OK] Image {img_idx + 1} processed: mask={mask_path}, processed_image={processed_image_path}")
-        
-    except Exception as e:
-        error_msg = str(e)
-        print(f"[ERROR] Failed to process image {img_idx + 1} ({Path(image_path).name}): {type(e).__name__}: {error_msg[:200]}")
-        import traceback
-        traceback.print_exc()
-        # Continue with next image
-        continue
+            # Store processed image and mask
+            processed_image = Image.open(processed_image_path)
+            processed_mask = mask_path
+            processed_image_path = processed_image_path
+            print(f"[OK] Image processed: mask={mask_path}, processed_image={processed_image_path}")
 
-# After processing all images, verify we processed all of them
-print(f"\n[DEBUG] Image processing loop complete. Processed {len(processed_image_paths)} out of {len(image_paths)} image(s)", flush=True)
-if len(processed_image_paths) != len(image_paths):
-    print(f"[WARN] Mismatch: Expected {len(image_paths)} images but only processed {len(processed_image_paths)}", flush=True)
-    print(f"[DEBUG] Expected: {[Path(p).name for p in image_paths]}", flush=True)
-    print(f"[DEBUG] Processed: {[Path(p).name for p in processed_image_paths]}", flush=True)
+except Exception as e:
+    error_msg = str(e)
+    print(f"[ERROR] Failed to process image ({Path(image_path).name}): {type(e).__name__}: {error_msg[:200]}")
+    import traceback
+    traceback.print_exc()
+    raise
 
-# After processing all images, unload SAM models
-if len(processed_images) > 0:
+# After processing, unload SAM models
+if processed_image is not None:
     print("\n[INFO] Unloading SAM models and clearing GPU cache after segmentation stage...")
     if 'sam_model' in locals():
         del sam_model
@@ -1396,7 +1217,7 @@ if len(processed_images) > 0:
 # If segment-only mode, exit here
 if segment_only:
     print("\n=== Segmentation Complete ===")
-    print(f"Processed {len(processed_images)} image(s)")
+    print(f"Processed 1 image(s)")
     print("Next steps:")
     print("  1. Review the segmentation visualizations in the output directory")
     print("  2. Run with --apply-merge and --merge-groups to refine segmentation")
@@ -1405,20 +1226,18 @@ if segment_only:
     import sys
     sys.exit(0)
 
-# Use first image's mask for 3D generation (or combine masks if needed)
-mask_path = processed_masks[0] if processed_masks else None
-image_path = processed_image_paths[0] if processed_image_paths else None
+# Use the processed mask for 3D generation
+mask_path = processed_mask if processed_mask else None
+if not processed_image_path:
+    raise ValueError("No processed image available for 3D generation")
 
-if not image_path:
-    raise ValueError("No processed images available for 3D generation")
-
-print(f"\nUsing {len(processed_image_paths)} image(s) for 3D generation", flush=True)
-print(f"[DEBUG] processed_image_paths: {[Path(p).name for p in processed_image_paths]}", flush=True)
-if mask_path:
-    print(f"Using mask from first image: {mask_path}", flush=True)
+print(f"\nUsing single image for 3D generation", flush=True)
+print(f"[DEBUG] processed_image_path: {Path(processed_image_path).name}", flush=True)
+if processed_mask:
+    print(f"Using mask: {processed_mask}", flush=True)
 
 print("\n=== Step 3: Run OmniPart Inference ===")
-print(f"Generating 3D shape with part-aware control from {len(processed_image_paths)} view(s)...")
+print(f"Generating 3D shape with part-aware control from single view...")
 
 # Set up environment for SPMD (Single Program Multiple Data)
 env = os.environ.copy()
@@ -1549,7 +1368,7 @@ try:
         bbox_gen_ckpt = hf_hub_download(repo_id="omnipart/OmniPart_modules", filename="bbox_gen.ckpt", local_dir="ckpt")
     
     os.makedirs(output_dir, exist_ok=True)
-    inference_output_dir = os.path.join(output_dir, Path(image_path).stem)
+    inference_output_dir = os.path.join(output_dir, Path(processed_image_path).stem)
     os.makedirs(inference_output_dir, exist_ok=True)
     
     torch.manual_seed(seed)
@@ -1588,25 +1407,25 @@ try:
     bbox_gen_model.to(device)
     bbox_gen_model.eval().half()
     
-    # Load all images for multiview generation
-    print(f"[INFO] Loading {len(processed_image_paths)} image(s) for multiview 3D generation...")
+    # Load single image for 3D generation
+    print(f"[INFO] Loading image for 3D generation...")
     
-    # Load mask from first image (for part layout)
-    img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(processed_image_paths[0], mask_path)
+    # Load mask (for part layout)
+    img_white_bg, img_black_bg, ordered_mask_input, img_mask_vis = load_img_mask(processed_image_path, processed_mask)
     img_mask_vis.save(os.path.join(inference_output_dir, "img_mask_vis.png"))
     
-    # Load all images as PIL Images for multiview
-    print(f"[DEBUG] About to load {len(processed_image_paths)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}", flush=True)
-    images_list = [Image.open(img_path) for img_path in processed_image_paths]
-    print(f"[DEBUG] Loaded {len(images_list)} image(s) for multiview: {[Path(p).name for p in processed_image_paths]}", flush=True)
+    # Load single image as PIL Image
+    print(f"[DEBUG] Loading image: {Path(processed_image_path).name}", flush=True)
+    image = Image.open(processed_image_path)
+    print(f"[DEBUG] Loaded image: {Path(processed_image_path).name}", flush=True)
     
     # Generate voxel coordinates with performance optimizations
     torch.backends.cudnn.enabled = True
     torch.backends.cudnn.benchmark = True  # Enable benchmark for faster inference
     torch.backends.cudnn.deterministic = False  # Allow non-deterministic algorithms for speed
-    # Generate voxel coordinates from all images (multiview)
-    print(f"[INFO] Generating voxel coordinates from {len(images_list)} view(s)...")
-    voxel_coords = part_synthesis_pipeline.get_coords(images_list, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
+    # Generate voxel coordinates from single image
+    print(f"[INFO] Generating voxel coordinates from single view...")
+    voxel_coords = part_synthesis_pipeline.get_coords(image, num_samples=1, seed=seed, sparse_structure_sampler_params={"steps": 25, "cfg_strength": 7.5})
     voxel_coords = voxel_coords.cpu().numpy()
     np.save(os.path.join(inference_output_dir, "voxel_coords.npy"), voxel_coords)
     voxel_coords_ply = vis_voxel_coords(voxel_coords)
@@ -1657,10 +1476,11 @@ try:
     import gc
     gc.collect()
     
-    # Use all images for multiview conditioning
-    print(f"[INFO] Using {len(images_list)} image(s) for SLAT generation...")
-    print(f"[DEBUG] Conditioning on images: {[Path(p).name for p in processed_image_paths]}")
-    cond = part_synthesis_pipeline.get_cond(images_list)
+    # Use single image for conditioning
+    print(f"[INFO] Using single image for SLAT generation...")
+    print(f"[DEBUG] Conditioning on image: {Path(processed_image_path).name}")
+    # get_cond expects a list of PIL Images or a torch.Tensor, not a single PIL Image
+    cond = part_synthesis_pipeline.get_cond([image])
     print(f"[DEBUG] Condition shape: {cond['cond'].shape if isinstance(cond, dict) and 'cond' in cond else 'N/A'}")
     
     # Clear memory before SLAT sampling
