@@ -261,6 +261,99 @@ for bone in armature.data.bones:
 
 print(f"[OK] Extracted {len(bone_data)} bones")
 
+# Export as GLTF to extract hierarchy (works for all input formats)
+print("")
+print("=== Exporting to GLTF for Hierarchy Extraction ===")
+gltf_json_hierarchy = None
+try:
+    # Export to temporary GLTF file
+    temp_gltf_path = output_dir / "temp_hierarchy.gltf"
+    temp_gltf_path_str = str(temp_gltf_path).replace("\\\\", "/")
+
+    # Select all objects for export
+    bpy.ops.object.select_all(action='DESELECT')
+    for obj in bpy.context.scene.objects:
+        if obj.type in ['MESH', 'ARMATURE']:
+            obj.select_set(True)
+
+    # Export as GLTF
+    bpy.ops.export_scene.gltf(
+        filepath=temp_gltf_path_str,
+        export_format='GLTF_SEPARATE',
+        export_selected=False,
+        export_materials='EXPORT',
+        export_colors=True,
+        export_cameras=False,
+        export_lights=False,
+        export_animations=False,
+        export_skins=True,
+        export_all_influences=False,
+        export_morph=False,
+        export_yup=True
+    )
+    print(f"[OK] Exported to temporary GLTF: {temp_gltf_path}")
+
+    # Extract GLTF JSON hierarchy
+    print("=== Extracting GLTF JSON Hierarchy ===")
+    import struct
+
+    # Read GLTF JSON file
+    with open(temp_gltf_path, 'r', encoding='utf-8') as f:
+        gltf_json = json.load(f)
+
+    # Extract relevant hierarchy information (nodes, skins, scenes)
+    # Remove binary data references to keep it lightweight
+    gltf_hierarchy = {
+        "nodes": [],
+        "scenes": gltf_json.get("scenes", []),
+        "skins": []
+    }
+
+    # Extract node hierarchy with indices
+    if "nodes" in gltf_json:
+        for idx, node in enumerate(gltf_json["nodes"]):
+            node_info = {
+                "index": idx,
+                "name": node.get("name", f"node_{idx}"),
+                "children": node.get("children", []),
+                "skin": node.get("skin")
+            }
+            # Only include transform if present (not binary data)
+            if "matrix" in node:
+                node_info["matrix"] = node["matrix"]
+            if "translation" in node:
+                node_info["translation"] = node["translation"]
+            if "rotation" in node:
+                node_info["rotation"] = node["rotation"]
+            if "scale" in node:
+                node_info["scale"] = node["scale"]
+            gltf_hierarchy["nodes"].append(node_info)
+
+    # Extract skin information (skeleton references)
+    if "skins" in gltf_json:
+        for idx, skin in enumerate(gltf_json["skins"]):
+            skin_info = {
+                "index": idx,
+                "joints": skin.get("joints", []),
+                "skeleton": skin.get("skeleton")
+            }
+            gltf_hierarchy["skins"].append(skin_info)
+
+    gltf_json_hierarchy = json.dumps(gltf_hierarchy, indent=2, ensure_ascii=False)
+    print(f"[OK] Extracted GLTF hierarchy: {len(gltf_hierarchy['nodes'])} nodes, {len(gltf_hierarchy['skins'])} skins")
+
+    # Save GLTF hierarchy to output directory
+    gltf_hierarchy_file = output_dir / "gltf_hierarchy.json"
+    with open(gltf_hierarchy_file, 'w', encoding='utf-8') as f:
+        f.write(gltf_json_hierarchy)
+    print(f"  Saved GLTF hierarchy to: {gltf_hierarchy_file}")
+
+except Exception as e:
+    print(f"[WARN] Could not extract GLTF hierarchy: {e}")
+    import traceback
+    traceback.print_exc()
+    gltf_json_hierarchy = None
+
 # Create annotated visualizations
 print("")
 print("=== Creating Annotated Visualizations ===")
@@ -290,7 +383,7 @@ annotated_images_dir.mkdir(exist_ok=True, parents=True)
 # Capture screenshots from different camera angles (4 views using Fibonacci sphere)
 # This maximizes viewing angle coverage using golden angle spiral distribution
 # Based on HKU/SAMPart3D camera trajectory methods
-# Run analysis 3 times and merge results for better accuracy
+# Run analysis 2 times and merge results for better accuracy
 import math
 num_views = 4
 views = [f'VIEW_{i}' for i in range(num_views)]
@@ -954,56 +1047,55 @@ except Exception as e:
     raise
 
 # Create VRM specification prompt
-vrm_spec_prompt = '''
-Analyze the annotated bone structure images and identify VRM bone mappings.
+# Build prompt with GLTF hierarchy if available
+gltf_hierarchy_section = ""
+if gltf_json_hierarchy is not None and gltf_json_hierarchy:
+    gltf_hierarchy_section = ("\\n\\nGLTF/GLB STRUCTURE HIERARCHY:\\n"
+        "The following JSON structure shows the node hierarchy and skeleton references from the GLTF/GLB file.\\n"
+        "Use the node indices and names to cross-reference with the bone names in the images.\\n\\n"
+        + str(gltf_json_hierarchy) + "\\n\\n"
+        'The "nodes" array contains node information with indices. The "skins" array contains skeleton joint references.\\n'
+        "Match the bone names in the images (bone_0, bone_1, etc.) to the node names and indices in this hierarchy.\\n")
 
-VRM Humanoid Bone Specification (VRMC_vrm-1.0):
-
-REQUIRED BONES (must be mapped):
-- Torso: hips, spine
-- Head: head
-- Legs: leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot
-- Arms: leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand
-
-OPTIONAL BONES (map if present):
-- Torso: chest, upperChest, neck
-- Head: leftEye, rightEye, jaw
-- Legs: leftToes, rightToes
-- Arms: leftShoulder, rightShoulder
-- Fingers: left/right thumb, index, middle, ring, little (proximal, intermediate, distal)
-
-PARENT-CHILD RELATIONSHIPS:
-- hips (root) → spine → chest → upperChest → neck → head
-- upperChest → leftShoulder → leftUpperArm → leftLowerArm → leftHand → fingers
-- upperChest → rightShoulder → rightUpperArm → rightLowerArm → rightHand → fingers
-- hips → leftUpperLeg → leftLowerLeg → leftFoot → leftToes
-- hips → rightUpperLeg → rightLowerLeg → rightFoot → rightToes
-
-ESTIMATED POSITIONS:
-- hips: Crotch area
-- spine: Top of pelvis
-- chest: Bottom of rib cage
-- neck: Base of neck
-- head: Top of neck
-- leftUpperLeg/rightUpperLeg: Groin area
-- leftLowerLeg/rightLowerLeg: Knee area
-- leftFoot/rightFoot: Ankle area
-- leftUpperArm/rightUpperArm: Base of upper arm
-- leftLowerArm/rightLowerArm: Elbow area
-- leftHand/rightHand: Wrist area
-
-The images show bone structures with:
-- Red lines: bone connections
-- Green circles: bone head markers (foci)
-- Yellow text: bone names (bone_0, bone_1, etc.)
-
-Based on the bone positions, structure, and parent-child relationships visible in the images, identify which numbered bone (bone_0, bone_1, etc.) corresponds to which VRM bone name.
-
-Return ONLY a valid JSON object mapping bone names to VRM names, in this exact format:
-{"bone_0": "hips", "bone_1": "spine", "bone_2": "chest", ...}
-
-Do not include any explanation or text outside the JSON object.
-'''
+vrm_spec_prompt = ("Analyze the annotated bone structure images and identify VRM bone mappings.\\n" + gltf_hierarchy_section +
+    "VRM Humanoid Bone Specification (VRMC_vrm-1.0):\\n\\n"
+    "REQUIRED BONES (must be mapped):\\n"
+    "- Torso: hips, spine\\n"
+    "- Head: head\\n"
+    "- Legs: leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot\\n"
+    "- Arms: leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand\\n\\n"
+    "OPTIONAL BONES (map if present):\\n"
+    "- Torso: chest, upperChest, neck\\n"
+    "- Head: leftEye, rightEye, jaw\\n"
+    "- Legs: leftToes, rightToes\\n"
+    "- Arms: leftShoulder, rightShoulder\\n"
+    "- Fingers: left/right thumb, index, middle, ring, little (proximal, intermediate, distal)\\n\\n"
+    "PARENT-CHILD RELATIONSHIPS:\\n"
+    "- hips (root) → spine → chest → upperChest → neck → head\\n"
+    "- upperChest → leftShoulder → leftUpperArm → leftLowerArm → leftHand → fingers\\n"
+    "- upperChest → rightShoulder → rightUpperArm → rightLowerArm → rightHand → fingers\\n"
+    "- hips → leftUpperLeg → leftLowerLeg → leftFoot → leftToes\\n"
+    "- hips → rightUpperLeg → rightLowerLeg → rightFoot → rightToes\\n\\n"
+    "ESTIMATED POSITIONS:\\n"
+    "- hips: Crotch area\\n"
+    "- spine: Top of pelvis\\n"
+    "- chest: Bottom of rib cage\\n"
+    "- neck: Base of neck\\n"
+    "- head: Top of neck\\n"
+    "- leftUpperLeg/rightUpperLeg: Groin area\\n"
+    "- leftLowerLeg/rightLowerLeg: Knee area\\n"
+    "- leftFoot/rightFoot: Ankle area\\n"
+    "- leftUpperArm/rightUpperArm: Base of upper arm\\n"
+    "- leftLowerArm/rightLowerArm: Elbow area\\n"
+    "- leftHand/rightHand: Wrist area\\n\\n"
+    "The images show bone structures with:\\n"
+    "- Red lines: bone connections\\n"
+    "- Green circles: bone head markers (foci)\\n"
+    "- Yellow text: bone names (bone_0, bone_1, etc.)\\n\\n"
+    "Based on the bone positions, structure, and parent-child relationships visible in the images, identify which numbered bone (bone_0, bone_1, etc.) corresponds to which VRM bone name.\\n\\n"
+    "Return ONLY a valid JSON object mapping bone names to VRM names, in this exact format:\\n"
+    '{"bone_0": "hips", "bone_1": "spine", "bone_2": "chest", ...}\\n\\n'
+    "Do not include any explanation or text outside the JSON object.")
 
 # Prepare images for Qwen3VL
 print("Preparing images for Qwen3VL analysis...")
@@ -1014,14 +1106,14 @@ for img_path in annotated_images:
 
 print(f"  Loaded {len(images)} images")
 
-# Run Qwen3VL analysis 3 times and merge results
+# Run Qwen3VL analysis 2 times and merge results
 print("")
-print("=== Running Qwen3VL Analysis (3 iterations) ===")
+print("=== Running Qwen3VL Analysis (2 iterations) ===")
 all_mappings = []  # Store mappings from each iteration
 
-for iteration in range(3):
+for iteration in range(2):
     print("")
-    print(f"--- Iteration {iteration + 1}/3 ---")
+    print(f"--- Iteration {iteration + 1}/2 ---")
 
     # Prepare messages with multiple images
     messages = [
@@ -1095,7 +1187,7 @@ for iteration in range(3):
         print("[OK] Qwen3VL response received")
         response_preview = response[0:200] if len(response) > 200 else response
         print(f"Response preview: {response_preview}...")
-        
+
         # Save Qwen3VL response to file
         response_dir = output_dir / "qwen3vl_responses"
         response_dir.mkdir(exist_ok=True, parents=True)
@@ -1267,7 +1359,7 @@ for iteration in range(3):
 
 # Merge mappings from all iterations using voting
 print("")
-print("=== Merging Results from 3 Iterations ===")
+print("=== Merging Results from 2 Iterations ===")
 if len(all_mappings) == 0:
     raise ValueError("No valid mappings found in any iteration")
 
@@ -1386,7 +1478,6 @@ try:
         export_materials=True,
         export_uvmaps=True,
         export_normals=True,
-        default_prim_path="",
         root_prim_path="",
         material_prim_path="materials",
         preview_surface_prim_path="preview",
