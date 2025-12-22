@@ -263,7 +263,6 @@ print("=== Creating Annotated Visualizations ===")
 
 # Set up viewport to show armature
 bpy.context.view_layer.objects.active = armature
-bpy.ops.object.mode_set(mode='POSE')
 
 # Hide mesh objects to show only armature
 for obj in bpy.context.scene.objects:
@@ -281,11 +280,12 @@ temp_dir.mkdir(exist_ok=True, parents=True)
 # Capture screenshots from different camera angles (4 views using Fibonacci sphere)
 # This maximizes viewing angle coverage using golden angle spiral distribution
 # Based on HKU/SAMPart3D camera trajectory methods
-# More views provide better coverage for vision analysis
+# Run analysis 3 times and merge results for better accuracy
 import math
 num_views = 4
 views = [f'VIEW_{i}' for i in range(num_views)]
 annotated_images = []
+view_bone_data = {}  # Store bone data for each view for re-annotation
 
 # Set up camera and viewport
 scene = bpy.context.scene
@@ -312,21 +312,43 @@ if camera is None:
 # Set camera as active
 bpy.context.scene.camera = camera
 
-# Calculate bounding box center for camera positioning
+# Calculate camera positioning from mesh extrema (armature bone positions)
 import mathutils
-all_objects = [obj for obj in bpy.context.scene.objects if obj.type == 'ARMATURE' or obj.type == 'MESH']
-if all_objects:
-    # Get bounding box center
-    bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
-    bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
-    for obj in all_objects:
-        for vertex in obj.bound_box:
-            world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
-            bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x), min(bbox_min.y, world_vertex.y), min(bbox_min.z, world_vertex.z)))
-            bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x), max(bbox_max.y, world_vertex.y), max(bbox_max.z, world_vertex.z)))
+bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+has_bones = False
+
+# Calculate bounding box from visible armature bone positions
+for obj in bpy.context.scene.objects:
+    if obj.type == 'ARMATURE' and not obj.hide_get():
+        # Use bone head and tail positions for accurate extrema
+        for bone in obj.data.bones:
+            # Transform bone head and tail to world space
+            head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
+            tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+
+            # Update bounding box extrema
+            bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
+                                       min(bbox_min.y, head_world.y, tail_world.y),
+                                       min(bbox_min.z, head_world.z, tail_world.z)))
+            bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
+                                       max(bbox_max.y, head_world.y, tail_world.y),
+                                       max(bbox_max.z, head_world.z, tail_world.z)))
+            has_bones = True
+
+if has_bones:
     center = (bbox_min + bbox_max) / 2
     size = bbox_max - bbox_min
-    distance = max(size.x, size.y, size.z) * 1.5
+    # Calculate distance based on mesh extrema
+    # Use diagonal of bounding box to ensure mesh fits in frame
+    diagonal = size.length
+    # For perspective camera, distance = diagonal / (2 * tan(FOV/2))
+    # Using 50 degree FOV, we want some padding (1.2x factor)
+    fov_rad = math.radians(50.0)
+    distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
+    # Ensure minimum distance based on largest dimension
+    min_distance = max(size.x, size.y, size.z) * 1.5
+    distance = max(distance, min_distance)
 else:
     center = mathutils.Vector((0, 0, 0))
     size = mathutils.Vector((10, 10, 10))  # Default size
@@ -335,10 +357,8 @@ else:
 # Fibonacci sphere (golden angle spiral) for evenly distributed views
 # This maximizes viewing angle coverage - commonly used in HKU/SAMPart3D papers
 def fibonacci_sphere(n, offset=0.5):
-    \"""
-    Generate n points evenly distributed on a sphere using Fibonacci spiral.
-    Returns list of (x, y, z) unit vectors.
-    \"""
+    # Generate n points evenly distributed on a sphere using Fibonacci spiral.
+    # Returns list of (x, y, z) unit vectors.
     points = []
     golden_angle = math.pi * (3 - math.sqrt(5))  # Golden angle in radians
 
@@ -366,15 +386,55 @@ sphere_points = fibonacci_sphere(num_views)
 for i, view_name in enumerate(views):
     print(f"  Capturing {view_name} view...")
 
+    # Ensure correct scene state at start of each frame: meshes hidden, armature visible
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            obj.hide_set(True)
+    armature.hide_set(False)
+
+    # Force scene update after visibility changes
+    bpy.context.view_layer.update()
+
+    # Recalculate bounding box for each frame based on currently visible objects
+    bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+    bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+    has_bones = False
+
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'ARMATURE' and not obj.hide_get():
+            for bone in obj.data.bones:
+                head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
+                tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+
+                bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
+                                           min(bbox_min.y, head_world.y, tail_world.y),
+                                           min(bbox_min.z, head_world.z, tail_world.z)))
+                bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
+                                           max(bbox_max.y, head_world.y, tail_world.y),
+                                           max(bbox_max.z, head_world.z, tail_world.z)))
+                has_bones = True
+
+    if has_bones:
+        frame_center = (bbox_min + bbox_max) / 2
+        frame_size = bbox_max - bbox_min
+        diagonal = frame_size.length
+        fov_rad = math.radians(50.0)
+        frame_distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
+        min_distance = max(frame_size.x, frame_size.y, frame_size.z) * 1.5
+        frame_distance = max(frame_distance, min_distance)
+    else:
+        frame_center = center
+        frame_distance = distance
+
     # Get point on unit sphere and scale by distance
     x, y, z = sphere_points[i]
-    camera_pos = mathutils.Vector((x * distance, y * distance, z * distance))
+    camera_pos = mathutils.Vector((x * frame_distance, y * frame_distance, z * frame_distance))
 
     # Position camera
-    camera.location = center + camera_pos
+    camera.location = frame_center + camera_pos
 
     # Make camera look at center
-    look_at(camera, center)
+    look_at(camera, frame_center)
 
     # Use perspective camera
     camera.data.type = 'PERSP'
@@ -383,9 +443,9 @@ for i, view_name in enumerate(views):
     # Step 1: Render normal map (with mesh visible, armature hidden)
     normal_map_path = temp_dir / f"normal_map_{view_name.lower()}.png"
     normal_map_rendered = False
+    mesh_objects = []  # Initialize before try block
     try:
         # Show mesh objects for normal map rendering
-        mesh_objects = []
         for obj in bpy.context.scene.objects:
             if obj.type == 'MESH':
                 if obj.hide_get():
@@ -453,101 +513,83 @@ for i, view_name in enumerate(views):
         print(f"    Normal map rendered: {normal_map_path}")
         normal_map_rendered = True
 
+        # Restore scene state: re-hide meshes and re-show armature
+        for obj in mesh_objects:
+            obj.hide_set(True)
+        armature.hide_set(False)
+
     except Exception as e:
         print(f"    Error rendering normal map: {e}")
         import traceback
         traceback.print_exc()
+        # Restore scene state even on error
+        try:
+            for obj in mesh_objects:
+                obj.hide_set(True)
+            armature.hide_set(False)
+        except:
+            pass
 
-    # Step 2: Render bone visualization (with armature visible, mesh hidden)
-    bone_vis_path = temp_dir / f"bone_vis_{view_name.lower()}.png"
-    bone_vis_rendered = False
-
-    # Restore: hide mesh, show armature, disable compositor
-    try:
-        for obj in mesh_objects:
-            obj.hide_set(True)
-        armature.hide_set(False)
-        scene.use_nodes = False
-    except:
-        pass
-
-    try:
-        scene.render.filepath = str(bone_vis_path)
-        # Render using Eevee (works in headless mode)
-        bpy.ops.render.render(write_still=True)
-        print(f"    Bone visualization rendered: {bone_vis_path}")
-        bone_vis_rendered = True
-    except Exception as e:
-        print(f"    Error rendering bone visualization: {e}")
-        import traceback
-        traceback.print_exc()
-
-    # Step 3: Composite normal map (background) with bone visualization (foreground)
+    # Step 2: Create base image (normal map or white background)
     screenshot_path = temp_dir / f"bone_view_{view_name.lower()}.png"
     try:
         from PIL import Image
 
-        if normal_map_rendered and bone_vis_rendered:
-            # Load both images
-            normal_img = Image.open(normal_map_path).convert("RGBA")
-            bone_img = Image.open(bone_vis_path).convert("RGBA")
-
-            # Composite: normal map as background, bone visualization on top
-            composite = Image.alpha_composite(normal_img, bone_img)
-            composite.save(screenshot_path)
-            print(f"    Composite saved: {screenshot_path}")
-        elif bone_vis_rendered:
-            # Fallback: use only bone visualization if normal map failed
-            bone_img = Image.open(bone_vis_path).convert("RGBA")
-            # Create white background
-            composite = Image.new("RGBA", bone_img.size, (255, 255, 255, 255))
-            composite = Image.alpha_composite(composite, bone_img)
-            composite.save(screenshot_path)
-            print(f"    Composite saved (bone only): {screenshot_path}")
-        elif normal_map_rendered:
-            # Fallback: use only normal map if bone visualization failed
-            normal_img = Image.open(normal_map_path).convert("RGBA")
-            normal_img.save(screenshot_path)
-            print(f"    Composite saved (normal map only): {screenshot_path}")
+        if normal_map_rendered:
+            # Use normal map as background
+            base_img = Image.open(normal_map_path).convert("RGBA")
+            base_img.save(screenshot_path)
+            print(f"    Base image saved: {screenshot_path}")
         else:
-            print(f"    Error: Both renders failed, skipping composite")
-            continue
+            # Create white background if normal map failed
+            base_img = Image.new("RGBA", (scene.render.resolution_x, scene.render.resolution_y), (255, 255, 255, 255))
+            base_img.save(screenshot_path)
+            print(f"    Base image saved (white background) - {screenshot_path}")
 
     except Exception as e:
-        print(f"    Error compositing images: {e}")
+        print(f"    Error creating base image: {e}")
         import traceback
         traceback.print_exc()
         continue
 
-    # Annotate with bone labels and foci (reuse UniRig pattern)
+    # Step 3: Annotate with bone labels and foci (draw skeleton directly on image)
     try:
         from PIL import Image, ImageDraw, ImageFont
 
         img_pil = Image.open(screenshot_path).convert("RGBA")
         draw = ImageDraw.Draw(img_pil)
 
-        # Try to load a font, fallback to default
+        # Try to load fonts, fallback to default
         try:
             font = ImageFont.truetype("arial.ttf", 16)
+            font_large = ImageFont.truetype("arial.ttf", 20)
         except:
             try:
                 font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
+                font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
             except:
                 font = ImageFont.load_default()
+                font_large = ImageFont.load_default()
 
         res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
 
         # Store bone positions for connecting dots
         bone_positions = {}
+        # Track label positions to avoid overlaps
+        label_positions = []
 
         # First pass: collect all bone positions
         for bone in armature.data.bones:
             try:
                 # Project 3D bone positions to 2D screen space
                 # Convert local to world coordinates
+                # bone.head_local and bone.tail_local are in armature local space
+                # Transform through armature's world matrix
+                head_world = armature.matrix_world @ Vector(bone.head_local)
+                tail_world = armature.matrix_world @ Vector(bone.tail_local)
+
+                # Get bone's local transformation matrix for axis calculations
                 bone_matrix = armature.matrix_world @ bone.matrix_local
-                head_world = bone_matrix @ Vector(bone.head_local)
-                tail_world = bone_matrix @ Vector(bone.tail_local)
 
                 # Project to camera view
                 head_2d = bpy_extras.object_utils.world_to_camera_view(
@@ -591,7 +633,8 @@ for i, view_name in enumerate(views):
                 except:
                     pass
 
-        # Third pass: Draw bones and roll axes
+        # Third pass: Collect bone data and initial label positions for force-directed layout
+        bone_data_list = []
         for bone in armature.data.bones:
             if bone.name not in bone_positions:
                 continue
@@ -604,78 +647,186 @@ for i, view_name in enumerate(views):
                 head_world = pos['head_world']
                 tail_world = pos['tail_world']
 
-                # Only draw if within image bounds
+                # Only process if within image bounds
                 if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y and
                     0 <= tail_pix[0] < res_x and 0 <= tail_pix[1] < res_y):
 
-                    # Draw bone line (red) - from head to tail
-                    draw.line([head_pix, tail_pix], fill=(255, 0, 0, 255), width=3)
+                    # Get text size for label
+                    try:
+                        bbox = draw.textbbox((0, 0), bone.name, font=font_large)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                    except:
+                        text_width = len(bone.name) * 12
+                        text_height = 22
 
-                    # Calculate all 3 axes of bone's local coordinate system
-                    # Bone coordinate system origin is at the bone head
-                    bone_matrix_3x3 = bone_matrix.to_3x3()
-                    # Get X, Y, Z axes from the rotation matrix
-                    x_axis_world = bone_matrix_3x3 @ Vector((1, 0, 0))
-                    y_axis_world = bone_matrix_3x3 @ Vector((0, 1, 0))
-                    z_axis_world = bone_matrix_3x3 @ Vector((0, 0, 1))
+                    # Initial label position (offset from bone head)
+                    initial_x = head_pix[0] + 15
+                    initial_y = head_pix[1] - 15
 
-                    # Scale the axes for visibility (30% of bone length)
-                    axis_length = (tail_world - head_world).length * 0.3
+                    bone_data_list.append({
+                        'bone': bone,
+                        'head_pix': head_pix,
+                        'tail_pix': tail_pix,
+                        'bone_matrix': bone_matrix,
+                        'head_world': head_world,
+                        'tail_world': tail_world,
+                        'label_x': float(initial_x),
+                        'label_y': float(initial_y),
+                        'text_width': text_width,
+                        'text_height': text_height
+                    })
+            except Exception as e:
+                continue
 
-                    # Helper function to draw an axis from bone head
-                    def draw_axis(axis_world, color, label):
-                        axis_end_world = head_world + axis_world * axis_length
-                        axis_end_2d = bpy_extras.object_utils.world_to_camera_view(
-                            scene, camera, axis_end_world)
-                        axis_end_pix = (int(axis_end_2d.x * res_x), int((1 - axis_end_2d.y) * res_y))
+        # Apply force-directed graph layout to labels
+        if len(bone_data_list) > 0:
+            # Force-directed layout parameters
+            repulsion_strength = 5000.0   # Reduced repulsion to prevent pushing to edges
+            attraction_strength = 0.3    # Increased attraction to keep labels near bone heads
+            damping = 0.85               # Velocity damping
+            iterations = 150             # Increased iterations for better convergence
+            padding = 5                 # Label padding for overlap detection
 
-                        if (0 <= axis_end_pix[0] < res_x and 0 <= axis_end_pix[1] < res_y and
-                            0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y):
-                            # Draw axis line from bone head
-                            draw.line([head_pix, axis_end_pix], fill=color, width=2)
+            # Helper function to check if two labels overlap
+            def labels_overlap(data1, data2):
+                x1, y1 = data1['label_x'], data1['label_y']
+                w1, h1 = data1['text_width'], data1['text_height']
+                x2, y2 = data2['label_x'], data2['label_y']
+                w2, h2 = data2['text_width'], data2['text_height']
 
-                            # Draw small arrow at end
-                            arrow_size = 5
-                            dx = axis_end_pix[0] - head_pix[0]
-                            dy = axis_end_pix[1] - head_pix[1]
-                            arrow_angle = math.atan2(dy, dx)
-                            arrow1 = (
-                                int(axis_end_pix[0] - arrow_size * math.cos(arrow_angle - math.pi/6)),
-                                int(axis_end_pix[1] - arrow_size * math.sin(arrow_angle - math.pi/6))
-                            )
-                            arrow2 = (
-                                int(axis_end_pix[0] - arrow_size * math.cos(arrow_angle + math.pi/6)),
-                                int(axis_end_pix[1] - arrow_size * math.sin(arrow_angle + math.pi/6))
-                            )
-                            draw.line([axis_end_pix, arrow1], fill=color, width=2)
-                            draw.line([axis_end_pix, arrow2], fill=color, width=2)
+                # Check bounding box overlap
+                return not (x1 + w1 + padding < x2 - padding or
+                           x2 + w2 + padding < x1 - padding or
+                           y1 + h1 + padding < y2 - padding or
+                           y2 + h2 + padding < y1 - padding)
 
-                            # Draw axis label
-                            draw.text((axis_end_pix[0]+5, axis_end_pix[1]-5), label,
-                                     fill=color, font=font)
+            # Run force-directed layout iterations
+            for iteration in range(iterations):
+                # Calculate forces for each label
+                forces_x = [0.0] * len(bone_data_list)
+                forces_y = [0.0] * len(bone_data_list)
 
-                    # Draw X-axis (red)
-                    draw_axis(x_axis_world, (255, 0, 0, 255), 'X')
-                    # Draw Y-axis (green) - roll axis
-                    draw_axis(y_axis_world, (0, 255, 0, 255), 'Y')
-                    # Draw Z-axis (blue)
-                    draw_axis(z_axis_world, (0, 0, 255, 255), 'Z')
+                for i, bone_data in enumerate(bone_data_list):
+                    label_x = bone_data['label_x']
+                    label_y = bone_data['label_y']
+                    head_pix = bone_data['head_pix']
 
-                    # Draw numbered marker circle (foci) at bone head (green)
-                    marker_radius = 8
-                    draw.ellipse([head_pix[0]-marker_radius, head_pix[1]-marker_radius,
-                                 head_pix[0]+marker_radius, head_pix[1]+marker_radius],
-                                fill=(0, 255, 0, 200), outline=(255, 255, 0, 255), width=2)
+                    # Attraction force to bone head (spring-like)
+                    dx_attract = head_pix[0] - label_x
+                    dy_attract = head_pix[1] - label_y
+                    dist_attract = math.sqrt(dx_attract*dx_attract + dy_attract*dy_attract)
+                    if dist_attract > 0.1:
+                        forces_x[i] += attraction_strength * dx_attract
+                        forces_y[i] += attraction_strength * dy_attract
 
-                    # Add text label (yellow)
-                    draw.text((head_pix[0]+10, head_pix[1]-10), bone.name,
-                             fill=(255, 255, 0, 255), font=font)
+                    # Repulsion forces from other labels
+                    for j, other_data in enumerate(bone_data_list):
+                        if i == j:
+                            continue
+                        other_x = other_data['label_x']
+                        other_y = other_data['label_y']
+
+                        dx = label_x - other_x
+                        dy = label_y - other_y
+                        dist = math.sqrt(dx*dx + dy*dy)
+
+                        # Check for overlap using bounding boxes
+                        is_overlapping = labels_overlap(bone_data, other_data)
+
+                        if is_overlapping:
+                            if dist > 0.1:
+                                # Strong repulsion when overlapping
+                                force_magnitude = (repulsion_strength * 3.0) / (dist * dist + 1.0)
+                                forces_x[i] += force_magnitude * (dx / dist)
+                                forces_y[i] += force_magnitude * (dy / dist)
+                            else:
+                                # Very close - push apart in a random direction to avoid division by zero
+                                angle = (i * 2.0 * math.pi) / len(bone_data_list)
+                                forces_x[i] += repulsion_strength * math.cos(angle)
+                                forces_y[i] += repulsion_strength * math.sin(angle)
+
+                # Add edge repulsion forces to keep labels away from screen edges
+                edge_padding = 100  # Larger zone to keep labels away from edges
+                edge_repulsion = 2000.0  # Much stronger repulsion from edges
+                for i, bone_data in enumerate(bone_data_list):
+                    label_x = bone_data['label_x']
+                    label_y = bone_data['label_y']
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+
+                    # Repulsion from left edge (starts at edge_padding distance)
+                    if label_x < edge_padding:
+                        distance_from_edge = edge_padding - label_x
+                        forces_x[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from right edge
+                    if label_x + text_width > res_x - edge_padding:
+                        distance_from_edge = (label_x + text_width) - (res_x - edge_padding)
+                        forces_x[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from top edge
+                    if label_y < edge_padding:
+                        distance_from_edge = edge_padding - label_y
+                        forces_y[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from bottom edge
+                    if label_y + text_height > res_y - edge_padding:
+                        distance_from_edge = (label_y + text_height) - (res_y - edge_padding)
+                        forces_y[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
+
+                # Update positions with damping
+                for i, bone_data in enumerate(bone_data_list):
+                    bone_data['label_x'] += forces_x[i] * damping
+                    bone_data['label_y'] += forces_y[i] * damping
+
+                    # Boundary constraints (keep labels within image bounds with padding)
+                    # Use larger padding to keep labels away from edges
+                    boundary_padding = 50
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+                    bone_data['label_x'] = max(boundary_padding, min(res_x - text_width - boundary_padding, bone_data['label_x']))
+                    bone_data['label_y'] = max(boundary_padding, min(res_y - text_height - boundary_padding, bone_data['label_y']))
+
+        # Fourth pass: Draw bones, labels, and connecting lines with force-directed positions
+        for bone_data in bone_data_list:
+            try:
+                bone = bone_data['bone']
+                head_pix = bone_data['head_pix']
+                tail_pix = bone_data['tail_pix']
+                label_x = int(bone_data['label_x'])
+                label_y = int(bone_data['label_y'])
+                text_width = bone_data['text_width']
+                text_height = bone_data['text_height']
+
+                # Draw bone line (red) - from head to tail
+                draw.line([head_pix, tail_pix], fill=(255, 0, 0, 255), width=3)
+
+                # Draw numbered marker circle (foci) at bone head (green with yellow outline)
+                marker_radius = 10
+                draw.ellipse([head_pix[0]-marker_radius, head_pix[1]-marker_radius,
+                             head_pix[0]+marker_radius, head_pix[1]+marker_radius],
+                            fill=(0, 255, 0, 220), outline=(255, 255, 0, 255), width=3)
+
+                # Draw semi-transparent background for label
+                padding = 5
+                draw.rectangle([label_x - padding, label_y - padding,
+                               label_x + text_width + padding, label_y + text_height + padding],
+                              fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
+
+                # Draw connecting line from label to bone head (foci)
+                # Use a dashed or solid line to clearly connect label to marker
+                draw.line([head_pix, (label_x, label_y + text_height // 2)],
+                         fill=(255, 255, 255, 180), width=2)
+
+                # Add text label (white text on dark background for maximum readability)
+                draw.text((label_x, label_y), bone.name,
+                         fill=(255, 255, 255, 255), font=font_large)
             except Exception as e:
                 # Skip bones that can't be projected
                 continue
 
         img_pil.save(screenshot_path)
         annotated_images.append(str(screenshot_path))
+        # Store bone data for this view for potential re-annotation
+        view_bone_data[view_name] = bone_data_list
         print(f"    Annotated image saved: {screenshot_path}")
     except Exception as e:
         print(f"    Error annotating image: {e}")
@@ -722,7 +873,7 @@ try:
     from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
     import torch
 
-    four_str = "4"
+    four_str = "2"
     MODEL_ID = f"huihui-ai/Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -749,7 +900,7 @@ try:
         load_kwargs["dtype"] = dtype
 
     # Try loading from local cache first
-    four_str = "4"
+    four_str = "2"
     model_weights_dir = Path("pretrained_weights") / f"Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
     if model_weights_dir.exists() and (model_weights_dir / "config.json").exists():
         print(f"Loading from local directory: {model_weights_dir}")
@@ -849,114 +1000,270 @@ for img_path in annotated_images:
 
 print(f"  Loaded {len(images)} images")
 
-# Prepare messages with multiple images
-messages = [
-    {
-        "role": "user",
-        "content": [
-            {"type": "text", "text": vrm_spec_prompt}
-        ] + [{"type": "image", "image": img} for img in images]
-    }
-]
+# Run Qwen3VL analysis 3 times and merge results
+print("")
+print("=== Running Qwen3VL Analysis (3 iterations) ===")
+all_mappings = []  # Store mappings from each iteration
 
-print("Running Qwen3VL inference...")
-try:
-    # Prepare inputs
-    inputs = processor.apply_chat_template(
-        messages,
-        tokenize=True,
-        add_generation_prompt=True,
-        return_dict=True,
-        return_tensors="pt"
-    ).to(model.device)
+for iteration in range(3):
+    print("")
+    print(f"--- Iteration {iteration + 1}/3 ---")
 
-    # Generate response
-    generated_ids = model.generate(
-        **inputs,
-        max_new_tokens=2048,
-        temperature=0.7,
-        top_p=0.9,
-        do_sample=True,
-    )
+    # Prepare messages with multiple images
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": vrm_spec_prompt}
+            ] + [{"type": "image", "image": img} for img in images]
+        }
+    ]
 
-    # Extract only the newly generated tokens
-    import itertools
-    generated_ids_trimmed = []
-    zipped_pairs = list(zip(inputs.input_ids, generated_ids))
-    for pair in zipped_pairs:
-        in_ids, out_ids = pair
-        start_idx = len(in_ids)
-        trimmed = list(itertools.islice(out_ids, start_idx, None))
-        generated_ids_trimmed.append(trimmed)
+    print("Running Qwen3VL inference...")
+    print("  Preparing inputs...")
+    import time
+    start_time = time.time()
 
-    # Decode the response
-    output_text = processor.batch_decode(
-        generated_ids_trimmed,
-        skip_special_tokens=True,
-        clean_up_tokenization_spaces=False
-    )
+    try:
+        # Prepare inputs
+        inputs = processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt"
+        ).to(model.device)
 
-    response = output_text[0] if output_text else ""
-    print("[OK] Qwen3VL response received")
-    response_preview = response[0:200] if len(response) > 200 else response
-    print(f"Response preview: {response_preview}...")
+        input_length = inputs.input_ids.shape[1] if hasattr(inputs, 'input_ids') else 0
+        prep_time = time.time() - start_time
+        prep_time_str = format(prep_time, '.1f')
+        print(f"  Input prepared: {input_length} tokens (took {prep_time_str}s)")
+        print("  Generating response...")
+        print("  NOTE: This may take 2-5 minutes with 4 images and a 4 billion parameter model.")
+        print("  The model is processing - please wait...")
+        sys.stdout.flush()  # Ensure output is visible
 
-except Exception as e:
-    print(f"[ERROR] Error during Qwen3VL inference: {e}")
-    import traceback
-    traceback.print_exc()
-    raise
+        gen_start = time.time()
 
-# Parse JSON from response
-print("=== Parsing Bone Mappings ===")
-try:
-    # Extract JSON from response (may have extra text)
-    import re
+        # Generate response
+        generated_ids = model.generate(
+            **inputs,
+            max_new_tokens=2048,
+            temperature=0.7,
+            top_p=0.9,
+            do_sample=True,
+            pad_token_id=processor.tokenizer.pad_token_id if hasattr(processor.tokenizer, 'pad_token_id') else None,
+        )
 
-    # Try to find JSON object - look for opening and closing braces
-    json_start = response.find('{')
-    if json_start < 0:
-        raise ValueError("No JSON object found in response (no opening brace)")
+        gen_time = time.time() - gen_start
+        generated_length = generated_ids.shape[1] if hasattr(generated_ids, 'shape') else 0
+        gen_time_str = format(gen_time, '.1f')
+        print(f"  Generation complete: {generated_length} total tokens (took {gen_time_str}s)")
 
-    # Find matching closing brace by counting braces
-    brace_count = 0
-    json_end = json_start
-    for i in range(json_start, len(response)):
-        if response[i] == '{':
-            brace_count += 1
-        elif response[i] == '}':
-            brace_count -= 1
-            if brace_count == 0:
-                json_end = i
+        # Extract only the newly generated tokens
+        import itertools
+        generated_ids_trimmed = []
+        zipped_pairs = list(zip(inputs.input_ids, generated_ids))
+        for pair in zipped_pairs:
+            in_ids, out_ids = pair
+            start_idx = len(in_ids)
+            trimmed = list(itertools.islice(out_ids, start_idx, None))
+            generated_ids_trimmed.append(trimmed)
+
+        # Decode the response
+        output_text = processor.batch_decode(
+            generated_ids_trimmed,
+            skip_special_tokens=True,
+            clean_up_tokenization_spaces=False
+        )
+
+        response = output_text[0] if output_text else ""
+        print("[OK] Qwen3VL response received")
+        response_preview = response[0:200] if len(response) > 200 else response
+        print(f"Response preview: {response_preview}...")
+
+    except Exception as e:
+        print(f"[ERROR] Error during Qwen3VL inference (iteration {iteration + 1}): {e}")
+        import traceback
+        traceback.print_exc()
+        continue  # Continue to next iteration instead of raising
+
+    # Parse JSON from response
+    print(f"=== Parsing Bone Mappings (Iteration {iteration + 1}) ===")
+    try:
+        # Extract JSON from response (may have extra text)
+        import re
+
+        # Try to find JSON object - look for opening and closing braces
+        json_start = response.find('{')
+        if json_start < 0:
+            print(f"  [WARN] No JSON object found in response (iteration {iteration + 1})")
+            continue
+
+        # Find matching closing brace by counting braces
+        brace_count = 0
+        json_end = json_start
+        for i in range(json_start, len(response)):
+            if response[i] == '{':
+                brace_count += 1
+            elif response[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    json_end = i
+                    break
+
+        if brace_count != 0:
+            print(f"  [WARN] No complete JSON object found in response (iteration {iteration + 1})")
+            continue
+
+        json_str = response[json_start:json_end+1]
+
+        # Try to parse JSON
+        iteration_mapping = json.loads(json_str)
+
+        # Validate it's a dictionary with string keys and values
+        if not isinstance(iteration_mapping, dict):
+            print(f"  [WARN] Expected dictionary, got {type(iteration_mapping)} (iteration {iteration + 1})")
+            continue
+
+        # Validate all keys are bone names and values are strings
+        valid = True
+        for key, value in iteration_mapping.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                print(f"  [WARN] Invalid mapping entry: {key} -> {value} (iteration {iteration + 1})")
+                valid = False
                 break
 
-    if brace_count != 0:
-        raise ValueError("No complete JSON object found in response (unmatched braces)")
+        if valid:
+            all_mappings.append(iteration_mapping)
+            print(f"[OK] Parsed {len(iteration_mapping)} bone mappings (iteration {iteration + 1})")
+            for old_name, new_name in sorted(iteration_mapping.items()):
+                print(f"  {old_name} -> {new_name}")
 
-    json_str = response[json_start:json_end+1]
+            # After first iteration, re-annotate images with guessed bone names
+            if iteration == 0:
+                print("")
+                print("=== Re-annotating images with guessed bone names ===")
+                try:
+                    from PIL import Image, ImageDraw, ImageFont
 
-    # Try to parse JSON
-    bone_mapping = json.loads(json_str)
+                    # Try to load fonts
+                    try:
+                        font_large = ImageFont.truetype("arial.ttf", 20)
+                    except:
+                        try:
+                            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+                        except:
+                            font_large = ImageFont.load_default()
 
-    # Validate it's a dictionary with string keys and values
-    if not isinstance(bone_mapping, dict):
-        raise ValueError(f"Expected dictionary, got {type(bone_mapping)}")
+                    # Re-annotate each view
+                    for view_idx, view_name in enumerate(views):
+                        if view_name not in view_bone_data:
+                            continue
 
-    # Validate all keys are bone names and values are strings
-    for key, value in bone_mapping.items():
-        if not isinstance(key, str) or not isinstance(value, str):
-            raise ValueError(f"Invalid mapping entry: {key} -> {value}")
+                        img_path = annotated_images[view_idx]
+                        bone_data_list = view_bone_data[view_name]
 
-    print(f"[OK] Parsed {len(bone_mapping)} bone mappings")
-    for old_name, new_name in sorted(bone_mapping.items()):
-        print(f"  {old_name} -> {new_name}")
+                        # Load the base image (normal map or white background)
+                        try:
+                            img_pil = Image.open(img_path).convert("RGBA")
+                            draw = ImageDraw.Draw(img_pil)
 
-except Exception as e:
-    print(f"[ERROR] Error parsing JSON from Qwen3VL response: {e}")
-    print(f"Response was: {response}")
-    import traceback
-    traceback.print_exc()
-    raise
+                            # Redraw labels with VRM names
+                            for bone_data in bone_data_list:
+                                try:
+                                    bone = bone_data['bone']
+                                    head_pix = bone_data['head_pix']
+                                    label_x = int(bone_data['label_x'])
+                                    label_y = int(bone_data['label_y'])
+                                    text_width = bone_data['text_width']
+                                    text_height = bone_data['text_height']
+
+                                    # Get VRM name from mapping, or keep original name
+                                    display_name = iteration_mapping.get(bone.name, bone.name)
+
+                                    # Get updated text size
+                                    try:
+                                        bbox = draw.textbbox((0, 0), display_name, font=font_large)
+                                        new_text_width = bbox[2] - bbox[0]
+                                        new_text_height = bbox[3] - bbox[1]
+                                    except:
+                                        new_text_width = len(display_name) * 12
+                                        new_text_height = 22
+
+                                    # Draw semi-transparent background for label
+                                    padding = 5
+                                    draw.rectangle([label_x - padding, label_y - padding,
+                                                   label_x + new_text_width + padding, label_y + new_text_height + padding],
+                                                  fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
+
+                                    # Draw connecting line from label to bone head
+                                    draw.line([head_pix, (label_x, label_y + new_text_height // 2)],
+                                             fill=(255, 255, 255, 180), width=2)
+
+                                    # Add text label with VRM name
+                                    draw.text((label_x, label_y), display_name,
+                                             fill=(255, 255, 255, 255), font=font_large)
+
+                                    # Update bone_data with new text dimensions
+                                    bone_data['text_width'] = new_text_width
+                                    bone_data['text_height'] = new_text_height
+
+                                except Exception as e:
+                                    continue
+
+                            # Save updated image
+                            img_pil.save(img_path)
+                            print(f"  Re-annotated {view_name} with VRM names")
+
+                        except Exception as e:
+                            print(f"  [WARN] Error re-annotating {view_name}: {e}")
+                            continue
+
+                    # Reload images for next iteration
+                    images = []
+                    for img_path in annotated_images:
+                        img = Image.open(img_path).convert("RGB")
+                        images.append(img)
+                    print("[OK] Images re-annotated and reloaded for next iteration")
+
+                except Exception as e:
+                    print(f"[WARN] Error during re-annotation: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue with original images
+
+    except Exception as e:
+        print(f"[ERROR] Error parsing JSON from Qwen3VL response (iteration {iteration + 1}): {e}")
+        print(f"Response was: {response}")
+        import traceback
+        traceback.print_exc()
+        continue  # Continue to next iteration
+
+# Merge mappings from all iterations using voting
+print("")
+print("=== Merging Results from 3 Iterations ===")
+if len(all_mappings) == 0:
+    raise ValueError("No valid mappings found in any iteration")
+
+# Count votes for each bone->VRM mapping
+from collections import defaultdict, Counter
+vote_counts = defaultdict(Counter)
+
+for mapping in all_mappings:
+    for bone_name, vrm_name in mapping.items():
+        vote_counts[bone_name][vrm_name] += 1
+
+# Create final mapping using majority vote
+bone_mapping = {}
+for bone_name, votes in vote_counts.items():
+    # Get the most common VRM name for this bone
+    most_common = votes.most_common(1)[0]
+    vrm_name, count = most_common
+    bone_mapping[bone_name] = vrm_name
+    print(f"  {bone_name} -> {vrm_name} (voted {count}/{len(all_mappings)} times)")
+
+print(f"[OK] Merged {len(bone_mapping)} bone mappings from {len(all_mappings)} iterations")
 
 # Validate VRM compliance
 print("=== Validating VRM Compliance ===")
@@ -1048,7 +1355,6 @@ try:
         export_materials=True,
         export_uvmaps=True,
         export_normals=True,
-        export_colors=True,
         default_prim_path="",
         root_prim_path="",
         material_prim_path="materials",
