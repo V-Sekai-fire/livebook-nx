@@ -1071,6 +1071,80 @@ def get_bone_depth(bone, armature_data):
         current = current.parent
     return depth
 
+# Helper function to calculate tapered capsule properties for a bone
+# Returns a dictionary with:
+# - direction: normalized direction vector
+# - length: bone length
+# - head_radius: estimated radius at head (based on children or default)
+# - tail_radius: estimated radius at tail (based on children or default)
+# - orientation: classification of bone orientation (vertical_up, vertical_down, horizontal, etc.)
+def calculate_tapered_capsule(bone, bone_info_dict=None):
+    head = Vector(bone.head_local)
+    tail = Vector(bone.tail_local)
+    direction = tail - head
+    length = direction.length
+
+    if length < 1e-6:
+        # Degenerate bone
+        return {
+            'direction': Vector((0, 1, 0)),
+            'length': 0,
+            'head_radius': 0.01,
+            'tail_radius': 0.01,
+            'orientation': 'degenerate'
+        }
+
+    direction_normalized = direction / length
+
+    # Estimate radii based on children or use default proportional to length
+    # Typical bone radius is about 1-5% of length
+    default_radius = max(length * 0.02, 0.005)
+
+    head_radius = default_radius
+    tail_radius = default_radius
+
+    # If we have bone info, check children to estimate radii
+    if bone_info_dict and bone.name in bone_info_dict:
+        children = bone_info_dict[bone.name].get('children', [])
+        if len(children) > 0:
+            # Estimate radius based on distance to nearest child
+            # This is a heuristic - actual bone radius would need mesh data
+            tail_radius = default_radius * 1.2  # Slightly larger at tail where children attach
+
+    # Classify orientation based on direction vector
+    # Y is typically vertical (up), X is lateral (left/right), Z is forward/back
+    y_component = abs(direction_normalized.y)
+    x_component = abs(direction_normalized.x)
+    z_component = abs(direction_normalized.z)
+
+    # Determine primary orientation
+    if y_component > max(x_component, z_component) * 1.5:
+        # Primarily vertical
+        if direction_normalized.y > 0:
+            orientation = 'vertical_up'
+        else:
+            orientation = 'vertical_down'
+    elif x_component > max(y_component, z_component) * 1.5:
+        # Primarily horizontal (lateral)
+        orientation = 'horizontal_lateral'
+    elif z_component > max(x_component, y_component) * 1.5:
+        # Primarily forward/back
+        orientation = 'horizontal_forward'
+    else:
+        # Mixed orientation
+        orientation = 'mixed'
+
+    return {
+        'direction': direction_normalized,
+        'length': length,
+        'head_radius': head_radius,
+        'tail_radius': tail_radius,
+        'orientation': orientation,
+        'y_component': y_component,
+        'x_component': x_component,
+        'z_component': z_component
+    }
+
 # Helper function to calculate centroid of bone structure
 def calculate_centroid(armature_data):
     positions = []
@@ -1088,6 +1162,7 @@ def calculate_centroid(armature_data):
 bone_info = {}
 centroid = calculate_centroid(armature.data)
 
+# First pass: build basic bone info
 for bone in armature.data.bones:
     head = Vector(bone.head_local)
     tail = Vector(bone.tail_local)
@@ -1127,6 +1202,13 @@ for bone in armature.data.bones:
         'center': (head + tail) / 2
     }
 
+# Second pass: add tapered capsule properties (needs bone_info for radius estimation)
+for bone in armature.data.bones:
+    capsule = calculate_tapered_capsule(bone, bone_info)
+    bone_info[bone.name]['capsule'] = capsule
+    bone_info[bone.name]['orientation'] = capsule['orientation']
+    bone_info[bone.name]['direction'] = capsule['direction']
+
 # Find root bone (no parent)
 root_bones = [name for name, info in bone_info.items() if info['parent'] is None]
 if len(root_bones) == 0:
@@ -1148,7 +1230,7 @@ bone_mapping[hips_candidate] = "hips"
 print(f"  {hips_candidate} -> hips (root bone)")
 
 # Step 2: Build spine chain (hips -> spine -> chest -> upperChest -> neck -> head)
-# Look for the most vertical upward chain (highest Y and Z combined)
+# Look for the most vertical upward chain (highest Y)
 def find_spine_chain(start_bone_name):
     chain = [start_bone_name]
     current = bone_info[start_bone_name]['bone']
@@ -1162,27 +1244,46 @@ def find_spine_chain(start_bone_name):
         if len(children) == 0:
             break
 
-        # Filter out legs (legs go downward in Z, spine goes upward)
-        # Legs typically have negative Z or go significantly downward
+        # Filter out legs and arms using tapered capsule properties
+        # Spine bones: vertical_up orientation, going upward
+        # Legs: vertical_down orientation, going downward
+        # Arms: horizontal_lateral orientation
         spine_candidates = []
         for child in children:
+            if child.name not in bone_info:
+                continue
+
+            child_capsule = bone_info[child.name]['capsule']
             child_head = Vector(child.head_local)
             child_tail = Vector(child.tail_local)
-            # Spine bones go upward (increasing Y and Z)
-            # Legs go downward (decreasing Z, often negative)
-            if child_tail.z > hips_pos.z - 0.1:  # Allow some tolerance
-                # Check if it's more vertical (spine) vs horizontal (arm)
-                vertical_component = abs(child_tail.y - child_head.y)
-                horizontal_component = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
-                if vertical_component > horizontal_component * 0.5:  # More vertical than horizontal
-                    spine_candidates.append(child)
+
+            # Use tapered capsule orientation to classify
+            orientation = child_capsule['orientation']
+            y_component = child_capsule['y_component']
+
+            # Spine bones: primarily vertical and going upward
+            # Check both orientation and actual Y position
+            goes_upward = child_tail.y > child_head.y and child_tail.y > hips_pos.y - 0.05
+            is_vertical = orientation == 'vertical_up' or (y_component > 0.7 and goes_upward)
+
+            # Exclude horizontal bones (arms/shoulders) and downward bones (legs)
+            is_not_horizontal = orientation != 'horizontal_lateral' and orientation != 'horizontal_forward'
+            is_not_downward = orientation != 'vertical_down' and child_tail.y >= hips_pos.y - 0.05
+
+            if is_vertical and goes_upward and is_not_horizontal and is_not_downward:
+                spine_candidates.append(child)
 
         if len(spine_candidates) == 0:
-            # If no clear spine candidates, use the one with highest Y+Z
-            next_child = max(children, key=lambda b: b.head_local[1] + b.head_local[2])
+            # If no clear spine candidates, use the one with highest Y (but still going upward)
+            upward_children = [c for c in children if Vector(c.tail_local).y > Vector(c.head_local).y]
+            if len(upward_children) > 0:
+                next_child = max(upward_children, key=lambda b: b.head_local[1])
+            else:
+                # Last resort: use highest Y child
+                next_child = max(children, key=lambda b: b.head_local[1])
         else:
             # Choose the most vertical upward child
-            next_child = max(spine_candidates, key=lambda b: b.head_local[1] + b.head_local[2])
+            next_child = max(spine_candidates, key=lambda b: b.head_local[1])
 
         chain.append(next_child.name)
         current = next_child
@@ -1220,123 +1321,165 @@ if upper_chest_name is None:
             upper_chest_name = bone_name
             break
 
-# Step 4: Find arms (left/right from upper spine bones)
-# Arms typically branch from chest/upperChest or from spine bones
+# Step 4: Find shoulders and arms (left/right from upper spine bones)
+# Shoulders are direct children of chest/upperChest that extend horizontally
+# Arms typically branch from shoulders or directly from chest/upperChest
 arm_attachment_bones = []
 if upper_chest_name:
     arm_attachment_bones.append(upper_chest_name)
-# Also check spine bones for arm branches
-for bone_name in spine_chain:
-    if bone_name not in bone_mapping or bone_mapping[bone_name] in ["hips", "head"]:
-        continue
-    bone = bone_info[bone_name]['bone']
-    # Look for lateral children (arms extend horizontally)
-    has_horizontal_child = False
-    for child in bone.children:
-        if child.name not in bone_mapping:
-            child_head = Vector(child.head_local)
-            child_tail = Vector(child.tail_local)
-            # Arms extend horizontally (large X component, small Y change)
-            horizontal_extent = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
-            vertical_extent = abs(child_tail.y - child_head.y)
-            if horizontal_extent > vertical_extent * 1.5:  # More horizontal than vertical
-                has_horizontal_child = True
-                break
-    if has_horizontal_child and bone_name not in arm_attachment_bones:
-        arm_attachment_bones.append(bone_name)
+# Also check chest if it exists
+for name, vrm_name in bone_mapping.items():
+    if vrm_name == "chest" and name not in arm_attachment_bones:
+        arm_attachment_bones.append(name)
 
-# Find arm branches from attachment points
-left_arm_start = None
-right_arm_start = None
+# First, detect shoulders as direct children of chest/upperChest
+# Shoulders are characterized by: horizontal_lateral orientation, short length, branching from upperChest/chest
+left_shoulder = None
+right_shoulder = None
 
 for attach_bone_name in arm_attachment_bones:
     attach_bone = bone_info[attach_bone_name]['bone']
     for child in attach_bone.children:
         if child.name in bone_mapping:
             continue
+        if child.name not in bone_info:
+            continue
 
         child_info = bone_info[child.name]
+        child_capsule = child_info['capsule']
         child_center = child_info['center']
 
-        # Arms extend laterally - check X position and horizontal extent
-        horizontal_extent = math.sqrt((child_info['tail'].x - child_info['head'].x)**2 +
-                                     (child_info['tail'].z - child_info['head'].z)**2)
-        vertical_extent = abs(child_info['tail'].y - child_info['head'].y)
+        # Use tapered capsule properties to identify shoulders
+        orientation = child_capsule['orientation']
+        length = child_capsule['length']
+        x_component = child_capsule['x_component']
 
-        if horizontal_extent > vertical_extent * 1.2:  # More horizontal
-            # Use a more lenient threshold (0.01 instead of 0.05) to catch arms closer to center
-            if child_center.x > 0.01 and right_arm_start is None:  # Right side (positive X)
-                right_arm_start = child
-            elif child_center.x < -0.01 and left_arm_start is None:  # Left side (negative X)
-                left_arm_start = child
+        # Shoulders are:
+        # 1. Horizontally oriented (lateral, not vertical)
+        # 2. Relatively short (shorter than typical arm bones)
+        # 3. Have significant X component (extend left/right)
+        is_horizontal = orientation == 'horizontal_lateral' or x_component > 0.6
+        is_short = length < 0.15  # Shoulders are typically shorter than upper arms
 
-# Fallback: if we didn't find both arms, check all unmapped children of attachment bones
+        # Additional check: horizontal extent vs vertical extent
+        child_head = child_info['head']
+        child_tail = child_info['tail']
+        horizontal_extent = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
+        vertical_extent = abs(child_tail.y - child_head.y)
+        is_more_horizontal = horizontal_extent > vertical_extent * 1.2
+
+        if (is_horizontal or is_more_horizontal) and is_short:
+            # Check X position to determine left/right
+            if child_center.x > 0.01 and right_shoulder is None:  # Right side (positive X)
+                right_shoulder = child
+            elif child_center.x < -0.01 and left_shoulder is None:  # Left side (negative X)
+                left_shoulder = child
+
+# Map shoulders if found
+if left_shoulder and left_shoulder.name not in bone_mapping:
+    bone_mapping[left_shoulder.name] = "leftShoulder"
+    print(f"  {left_shoulder.name} -> leftShoulder")
+
+if right_shoulder and right_shoulder.name not in bone_mapping:
+    bone_mapping[right_shoulder.name] = "rightShoulder"
+    print(f"  {right_shoulder.name} -> rightShoulder")
+
+# Find arm start points (shoulders if found, otherwise direct children of attachment bones)
+left_arm_start = left_shoulder
+right_arm_start = right_shoulder
+
+# If shoulders not found, look for arm branches directly from attachment points
+# Use tapered capsule properties to identify arm bones (horizontal orientation)
 if left_arm_start is None or right_arm_start is None:
     for attach_bone_name in arm_attachment_bones:
         attach_bone = bone_info[attach_bone_name]['bone']
         for child in attach_bone.children:
             if child.name in bone_mapping:
                 continue
+            if child.name not in bone_info:
+                continue
 
             child_info = bone_info[child.name]
+            child_capsule = child_info['capsule']
             child_center = child_info['center']
 
-            # Check if it's clearly on left or right side
-            if child_center.x > 0.01 and right_arm_start is None:
-                right_arm_start = child
-            elif child_center.x < -0.01 and left_arm_start is None:
-                left_arm_start = child
+            # Use tapered capsule to identify arm-like bones
+            orientation = child_capsule['orientation']
+            x_component = child_capsule['x_component']
+
+            # Arms are horizontally oriented (lateral) or have significant X component
+            is_arm_like = (orientation == 'horizontal_lateral' or
+                          orientation == 'horizontal_forward' or
+                          x_component > 0.5)
+
+            # Check if it's clearly on left or right side and arm-like
+            if is_arm_like:
+                if child_center.x > 0.01 and right_arm_start is None:
+                    right_arm_start = child
+                elif child_center.x < -0.01 and left_arm_start is None:
+                    left_arm_start = child
 
 # Map arms
+# If shoulders are already mapped, start from the first child of the shoulder
+# Otherwise, the first bone in the chain might be the shoulder or upper arm
 if left_arm_start:
-    # Follow left arm chain
-    arm_chain = [left_arm_start]
-    current = left_arm_start
-    for _ in range(4):  # shoulder -> upperArm -> lowerArm -> hand
-        if len(current.children) > 0:
-            # Choose child with longest bone (main arm chain)
-            next_bone = max(current.children, key=lambda b: bone_length(b))
-            arm_chain.append(next_bone)
-            current = next_bone
+    # If shoulder is already mapped, start arm chain from its first child
+    if left_arm_start.name in bone_mapping and bone_mapping[left_arm_start.name] == "leftShoulder":
+        if len(left_arm_start.children) > 0:
+            arm_chain_start = max(left_arm_start.children, key=lambda b: bone_length(b))
         else:
-            break
-
-    # Map: first bone might be shoulder or upperArm depending on structure
-    if len(arm_chain) >= 4:
-        vrm_arm_names = ["leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand"]
-    elif len(arm_chain) >= 3:
-        vrm_arm_names = ["leftUpperArm", "leftLowerArm", "leftHand"]
+            arm_chain_start = None
     else:
-        vrm_arm_names = ["leftUpperArm", "leftLowerArm"][:len(arm_chain)]
+        arm_chain_start = left_arm_start
 
-    for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
-        if bone.name not in bone_mapping:
-            bone_mapping[bone.name] = vrm_arm_names[i]
-            print(f"  {bone.name} -> {vrm_arm_names[i]}")
+    if arm_chain_start:
+        # Follow left arm chain
+        arm_chain = [arm_chain_start]
+        current = arm_chain_start
+        for _ in range(3):  # upperArm -> lowerArm -> hand (shoulder already mapped if present)
+            if len(current.children) > 0:
+                # Choose child with longest bone (main arm chain)
+                next_bone = max(current.children, key=lambda b: bone_length(b))
+                arm_chain.append(next_bone)
+                current = next_bone
+            else:
+                break
+
+        # Map: upperArm -> lowerArm -> hand
+        vrm_arm_names = ["leftUpperArm", "leftLowerArm", "leftHand"]
+        for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
+            if bone.name not in bone_mapping:
+                bone_mapping[bone.name] = vrm_arm_names[i]
+                print(f"  {bone.name} -> {vrm_arm_names[i]}")
 
 if right_arm_start:
-    # Follow right arm chain
-    arm_chain = [right_arm_start]
-    current = right_arm_start
-    for _ in range(4):
-        if len(current.children) > 0:
-            next_bone = max(current.children, key=lambda b: bone_length(b))
-            arm_chain.append(next_bone)
-            current = next_bone
+    # If shoulder is already mapped, start arm chain from its first child
+    if right_arm_start.name in bone_mapping and bone_mapping[right_arm_start.name] == "rightShoulder":
+        if len(right_arm_start.children) > 0:
+            arm_chain_start = max(right_arm_start.children, key=lambda b: bone_length(b))
         else:
-            break
-
-    if len(arm_chain) >= 4:
-        vrm_arm_names = ["rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand"]
-    elif len(arm_chain) >= 3:
-        vrm_arm_names = ["rightUpperArm", "rightLowerArm", "rightHand"]
+            arm_chain_start = None
     else:
-        vrm_arm_names = ["rightUpperArm", "rightLowerArm"][:len(arm_chain)]
+        arm_chain_start = right_arm_start
 
-    for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
-        if bone.name not in bone_mapping:
-            bone_mapping[bone.name] = vrm_arm_names[i]
-            print(f"  {bone.name} -> {vrm_arm_names[i]}")
+    if arm_chain_start:
+        # Follow right arm chain
+        arm_chain = [arm_chain_start]
+        current = arm_chain_start
+        for _ in range(3):  # upperArm -> lowerArm -> hand (shoulder already mapped if present)
+            if len(current.children) > 0:
+                next_bone = max(current.children, key=lambda b: bone_length(b))
+                arm_chain.append(next_bone)
+                current = next_bone
+            else:
+                break
+
+        # Map: upperArm -> lowerArm -> hand
+        vrm_arm_names = ["rightUpperArm", "rightLowerArm", "rightHand"]
+        for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
+            if bone.name not in bone_mapping:
+                bone_mapping[bone.name] = vrm_arm_names[i]
+                print(f"  {bone.name} -> {vrm_arm_names[i]}")
 
 # Step 5: Find legs (left/right from hips)
 # Legs go downward (negative Z or decreasing Z)
@@ -1434,51 +1577,57 @@ for bone_name, vrm_name in list(bone_mapping.items()):
             continue
 
         # Identify thumb first (it's typically at a different angle/position)
-        # Thumb is usually the one with the most different Y position or angle
+        # Thumb is usually the one that's most separated from the other fingers
         thumb_bone = None
-        if len(finger_children) >= 1:
-            # Calculate distance from hand center and angle for each finger
-            finger_scores = []
+        if len(finger_children) >= 5:
+            # Calculate average Y position of all fingers
+            avg_y = sum(bone_info[child.name]['center'].y for child in finger_children) / len(finger_children)
+            
+            # Find the finger that's most different from the average
+            # Thumb is typically at a different Y position (often higher for left hand, lower for right hand)
+            thumb_candidates = []
             for child in finger_children:
                 child_center = bone_info[child.name]['center']
                 child_head = bone_info[child.name]['head']
                 child_tail = bone_info[child.name]['tail']
-
-                # Vector from hand center to finger start
-                to_finger = child_head - hand_center
-                distance = to_finger.length
-
+                
+                # Distance from average Y position
+                y_diff_from_avg = abs(child_center.y - avg_y)
+                
                 # Angle from horizontal (thumb is typically more horizontal)
                 finger_vec = child_tail - child_head
                 horizontal_component = math.sqrt(finger_vec.x**2 + finger_vec.z**2)
                 vertical_component = abs(finger_vec.y)
-
-                # Thumb score: more horizontal, different Y position
-                angle_score = horizontal_component / (vertical_component + 0.001)
-                y_diff = abs(child_center.y - hand_center.y)
-
-                # For left hand, thumb is typically on the left (negative X relative to other fingers)
-                # For right hand, thumb is typically on the right (positive X relative to other fingers)
+                angle_score = horizontal_component / (vertical_component + 0.001) if vertical_component > 0 else 100
+                
+                # For left hand, thumb is typically on the left (more negative X)
+                # For right hand, thumb is typically on the right (more positive X)
                 x_pos = child_center.x
                 if side == "left":
                     x_score = -x_pos  # More negative = more likely thumb
                 else:
                     x_score = x_pos  # More positive = more likely thumb
-
-                # Combined score (higher = more likely to be thumb)
-                score = angle_score * 0.5 + y_diff * 10.0 + x_score * 5.0
-                finger_scores.append((score, child))
-
-            # The thumb is typically the one with highest score
-            finger_scores.sort(key=lambda x: x[0], reverse=True)
-            thumb_bone = finger_scores[0][1]
+                
+                # Combined score: thumb is the outlier
+                # Higher Y difference from average + angle + X position
+                score = y_diff_from_avg * 20.0 + angle_score * 0.3 + x_score * 3.0
+                thumb_candidates.append((score, child))
+            
+            # The thumb is the one with highest score (most different)
+            thumb_candidates.sort(key=lambda x: x[0], reverse=True)
+            thumb_bone = thumb_candidates[0][1]
             finger_children.remove(thumb_bone)
 
-        # Sort remaining fingers by Y position (vertical)
+        # Sort remaining fingers by Y position (vertical), then by X for tie-breaking
         # For right hand: index (highest Y) -> middle -> ring -> little (lowest Y)
         # For left hand: same order (index highest, little lowest)
+        # When Y positions are very close, use X position to break ties
         remaining_fingers = sorted(finger_children,
-                                  key=lambda b: bone_info[b.name]['center'].y,
+                                  key=lambda b: (
+                                      bone_info[b.name]['center'].y,  # Primary: Y position
+                                      -bone_info[b.name]['center'].x if side == "left" 
+                                      else bone_info[b.name]['center'].x  # Secondary: X position
+                                  ),
                                   reverse=True)  # Highest Y first (index)
 
         # Map thumb first if found

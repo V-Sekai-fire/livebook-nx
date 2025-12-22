@@ -121,12 +121,14 @@ defmodule ArgsParser do
       --skin-only, -so                Only generate skinning (requires existing skeleton) (default: false)
       --skeleton-task <path>          Custom skeleton task config (optional)
       --skin-task <path>              Custom skin task config (optional)
+      --vrm                            Enable VRM bone naming (J_Bip_C_Hips, J_Bip_L_UpperArm, etc.) (default: false)
       --help, -h                       Show this help message
 
     Example:
       elixir unirig_generation.exs model.obj --seed 42
       elixir unirig_generation.exs model.usdc --skeleton-only
       elixir unirig_generation.exs model.glb --skin-only
+      elixir unirig_generation.exs model.obj --vrm
     """)
   end
 
@@ -139,6 +141,7 @@ defmodule ArgsParser do
         skin_only: :boolean,
         skeleton_task: :string,
         skin_task: :string,
+        vrm: :boolean,
         help: :boolean
       ],
       aliases: [
@@ -184,7 +187,8 @@ defmodule ArgsParser do
       skeleton_only: skeleton_only,
       skin_only: skin_only,
       skeleton_task: Keyword.get(opts, :skeleton_task),
-      skin_task: Keyword.get(opts, :skin_task)
+      skin_task: Keyword.get(opts, :skin_task),
+      vrm: Keyword.get(opts, :vrm, false)
     }
 
     # Validate output_format - only USDC allowed
@@ -214,6 +218,7 @@ Output Format: #{config.output_format}
 Seed: #{config.seed}
 Skeleton Only: #{config.skeleton_only}
 Skin Only: #{config.skin_only}
+VRM Bone Naming: #{config.vrm}
 """)
 
 # Save config to JSON for Python to read (use temp file to avoid conflicts)
@@ -674,6 +679,7 @@ skeleton_only = config.get('skeleton_only', False)
 skin_only = config.get('skin_only', False)
 skeleton_task = config.get('skeleton_task')
 skin_task = config.get('skin_task')
+vrm = config.get('vrm', False)
 
 # Resolve paths to absolute
 mesh_path = str(Path(mesh_path).resolve())
@@ -893,6 +899,8 @@ else:
 
     print("\n=== Step 4: Merge Skeleton and Skin ===")
     print("Merging skeleton and skinning weights...")
+    if vrm:
+        print("VRM bone naming enabled (J_Bip_C_Hips, J_Bip_L_UpperArm, etc.)")
 
     final_output = export_dir / f"rigged.{output_format}"
 
@@ -935,6 +943,7 @@ else:
             names=names,
             tails=tails,
             add_root=False,
+            is_vrm=vrm,
         )
 
         print(f"✓ Rigged model saved: {final_output}")
