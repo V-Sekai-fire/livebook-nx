@@ -476,11 +476,14 @@ def run_unirig_inference(
         import time
         timestamp = time.strftime("%Y_%m_%d_%H_%M_%S")
 
-        # Check which files need extraction
+        # Get data name (only once)
         data_name_actual = task.components.get('data_name', 'raw_data.npz')
+        if data_name is not None:
+            data_name_actual = data_name
+
+        # Check which files need extraction
         files_to_extract = []
         for input_file, output_dir in files:
-            # Ensure output directory exists
             os.makedirs(output_dir, exist_ok=True)
             raw_data_npz = os.path.join(output_dir, data_name_actual)
             if not os.path.exists(raw_data_npz):
@@ -504,35 +507,27 @@ def run_unirig_inference(
                     files=files_to_extract,
                 )
                 print("✓ Mesh extraction complete")
-
-                # Verify extraction succeeded
-                all_extracted = True
-                for input_file, output_dir in files_to_extract:
-                    raw_data_npz = os.path.join(output_dir, data_name_actual)
-                    if os.path.exists(raw_data_npz):
-                        print(f"  ✓ Verified: {raw_data_npz}")
-                    else:
-                        print(f"  ✗ Missing: {raw_data_npz}")
-                        all_extracted = False
-
-                if not all_extracted:
-                    raise FileNotFoundError(f"Extraction failed - raw_data.npz files not found")
             except Exception as e:
                 print(f"✗ Error during extraction: {e}")
                 import traceback
                 traceback.print_exc()
                 raise
-        else:
-            print("\n=== No extraction needed (raw_data.npz files already exist) ===")
-            # Verify files exist
-            for input_file, output_dir in files:
-                raw_data_npz = os.path.join(output_dir, data_name_actual)
-                if not os.path.exists(raw_data_npz):
-                    print(f"✗ Error: Expected raw_data.npz not found: {raw_data_npz}")
-                    raise FileNotFoundError(f"raw_data.npz not found: {raw_data_npz}")
-                else:
-                    print(f"  ✓ Found: {raw_data_npz}")
 
+        # Verify all files exist (extracted or pre-existing)
+        print("\n=== Verifying extracted files ===")
+        all_verified = True
+        for input_file, output_dir in files:
+            raw_data_npz = os.path.join(output_dir, data_name_actual)
+            if os.path.exists(raw_data_npz):
+                print(f"  ✓ Found: {raw_data_npz}")
+            else:
+                print(f"  ✗ Missing: {raw_data_npz}")
+                all_verified = False
+
+        if not all_verified:
+            raise FileNotFoundError(f"Extraction/verification failed - raw_data.npz files not found")
+
+        # Convert to output directories for Datapath
         files = [f[1] for f in files]
         datapath = Datapath(files=files, cls=None)
 
@@ -542,11 +537,6 @@ def run_unirig_inference(
             tokenizer_config = load_config('tokenizer', os.path.join('configs/tokenizer', task.components.tokenizer))
             from src.tokenizer.spec import TokenizerConfig
             tokenizer_config = TokenizerConfig.parse(config=tokenizer_config)
-
-        # Get data name
-        data_name_actual = task.components.get('data_name', 'raw_data.npz')
-        if data_name is not None:
-            data_name_actual = data_name
 
         # Get predict dataset and transform
         predict_dataset_config = data_config.get('predict_dataset_config', None)
