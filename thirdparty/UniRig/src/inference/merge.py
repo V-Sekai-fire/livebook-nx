@@ -510,112 +510,43 @@ def make_armature(
     # must set to object mode to enable parent_set
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # When is_vrm is True, ensure bones have VRM names
-    # UniRig should generate VRM names via Order.make_names() when cls='vroid'
-    # But if names are generic (e.g., "bone_0", "bone_1"), we can map them using vroid.yaml order
+    # When is_vrm is True, ensure bones match the names from UniRig
+    # UniRig generates VRM names via Order.make_names() when cls='vroid'
+    # The names list should already contain the correct VRM names
+    # We only rename bones if they exist and have different names
     if is_vrm:
-        # Standard VRM bone order from vroid.yaml config (official UniRig mapping)
-        standard_vrm_bone_names = [
-            'J_Bip_C_Hips',
-            'J_Bip_C_Spine',
-            'J_Bip_C_Chest',
-            'J_Bip_C_UpperChest',
-            'J_Bip_C_Neck',
-            'J_Bip_C_Head',
-            'J_Bip_L_Shoulder',
-            'J_Bip_L_UpperArm',
-            'J_Bip_L_LowerArm',
-            'J_Bip_L_Hand',
-            'J_Bip_R_Shoulder',
-            'J_Bip_R_UpperArm',
-            'J_Bip_R_LowerArm',
-            'J_Bip_R_Hand',
-            'J_Bip_L_UpperLeg',
-            'J_Bip_L_LowerLeg',
-            'J_Bip_L_Foot',
-            'J_Bip_L_ToeBase',
-            'J_Bip_R_UpperLeg',
-            'J_Bip_R_LowerLeg',
-            'J_Bip_R_Foot',
-            'J_Bip_R_ToeBase',
-        ]
+        bpy.ops.object.mode_set(mode='EDIT')
+        edit_bones = armature.data.edit_bones
         
-        # Additional VRM hand bone names (if present)
-        vrm_hand_bone_names = [
-            'J_Bip_L_Thumb1', 'J_Bip_L_Thumb2', 'J_Bip_L_Thumb3',
-            'J_Bip_L_Index1', 'J_Bip_L_Index2', 'J_Bip_L_Index3',
-            'J_Bip_L_Middle1', 'J_Bip_L_Middle2', 'J_Bip_L_Middle3',
-            'J_Bip_L_Ring1', 'J_Bip_L_Ring2', 'J_Bip_L_Ring3',
-            'J_Bip_L_Little1', 'J_Bip_L_Little2', 'J_Bip_L_Little3',
-            'J_Bip_R_Index1', 'J_Bip_R_Index2', 'J_Bip_R_Index3',
-            'J_Bip_R_Thumb1', 'J_Bip_R_Thumb2', 'J_Bip_R_Thumb3',
-            'J_Bip_R_Middle1', 'J_Bip_R_Middle2', 'J_Bip_R_Middle3',
-            'J_Bip_R_Ring1', 'J_Bip_R_Ring2', 'J_Bip_R_Ring3',
-            'J_Bip_R_Little1', 'J_Bip_R_Little2', 'J_Bip_R_Little3',
-        ]
-        
-        all_vrm_bone_names = standard_vrm_bone_names + vrm_hand_bone_names
-        
-        # Check if names already have VRM names
-        has_vrm_names = all(name.startswith('J_Bip_') for name in names)
-        
-        # Check if names are generic (bone_0, bone_1, etc.) - indicates we can map by index
-        # Also check for other generic patterns
-        is_generic_names = (
-            all(name.startswith('bone_') and name[5:].isdigit() for name in names) or
-            all(name.startswith('Bone') and name[4:].isdigit() for name in names) or
-            all(name.isdigit() or (name.startswith('bone') and name[4:].isdigit()) for name in names)
-        )
-        
-        # Only rename if we have a known mapping:
-        # 1. Names are generic (bone_0, bone_1, etc.) AND count matches vroid.yaml order
-        # 2. OR names don't have VRM names but we can determine the mapping
-        if not has_vrm_names and (is_generic_names or len(names) <= len(all_vrm_bone_names)):
-            # We have a mapping - rename bones by index position
-            bpy.ops.object.mode_set(mode='EDIT')
-            edit_bones = armature.data.edit_bones
+        renamed_count = 0
+        for i, expected_name in enumerate(names):
+            # Find bone by the name it was created with (from names list)
+            bone = edit_bones.get(expected_name)
+            if bone is None:
+                # Bone doesn't exist with expected name, skip
+                continue
             
-            renamed_count = 0
-            for i, old_name in enumerate(names):
-                if i >= len(all_vrm_bone_names):
-                    # More bones than standard VRM bones, keep original name
-                    continue
-                
-                bone = edit_bones.get(old_name)
-                if bone is None:
-                    continue
-                
-                vrm_name = all_vrm_bone_names[i]
-                
-                # Only rename if different
-                if bone.name != vrm_name:
-                    # Check if target name already exists
-                    existing_bone = edit_bones.get(vrm_name)
-                    if existing_bone is None or existing_bone == bone:
-                        bone.name = vrm_name
-                        renamed_count += 1
-                        print(f"[Info] Renamed bone '{old_name}' (index {i}) to '{vrm_name}'")
-                    else:
-                        print(f"[Warning] Cannot rename '{old_name}' to '{vrm_name}': target name already exists")
-            
-            # Update names list to reflect renamed bones
-            bpy.ops.object.mode_set(mode='OBJECT')
-            for i, old_name in enumerate(names):
-                if i < len(all_vrm_bone_names):
-                    bone = armature.data.bones.get(old_name)
-                    if bone:
-                        names[i] = bone.name
-            
-            if renamed_count > 0:
-                print(f"[Info] Renamed {renamed_count} bones to VRM naming convention using vroid.yaml mapping")
-        elif has_vrm_names:
-            # Already have VRM names, just verify
-            vrm_bone_count = sum(1 for name in names if name.startswith('J_Bip_'))
-            print(f"[Info] All {vrm_bone_count} bones already have VRM naming convention")
+            # Only rename if the bone name doesn't match the expected name
+            # (This handles cases where Blender might have auto-renamed due to conflicts)
+            if bone.name != expected_name:
+                # Check if target name already exists (from a previous bone)
+                existing_bone = edit_bones.get(expected_name)
+                if existing_bone is None or existing_bone == bone:
+                    bone.name = expected_name
+                    renamed_count += 1
+                    print(f"[Info] Renamed bone '{bone.name}' (index {i}) to '{expected_name}'")
+                else:
+                    print(f"[Warning] Cannot rename '{bone.name}' to '{expected_name}': target name already exists")
+        
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+        if renamed_count > 0:
+            print(f"[Info] Renamed {renamed_count} bones to match UniRig-generated names")
         else:
-            # Don't know the mapping, can't rename safely
-            print(f"[Warning] Cannot determine VRM bone mapping. Names are not generic (bone_0, bone_1, etc.) and don't match VRM pattern.")
-            print(f"[Warning] Expected VRM names from UniRig generation, but got: {names[:5]}... (showing first 5)")
+            # Verify bones have VRM names
+            vrm_bone_count = sum(1 for name in names if name.startswith('J_Bip_'))
+            if vrm_bone_count > 0:
+                print(f"[Info] All bones already have correct names from UniRig (VRM names: {vrm_bone_count})")
     objects = bpy.data.objects
     for o in bpy.context.selected_objects:
         o.select_set(False)
