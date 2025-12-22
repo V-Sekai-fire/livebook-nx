@@ -62,8 +62,55 @@ def load(filepath: str, return_armature: bool=False):
         raise ValueError(f'File {filepath} does not exist !')
     try:
         if filepath.endswith(".vrm"):
-            # enable vrm addon and load vrm model
-            bpy.ops.preferences.addon_enable(module='vrm')
+            # Install and enable VRM addon
+            # For Blender 4.2+, VRM addon is available from Extensions Platform (Asset Library)
+            # Check if addon is already installed and enabled
+            vrm_addon_enabled = False
+            vrm_module_name = None
+            
+            # Check common VRM addon module names
+            for addon in bpy.context.preferences.addons:
+                if 'vrm' in addon.module.lower():
+                    vrm_module_name = addon.module
+                    if addon.enabled:
+                        vrm_addon_enabled = True
+                        break
+            
+            if not vrm_addon_enabled:
+                # Try to enable if installed but not enabled
+                if vrm_module_name:
+                    try:
+                        bpy.ops.preferences.addon_enable(module=vrm_module_name)
+                        print(f"Enabled VRM addon: {vrm_module_name}")
+                        vrm_addon_enabled = True
+                    except Exception as e:
+                        print(f"Failed to enable VRM addon: {e}")
+                
+                # If not installed, try to install from Extensions Platform (Blender 4.2+)
+                if not vrm_addon_enabled:
+                    try:
+                        # For Blender 4.2+, try installing from Extensions Platform
+                        # Note: This may require the addon to be available in Blender's Extensions
+                        # If this fails, the addon must be installed manually from:
+                        # Edit > Preferences > Add-ons > Install from Extensions Platform
+                        # or download from: https://extensions.blender.org/add-ons/vrm/
+                        if hasattr(bpy.ops.preferences, 'addon_install_from_asset_library'):
+                            bpy.ops.preferences.addon_install_from_asset_library(asset_id='io_scene_vrm')
+                            print("Installed VRM addon from Extensions Platform")
+                            # Enable after installation
+                            bpy.ops.preferences.addon_enable(module='io_scene_vrm')
+                            vrm_addon_enabled = True
+                    except Exception as e:
+                        print(f"Could not install VRM addon from Extensions Platform: {e}")
+                        print("Please install VRM addon manually:")
+                        print("  1. Edit > Preferences > Add-ons")
+                        print("  2. Click 'Install from Extensions Platform' or download from:")
+                        print("     https://extensions.blender.org/add-ons/vrm/")
+                        raise RuntimeError("VRM addon is not installed. Please install it manually from Blender's Extensions Platform.")
+            
+            # Verify addon is enabled before importing
+            if not vrm_addon_enabled:
+                raise RuntimeError("VRM addon is not enabled. Please enable it in Edit > Preferences > Add-ons")
             
             bpy.ops.import_scene.vrm(
                 filepath=filepath,
