@@ -4,12 +4,13 @@ This document provides essential context and guidelines for AI coding agents wor
 
 ## Project Overview
 
-This repository contains a collection of Elixir-based CLI scripts for AI/ML model inference and generation tasks. The scripts use Python (via `Pythonx`) for model execution and integrate with Hugging Face for model downloads. All scripts follow a consistent architecture pattern with shared utilities, OpenTelemetry observability, and standardized error handling.
+This repository contains a collection of Elixir-based CLI scripts for AI/ML model inference and generation tasks. Most scripts use Python (via `Pythonx`) for model execution, while some use native Elixir ML libraries (NX/Bumblebee). All scripts integrate with Hugging Face for model downloads and follow a consistent architecture pattern with shared utilities, OpenTelemetry observability, and standardized error handling.
 
 ### Key Technologies
 
 - **Language**: Elixir (CLI scripts using `Mix.install`)
-- **Python Integration**: `Pythonx` library for executing Python code
+- **Python Integration**: `Pythonx` library for executing Python code (most scripts)
+- **Native Elixir ML**: `NX` (Numerical Elixir) and `Bumblebee` for native ML inference (some scripts)
 - **Python Package Management**: `uv` (via Pythonx)
 - **Observability**: OpenTelemetry with AppSignal integration
 - **Model Source**: Hugging Face model repositories
@@ -30,31 +31,58 @@ livebook-nx/
 
 ### Main Scripts
 
-- **omnipart_generation.exs**: 3D shape generation from images using OmniPart
+#### Python-based Scripts (via Pythonx)
+
 - **qwen3vl_inference.exs**: Vision-language inference using Qwen3-VL
 - **kokoro_tts_generation.exs**: Text-to-speech generation using Kokoro-82M
 - **kvoicewalk_generation.exs**: Voice cloning using KVoiceWalk
 - **sam3_video_segmentation.exs**: Video segmentation using SAM3
 - **zimage_generation.exs**: Text-to-image generation using Z-Image-Turbo
-- **unirig_generation.exs**: 3D rigging using UniRig
-- **tris_to_quads_converter.exs**: Mesh conversion utilities
-- **corrective_smooth_baker.exs**: Mesh smoothing utilities
+- **unirig_generation.exs**: 3D rigging using UniRig (supports VRM bone naming)
+- **tris_to_quads_converter.exs**: Mesh conversion utilities (triangles to quads)
+- **corrective_smooth_baker.exs**: Mesh smoothing utilities (bakes corrective smooth modifiers)
+
+#### Native Elixir ML Scripts (NX/Bumblebee)
+
+- **nx.exs**: Demonstrates basic tensor operations using NX (Numerical Elixir)
+- **nx_phi3.exs**: Text generation using Bumblebee with GPT-2 or other Hugging Face models
 
 ## Architecture Patterns
 
+### Script Types
+
+This repository contains two types of scripts:
+
+1. **Python-based Scripts**: Use `Pythonx` to execute Python code for model inference
+   - Most scripts fall into this category
+   - Use shared utilities from `shared_utils.exs`
+   - Integrate with OpenTelemetry for observability
+   - Examples: `unirig_generation.exs`, `qwen3vl_inference.exs`, `zimage_generation.exs`
+
+2. **Native Elixir ML Scripts**: Use NX and Bumblebee for direct Elixir-based ML inference
+   - Do not require Python or Pythonx
+   - Use Elixir-native tensor operations
+   - Examples: `nx.exs`, `nx_phi3.exs`
+
 ### Script Structure
 
-All scripts follow this consistent pattern:
+Most scripts follow this consistent pattern:
 
 1. **Header**: SPDX license, copyright, description
 2. **Dependencies**: `Mix.install` with required packages
-3. **OpenTelemetry Setup**: Configuration (can be disabled with `--disable-telemetry`)
-4. **Shared Utilities**: `Code.eval_file("shared_utils.exs")`
+3. **OpenTelemetry Setup**: Configuration (can be disabled with `--disable-telemetry`) - *Python-based scripts only*
+4. **Shared Utilities**: `Code.eval_file("shared_utils.exs")` - *Python-based scripts only*
 5. **Argument Parsing**: `ArgsParser` module for CLI arguments
-6. **Main Logic**: Orchestration of Python execution via `Pythonx`
+6. **Main Logic**: 
+   - Python-based scripts: Orchestration of Python execution via `Pythonx`
+   - Native Elixir scripts: Direct use of NX/Bumblebee APIs
 7. **Error Handling**: Standardized error handling and logging
 
-### Example Script Template
+**Note**: Native Elixir ML scripts (`nx.exs`, `nx_phi3.exs`) do not use Pythonx or shared utilities, and instead use NX/Bumblebee directly for tensor operations and model inference.
+
+### Example Script Templates
+
+#### Python-based Script Template
 
 ```elixir
 #!/usr/bin/env elixir
@@ -84,9 +112,30 @@ end
 # Main script logic...
 ```
 
+#### Native Elixir ML Script Template
+
+```elixir
+#!/usr/bin/env elixir
+
+# SPDX-License-Identifier: MIT
+# SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
+
+Mix.install([
+  {:bumblebee, git: "https://github.com/elixir-nx/bumblebee", tag: "main"},
+  {:nx, "~> 0.7.0"},
+  {:exla, "~> 0.7.1"},
+], config: [nx: [default_backend: EXLA.Backend]])
+
+require Logger
+
+Logger.configure(level: :info)
+
+# Main script logic using NX/Bumblebee directly...
+```
+
 ## Shared Utilities (`shared_utils.exs`)
 
-The `shared_utils.exs` file provides common functionality used across all scripts:
+The `shared_utils.exs` file provides common functionality used across Python-based scripts (not used by native Elixir ML scripts):
 
 ### Key Modules
 
@@ -221,11 +270,20 @@ Mix.install([
 
 ### Python Dependencies
 
-Python dependencies are managed via `uv` (installed by Pythonx):
+Python dependencies are managed via `uv` (installed by Pythonx) for Python-based scripts:
 
-- Dependencies are specified in Python code strings
+- Dependencies are specified in Python code strings via `Pythonx.uv_init/1`
 - Installed automatically on first run
 - Cached in `~/.cache/pythonx/`
+
+### Native Elixir ML Dependencies
+
+Native Elixir ML scripts use:
+
+- **NX**: Numerical Elixir for tensor operations
+- **EXLA**: XLA backend for GPU acceleration (optional, requires CUDA setup)
+- **Bumblebee**: Pre-trained model loading and inference
+- Dependencies installed via `Mix.install` at runtime
 
 ## Common Workflows
 
@@ -259,7 +317,11 @@ Python dependencies are managed via `uv` (installed by Pythonx):
 Scripts are tested manually by running with sample inputs:
 
 ```bash
-elixir omnipart_generation.exs input_image.jpg
+# Python-based script example
+elixir unirig_generation.exs model.obj
+
+# Native Elixir ML script example
+elixir nx_phi3.exs "Hello world" --max-tokens 20
 ```
 
 ### Output Verification
@@ -314,11 +376,13 @@ elixir omnipart_generation.exs input_image.jpg
 
 ### Common Issues
 
-1. **Python GIL Errors**: Use `Pythonx.spawn` instead of `Pythonx.eval` for long operations
-2. **OpenTelemetry Connection Errors**: Check network connectivity, verify AppSignal endpoint
+1. **Python GIL Errors**: Use `Pythonx.spawn` instead of `Pythonx.eval` for long operations (Python-based scripts)
+2. **OpenTelemetry Connection Errors**: Check network connectivity, verify AppSignal endpoint (Python-based scripts)
 3. **GPU Out of Memory**: Reduce batch size, enable CPU offloading, use quantization
 4. **Model Download Failures**: Check network connection, verify Hugging Face access
 5. **Path Issues**: Use absolute paths, check file permissions
+6. **EXLA/CUDA Setup Issues** (Native Elixir ML): Ensure proper environment variables are set for CUDA support (see `nx_phi3.exs` for examples)
+7. **NX Backend Errors**: Verify EXLA backend is properly configured for GPU operations
 
 ### Debug Commands
 
@@ -329,8 +393,11 @@ elixir --version
 # Check Python version (via Pythonx)
 elixir -e "Mix.install([{:pythonx, \"~> 0.4.7\"}]); {version, _} = Pythonx.eval(\"import sys; sys.version\"); IO.puts(version)"
 
-# Check GPU availability
+# Check GPU availability (Python-based scripts)
 elixir -e "Mix.install([{:pythonx, \"~> 0.4.7\"}]); {available, _} = Pythonx.eval(\"import torch; torch.cuda.is_available()\"); IO.puts(available)"
+
+# Check NX backend (Native Elixir ML)
+elixir -e "Mix.install([{:nx, \"~> 0.7.0\"}, {:exla, \"~> 0.7.1\"}], config: [nx: [default_backend: EXLA.Backend]]); IO.inspect(Nx.default_backend())"
 ```
 
 ## Contributing Guidelines
@@ -362,8 +429,10 @@ Fix OpenTelemetry span usage in Python code
 
 ## Key Files Reference
 
-- **shared_utils.exs**: Core utilities and modules
-- **omnipart_generation.exs**: Most complex script (3D generation pipeline)
+- **shared_utils.exs**: Core utilities and modules (used by Python-based scripts)
+- **unirig_generation.exs**: Complex 3D rigging pipeline with VRM support
+- **zimage_generation.exs**: Text-to-image generation with native CLI API architecture
+- **nx_phi3.exs**: Example of native Elixir ML using Bumblebee
 - **AGENTS.md**: This file (agent documentation)
 
 ## Additional Resources
