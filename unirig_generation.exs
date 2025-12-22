@@ -614,6 +614,11 @@ def run_unirig_inference(
         system_config = task.components.get('system', None)
         if system_config is not None:
             system_config = load_config('system', os.path.join('configs/system', system_config))
+            # Override assign_cls to 'vroid' when VRM naming is enabled
+            # This ensures the model generates with vroid class, which uses vroid.yaml for bone naming
+            if vrm and 'generate_kwargs' in system_config:
+                system_config['generate_kwargs']['assign_cls'] = 'vroid'
+                print(f"[Info] Set assign_cls='vroid' in system config for VRM bone naming")
             optimizer_config = task.get('optimizer', None)
             loss_config = task.get('loss', None)
             scheduler_config = task.get('scheduler', None)
