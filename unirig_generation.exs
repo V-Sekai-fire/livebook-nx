@@ -539,7 +539,9 @@ def run_unirig_inference(
                     print(f"  ✓ Found: {raw_data_npz}")
 
         files = [f[1] for f in files]
-        datapath = Datapath(files=files, cls=None)
+        # Use 'vroid' class when VRM naming is enabled to generate VRM bone names
+        cls_value = 'vroid' if vrm else None
+        datapath = Datapath(files=files, cls=cls_value)
 
         # Get tokenizer
         tokenizer_config = task.components.get('tokenizer', None)
@@ -578,6 +580,8 @@ def run_unirig_inference(
             model = None
 
         # Set up data module
+        # Use 'vroid' class when VRM naming is enabled to generate VRM bone names
+        cls_value = 'vroid' if vrm else None
         data = UniRigDatasetModule(
             process_fn=None if model is None else model._process_fn,
             predict_dataset_config=predict_dataset_config,
@@ -586,7 +590,7 @@ def run_unirig_inference(
             debug=False,
             data_name=data_name_actual,
             datapath=datapath,
-            cls=None,
+            cls=cls_value,
         )
 
         # Get writer callback
