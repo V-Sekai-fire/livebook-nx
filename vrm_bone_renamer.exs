@@ -43,7 +43,7 @@ Code.eval_file("shared_utils.exs")
 OtelSetup.configure()
 
 # Initialize Python environment with required dependencies
-# bpy for Blender, Qwen3VL for vision analysis
+# bpy for Blender, pillow for image processing
 Pythonx.uv_init("""
 [project]
 name = "vrm-bone-renamer"
@@ -51,24 +51,8 @@ version = "0.0.0"
 requires-python = "==3.11.*"
 dependencies = [
   "bpy==4.5.*",
-  "transformers",
-  "accelerate",
   "pillow",
-  "torch>=2.0.0,<2.5.0",
-  "torchvision>=0.15.0,<0.20.0",
-  "numpy",
-  "huggingface-hub",
-  "bitsandbytes",
 ]
-
-[tool.uv.sources]
-torch = { index = "pytorch-cu118" }
-torchvision = { index = "pytorch-cu118" }
-
-[[tool.uv.index]]
-name = "pytorch-cu118"
-url = "https://download.pytorch.org/whl/cu118"
-explicit = true
 """)
 
 # Parse command-line arguments
@@ -200,6 +184,7 @@ with open(config_file_path, 'r', encoding='utf-8') as f:
 # Normalize paths to use forward slashes for cross-platform compatibility
 input_path = str(Path(config['input_path'])).replace("\\\\", "/")
 output_dir = Path(config.get('output_dir', 'output'))
+output_path = config.get('output_path', str(Path(input_path).with_suffix('.usdc')))
 output_dir.mkdir(exist_ok=True, parents=True)
 
 # Detect input format
@@ -288,9 +273,7 @@ try:
     bpy.ops.export_scene.gltf(
         filepath=temp_gltf_path_str,
         export_format='GLTF_SEPARATE',
-        export_selected=False,
         export_materials='EXPORT',
-        export_colors=True,
         export_cameras=False,
         export_lights=False,
         export_animations=False,
@@ -392,7 +375,7 @@ annotated_images_dir.mkdir(exist_ok=True, parents=True)
 # Based on HKU/SAMPart3D camera trajectory methods
 # Run analysis 2 times and merge results for better accuracy
 import math
-num_views = 4
+num_views = 12
 views = [f'VIEW_{i}' for i in range(num_views)]
 annotated_images = []
 view_bone_data = {}  # Store bone data for each view for re-annotation
@@ -954,440 +937,465 @@ if len(annotated_images) == 0:
 
 print(f"Created {len(annotated_images)} annotated images")
 
-# Qwen3VL Vision Analysis
-print("=== Qwen3VL Vision Analysis ===")
+# Geometric Bone Mapping Analysis
+print("=== Geometric Bone Mapping Analysis ===")
+print("Using geometric decision tree based on bone positions, hierarchy, and GLTF data")
 
-# Load Qwen3VL model (reuse logic from qwen3vl_inference.exs)
-print("Loading Qwen3VL model...")
-try:
-    # Redirect stderr to avoid Pythonx conflicts with logging
-    import sys
-    import os
-    import logging
-    import warnings
+import math
 
-    # Save original stderr
-    original_stderr = sys.stderr
+# Helper function to calculate bone length
+def bone_length(bone):
+    head = Vector(bone.head_local)
+    tail = Vector(bone.tail_local)
+    return (tail - head).length
 
-    # Redirect stderr to devnull to avoid Pythonx write conflicts
-    try:
-        sys.stderr = open(os.devnull, 'w')
-    except:
-        # Fallback: redirect to a temp file
-        import tempfile
-        sys.stderr = open(tempfile.NamedTemporaryFile(delete=False).name, 'w')
+# Helper function to get bone depth in hierarchy
+def get_bone_depth(bone, armature_data):
+    depth = 0
+    current = bone
+    while current.parent:
+        depth += 1
+        current = current.parent
+    return depth
 
-    # Suppress logging
-    logging.getLogger("transformers").setLevel(logging.CRITICAL)
-    logging.getLogger("huggingface_hub").setLevel(logging.CRITICAL)
-    logging.getLogger("tqdm").setLevel(logging.CRITICAL)
-    warnings.filterwarnings("ignore")
+# Helper function to calculate centroid of bone structure
+def calculate_centroid(armature_data):
+    positions = []
+    for bone in armature_data.bones:
+        positions.append(bone.head_local)
+        positions.append(bone.tail_local)
+    if len(positions) == 0:
+        return Vector((0, 0, 0))
+    centroid = Vector((0, 0, 0))
+    for pos in positions:
+        centroid += Vector(pos)
+    return centroid / len(positions)
 
-    from PIL import Image
-    from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
-    import torch
+# Build bone information dictionary with geometric properties
+bone_info = {}
+centroid = calculate_centroid(armature.data)
 
-    four_str = "4"
-    MODEL_ID = f"huihui-ai/Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
+for bone in armature.data.bones:
+    head = Vector(bone.head_local)
+    tail = Vector(bone.tail_local)
+    length = bone_length(bone)
+    depth = get_bone_depth(bone, armature.data)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    # Calculate relative position to centroid
+    head_rel = head - centroid
+    tail_rel = tail - centroid
 
-    # Configure quantization
-    quantization_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=True,
-        bnb_4bit_quant_type="nf4"
-    ) if device == "cuda" else None
+    # Determine left/right (negative X = left, positive X = right in typical VRM)
+    is_left = head_rel.x < 0 or tail_rel.x < 0
+    is_right = head_rel.x > 0 or tail_rel.x > 0
 
-    load_kwargs = {
-        "device_map": "auto",
-        "trust_remote_code": True,
-        "low_cpu_mem_usage": True,
-        "attn_implementation": "sdpa",
+    # Determine vertical position (Y axis - up/down)
+    vertical_pos = (head.y + tail.y) / 2
+
+    # Determine if bone is in upper body (above hips) or lower body
+    is_upper_body = vertical_pos > centroid.y
+
+    bone_info[bone.name] = {
+        'bone': bone,
+        'head': head,
+        'tail': tail,
+        'head_local': list(bone.head_local),
+        'tail_local': list(bone.tail_local),
+        'length': length,
+        'depth': depth,
+        'parent': bone.parent.name if bone.parent else None,
+        'children': [child.name for child in bone.children],
+        'head_rel': head_rel,
+        'tail_rel': tail_rel,
+        'is_left': is_left,
+        'is_right': is_right,
+        'vertical_pos': vertical_pos,
+        'is_upper_body': is_upper_body,
+        'center': (head + tail) / 2
     }
 
-    if quantization_config:
-        load_kwargs["quantization_config"] = quantization_config
-    else:
-        load_kwargs["dtype"] = dtype
+# Find root bone (no parent)
+root_bones = [name for name, info in bone_info.items() if info['parent'] is None]
+if len(root_bones) == 0:
+    raise ValueError("No root bone found")
+root_bone_name = root_bones[0]  # Use first root bone
+print(f"Root bone identified: {root_bone_name}")
 
-    # Try loading from local cache first
-    four_str = "4"
-    model_weights_dir = Path("pretrained_weights") / f"Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
-    if model_weights_dir.exists() and (model_weights_dir / "config.json").exists():
-        print(f"Loading from local directory: {model_weights_dir}")
-        model = Qwen3VLForConditionalGeneration.from_pretrained(
-            str(model_weights_dir),
-            **load_kwargs
-        )
-    else:
-        print(f"Loading from Hugging Face Hub: {MODEL_ID}")
-        model = Qwen3VLForConditionalGeneration.from_pretrained(
-            MODEL_ID,
-            **load_kwargs
-        )
+# Geometric Decision Tree for VRM Bone Mapping
+bone_mapping = {}
 
-    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+# Step 1: Identify hips (root bone, typically lowest Y position among roots)
+hips_candidates = root_bones
+if len(hips_candidates) > 1:
+    # Choose the one with lowest Y position
+    hips_candidate = min(hips_candidates, key=lambda name: bone_info[name]['head'].y)
+else:
+    hips_candidate = hips_candidates[0]
+bone_mapping[hips_candidate] = "hips"
+print(f"  {hips_candidate} -> hips (root bone)")
 
-    # Restore stderr after model loading
-    sys.stderr.close()
-    sys.stderr = original_stderr
+# Step 2: Build spine chain (hips -> spine -> chest -> upperChest -> neck -> head)
+# Look for the most vertical upward chain (highest Y and Z combined)
+def find_spine_chain(start_bone_name):
+    chain = [start_bone_name]
+    current = bone_info[start_bone_name]['bone']
 
-    print("[OK] Qwen3VL model loaded")
+    # Get hips position for reference
+    hips_pos = bone_info[start_bone_name]['head']
 
-except Exception as e:
-    # Restore stderr in case of error
-    try:
-        if 'original_stderr' in locals():
-            try:
-                sys.stderr.close()
-            except:
-                pass
-            sys.stderr = original_stderr
-    except:
-        pass
-    print(f"[ERROR] Error loading Qwen3VL model: {e}")
-    import traceback
-    traceback.print_exc()
-    raise
+    max_depth = 10
+    for _ in range(max_depth):
+        children = [child for child in current.children]
+        if len(children) == 0:
+            break
 
-# Create VRM specification prompt
-# Build prompt with GLTF hierarchy if available
-gltf_hierarchy_section = ""
-if gltf_json_hierarchy is not None and gltf_json_hierarchy:
-    gltf_hierarchy_section = ("\\n\\nGLTF/GLB STRUCTURE HIERARCHY:\\n"
-        "The following JSON structure shows the node hierarchy and skeleton references from the GLTF/GLB file.\\n"
-        "Use the node indices and names to cross-reference with the bone names in the images.\\n\\n"
-        + str(gltf_json_hierarchy) + "\\n\\n"
-        'The "nodes" array contains node information with indices. The "skins" array contains skeleton joint references.\\n'
-        "Match the bone names in the images (bone_0, bone_1, etc.) to the node names and indices in this hierarchy.\\n")
+        # Filter out legs (legs go downward in Z, spine goes upward)
+        # Legs typically have negative Z or go significantly downward
+        spine_candidates = []
+        for child in children:
+            child_head = Vector(child.head_local)
+            child_tail = Vector(child.tail_local)
+            # Spine bones go upward (increasing Y and Z)
+            # Legs go downward (decreasing Z, often negative)
+            if child_tail.z > hips_pos.z - 0.1:  # Allow some tolerance
+                # Check if it's more vertical (spine) vs horizontal (arm)
+                vertical_component = abs(child_tail.y - child_head.y)
+                horizontal_component = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
+                if vertical_component > horizontal_component * 0.5:  # More vertical than horizontal
+                    spine_candidates.append(child)
 
-vrm_spec_prompt = ("Analyze the annotated bone structure images and identify VRM bone mappings.\\n" + gltf_hierarchy_section +
-    "VRM Humanoid Bone Specification (VRMC_vrm-1.0):\\n\\n"
-    "REQUIRED BONES (must be mapped):\\n"
-    "- Torso: hips, spine\\n"
-    "- Head: head\\n"
-    "- Legs: leftUpperLeg, leftLowerLeg, leftFoot, rightUpperLeg, rightLowerLeg, rightFoot\\n"
-    "- Arms: leftUpperArm, leftLowerArm, leftHand, rightUpperArm, rightLowerArm, rightHand\\n\\n"
-    "OPTIONAL BONES (map if present):\\n"
-    "- Torso: chest, upperChest, neck\\n"
-    "- Head: leftEye, rightEye, jaw\\n"
-    "- Legs: leftToes, rightToes\\n"
-    "- Arms: leftShoulder, rightShoulder\\n"
-    "- Fingers: left/right thumb, index, middle, ring, little (proximal, intermediate, distal)\\n\\n"
-    "PARENT-CHILD RELATIONSHIPS:\\n"
-    "- hips (root) → spine → chest → upperChest → neck → head\\n"
-    "- upperChest → leftShoulder → leftUpperArm → leftLowerArm → leftHand → fingers\\n"
-    "- upperChest → rightShoulder → rightUpperArm → rightLowerArm → rightHand → fingers\\n"
-    "- hips → leftUpperLeg → leftLowerLeg → leftFoot → leftToes\\n"
-    "- hips → rightUpperLeg → rightLowerLeg → rightFoot → rightToes\\n\\n"
-    "ESTIMATED POSITIONS:\\n"
-    "- hips: Crotch area\\n"
-    "- spine: Top of pelvis\\n"
-    "- chest: Bottom of rib cage\\n"
-    "- neck: Base of neck\\n"
-    "- head: Top of neck\\n"
-    "- leftUpperLeg/rightUpperLeg: Groin area\\n"
-    "- leftLowerLeg/rightLowerLeg: Knee area\\n"
-    "- leftFoot/rightFoot: Ankle area\\n"
-    "- leftUpperArm/rightUpperArm: Base of upper arm\\n"
-    "- leftLowerArm/rightLowerArm: Elbow area\\n"
-    "- leftHand/rightHand: Wrist area\\n\\n"
-    "The images show bone structures with:\\n"
-    "- Red lines: bone connections\\n"
-    "- Green circles: bone head markers (foci)\\n"
-    "- Yellow text: bone names (bone_0, bone_1, etc.)\\n\\n"
-    "Based on the bone positions, structure, and parent-child relationships visible in the images, identify which numbered bone (bone_0, bone_1, etc.) corresponds to which VRM bone name.\\n\\n"
-    "Return ONLY a valid JSON object mapping bone names to VRM names, in this exact format:\\n"
-    '{"bone_0": "hips", "bone_1": "spine", "bone_2": "chest", ...}\\n\\n'
-    "Do not include any explanation or text outside the JSON object.")
+        if len(spine_candidates) == 0:
+            # If no clear spine candidates, use the one with highest Y+Z
+            next_child = max(children, key=lambda b: b.head_local[1] + b.head_local[2])
+        else:
+            # Choose the most vertical upward child
+            next_child = max(spine_candidates, key=lambda b: b.head_local[1] + b.head_local[2])
 
-# Prepare images for Qwen3VL
-print("Preparing images for Qwen3VL analysis...")
-images = []
-for img_path in annotated_images:
-    img = Image.open(img_path).convert("RGB")
-    images.append(img)
+        chain.append(next_child.name)
+        current = next_child
 
-print(f"  Loaded {len(images)} images")
+        # Stop if we've reached a bone with no children (likely head)
+        if len(current.children) == 0:
+            break
+        if len(chain) > 6:
+            break
 
-# Run Qwen3VL analysis 2 times and merge results
-print("")
-print("=== Running Qwen3VL Analysis (2 iterations) ===")
-all_mappings = []  # Store mappings from each iteration
+    return chain
 
-for iteration in range(2):
-    print("")
-    print(f"--- Iteration {iteration + 1}/2 ---")
+spine_chain = find_spine_chain(hips_candidate)
+print(f"  Spine chain: {' -> '.join(spine_chain)}")
 
-    # Prepare messages with multiple images
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": vrm_spec_prompt}
-            ] + [{"type": "image", "image": img} for img in images]
-        }
-    ]
+# Map spine chain to VRM bones
+vrm_spine_names = ["hips", "spine", "chest", "upperChest", "neck", "head"]
+for i, bone_name in enumerate(spine_chain[:len(vrm_spine_names)]):
+    if bone_name not in bone_mapping:
+        bone_mapping[bone_name] = vrm_spine_names[i]
+        print(f"  {bone_name} -> {vrm_spine_names[i]}")
 
-    print("Running Qwen3VL inference...")
-    print("  Preparing inputs...")
-    import time
-    start_time = time.time()
+# Step 3: Find upperChest or chest for arm attachment
+upper_chest_name = None
+for name, vrm_name in bone_mapping.items():
+    if vrm_name in ["upperChest", "chest"]:
+        upper_chest_name = name
+        break
 
-    try:
-        # Prepare inputs
-        inputs = processor.apply_chat_template(
-            messages,
-            tokenize=True,
-            add_generation_prompt=True,
-            return_dict=True,
-            return_tensors="pt"
-        ).to(model.device)
+# If no upperChest/chest found, use the highest spine bone before head
+if upper_chest_name is None:
+    # Find the highest bone in spine chain that's not head
+    for bone_name in reversed(spine_chain):
+        if bone_name in bone_mapping and bone_mapping[bone_name] != "hips" and bone_mapping[bone_name] != "head":
+            upper_chest_name = bone_name
+            break
 
-        input_length = inputs.input_ids.shape[1] if hasattr(inputs, 'input_ids') else 0
-        prep_time = time.time() - start_time
-        prep_time_str = format(prep_time, '.1f')
-        print(f"  Input prepared: {input_length} tokens (took {prep_time_str}s)")
-        print("  Generating response...")
-        print("  NOTE: This may take 2-5 minutes with 4 images and a 4 billion parameter model.")
-        print("  The model is processing - please wait...")
-        sys.stdout.flush()  # Ensure output is visible
-
-        gen_start = time.time()
-
-        # Generate response
-        generated_ids = model.generate(
-            **inputs,
-            max_new_tokens=2048,
-            temperature=0.7,
-            top_p=0.9,
-            do_sample=True,
-            pad_token_id=processor.tokenizer.pad_token_id if hasattr(processor.tokenizer, 'pad_token_id') else None,
-        )
-
-        gen_time = time.time() - gen_start
-        generated_length = generated_ids.shape[1] if hasattr(generated_ids, 'shape') else 0
-        gen_time_str = format(gen_time, '.1f')
-        print(f"  Generation complete: {generated_length} total tokens (took {gen_time_str}s)")
-
-        # Extract only the newly generated tokens
-        import itertools
-        generated_ids_trimmed = []
-        zipped_pairs = list(zip(inputs.input_ids, generated_ids))
-        for pair in zipped_pairs:
-            in_ids, out_ids = pair
-            start_idx = len(in_ids)
-            trimmed = list(itertools.islice(out_ids, start_idx, None))
-            generated_ids_trimmed.append(trimmed)
-
-        # Decode the response
-        output_text = processor.batch_decode(
-            generated_ids_trimmed,
-            skip_special_tokens=True,
-            clean_up_tokenization_spaces=False
-        )
-
-        response = output_text[0] if output_text else ""
-        print("[OK] Qwen3VL response received")
-        response_preview = response[0:200] if len(response) > 200 else response
-        print(f"Response preview: {response_preview}...")
-
-        # Save Qwen3VL response to file
-        response_dir = output_dir / "qwen3vl_responses"
-        response_dir.mkdir(exist_ok=True, parents=True)
-        response_file = response_dir / f"response_iter{iteration + 1}.txt"
-        with open(response_file, 'w', encoding='utf-8') as f:
-            f.write(response)
-        print(f"  Response saved to: {response_file}")
-
-    except Exception as e:
-        print(f"[ERROR] Error during Qwen3VL inference (iteration {iteration + 1}): {e}")
-        import traceback
-        traceback.print_exc()
-        continue  # Continue to next iteration instead of raising
-
-    # Parse JSON from response
-    print(f"=== Parsing Bone Mappings (Iteration {iteration + 1}) ===")
-    try:
-        # Extract JSON from response (may have extra text)
-        import re
-
-        # Try to find JSON object - look for opening and closing braces
-        json_start = response.find('{')
-        if json_start < 0:
-            print(f"  [WARN] No JSON object found in response (iteration {iteration + 1})")
-            continue
-
-        # Find matching closing brace by counting braces
-        brace_count = 0
-        json_end = json_start
-        for i in range(json_start, len(response)):
-            if response[i] == '{':
-                brace_count += 1
-            elif response[i] == '}':
-                brace_count -= 1
-                if brace_count == 0:
-                    json_end = i
-                    break
-
-        if brace_count != 0:
-            print(f"  [WARN] No complete JSON object found in response (iteration {iteration + 1})")
-            continue
-
-        json_str = response[json_start:json_end+1]
-
-        # Try to parse JSON
-        iteration_mapping = json.loads(json_str)
-
-        # Validate it's a dictionary with string keys and values
-        if not isinstance(iteration_mapping, dict):
-            print(f"  [WARN] Expected dictionary, got {type(iteration_mapping)} (iteration {iteration + 1})")
-            continue
-
-        # Validate all keys are bone names and values are strings
-        valid = True
-        for key, value in iteration_mapping.items():
-            if not isinstance(key, str) or not isinstance(value, str):
-                print(f"  [WARN] Invalid mapping entry: {key} -> {value} (iteration {iteration + 1})")
-                valid = False
+# Step 4: Find arms (left/right from upper spine bones)
+# Arms typically branch from chest/upperChest or from spine bones
+arm_attachment_bones = []
+if upper_chest_name:
+    arm_attachment_bones.append(upper_chest_name)
+# Also check spine bones for arm branches
+for bone_name in spine_chain:
+    if bone_name not in bone_mapping or bone_mapping[bone_name] in ["hips", "head"]:
+        continue
+    bone = bone_info[bone_name]['bone']
+    # Look for lateral children (arms extend horizontally)
+    for child in bone.children:
+        if child.name not in bone_mapping:
+            child_head = Vector(child.head_local)
+            child_tail = Vector(child.tail_local)
+            # Arms extend horizontally (large X component, small Y change)
+            horizontal_extent = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
+            vertical_extent = abs(child_tail.y - child_head.y)
+            if horizontal_extent > vertical_extent * 1.5:  # More horizontal than vertical
+                arm_attachment_bones.append(bone_name)
                 break
 
-        if valid:
-            all_mappings.append(iteration_mapping)
-            print(f"[OK] Parsed {len(iteration_mapping)} bone mappings (iteration {iteration + 1})")
-            for old_name, new_name in sorted(iteration_mapping.items()):
-                print(f"  {old_name} -> {new_name}")
+# Find arm branches from attachment points
+left_arm_start = None
+right_arm_start = None
 
-            # After first iteration, re-annotate images with guessed bone names
-            if iteration == 0:
-                print("")
-                print("=== Re-annotating images with guessed bone names ===")
+for attach_bone_name in arm_attachment_bones:
+    attach_bone = bone_info[attach_bone_name]['bone']
+    for child in attach_bone.children:
+        if child.name in bone_mapping:
+            continue
+
+        child_info = bone_info[child.name]
+        child_center = child_info['center']
+
+        # Arms extend laterally - check X position and horizontal extent
+        horizontal_extent = math.sqrt((child_info['tail'].x - child_info['head'].x)**2 +
+                                     (child_info['tail'].z - child_info['head'].z)**2)
+        vertical_extent = abs(child_info['tail'].y - child_info['head'].y)
+
+        if horizontal_extent > vertical_extent * 1.2:  # More horizontal
+            if child_center.x > 0.05 and left_arm_start is None:  # Right side (positive X)
+                right_arm_start = child
+            elif child_center.x < -0.05 and right_arm_start is None:  # Left side (negative X)
+                left_arm_start = child
+
+# Map arms
+if left_arm_start:
+    # Follow left arm chain
+    arm_chain = [left_arm_start]
+    current = left_arm_start
+    for _ in range(4):  # shoulder -> upperArm -> lowerArm -> hand
+        if len(current.children) > 0:
+            # Choose child with longest bone (main arm chain)
+            next_bone = max(current.children, key=lambda b: bone_length(b))
+            arm_chain.append(next_bone)
+            current = next_bone
+        else:
+            break
+
+    # Map: first bone might be shoulder or upperArm depending on structure
+    if len(arm_chain) >= 4:
+        vrm_arm_names = ["leftShoulder", "leftUpperArm", "leftLowerArm", "leftHand"]
+    elif len(arm_chain) >= 3:
+        vrm_arm_names = ["leftUpperArm", "leftLowerArm", "leftHand"]
+    else:
+        vrm_arm_names = ["leftUpperArm", "leftLowerArm"][:len(arm_chain)]
+
+    for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
+        if bone.name not in bone_mapping:
+            bone_mapping[bone.name] = vrm_arm_names[i]
+            print(f"  {bone.name} -> {vrm_arm_names[i]}")
+
+if right_arm_start:
+    # Follow right arm chain
+    arm_chain = [right_arm_start]
+    current = right_arm_start
+    for _ in range(4):
+        if len(current.children) > 0:
+            next_bone = max(current.children, key=lambda b: bone_length(b))
+            arm_chain.append(next_bone)
+            current = next_bone
+        else:
+            break
+
+    if len(arm_chain) >= 4:
+        vrm_arm_names = ["rightShoulder", "rightUpperArm", "rightLowerArm", "rightHand"]
+    elif len(arm_chain) >= 3:
+        vrm_arm_names = ["rightUpperArm", "rightLowerArm", "rightHand"]
+    else:
+        vrm_arm_names = ["rightUpperArm", "rightLowerArm"][:len(arm_chain)]
+
+    for i, bone in enumerate(arm_chain[:len(vrm_arm_names)]):
+        if bone.name not in bone_mapping:
+            bone_mapping[bone.name] = vrm_arm_names[i]
+            print(f"  {bone.name} -> {vrm_arm_names[i]}")
+
+# Step 5: Find legs (left/right from hips)
+# Legs go downward (negative Z or decreasing Z)
+hips_bone = bone_info[hips_candidate]['bone']
+leg_children = [child for child in hips_bone.children
+                if child.name not in bone_mapping]
+
+left_legs = []
+right_legs = []
+
+for child in leg_children:
+    child_info = bone_info[child.name]
+    child_center = child_info['center']
+    child_head = child_info['head']
+    child_tail = child_info['tail']
+
+    # Legs go downward (tail Z < head Z, or negative Z)
+    goes_downward = child_tail.z < child_head.z or child_tail.z < 0
+
+    if goes_downward:
+        # Determine left/right by X position
+        if child_center.x < -0.01:  # Left side
+            left_legs.append(child)
+        elif child_center.x > 0.01:  # Right side
+            right_legs.append(child)
+        else:
+            # If unclear, use the one that's more to the left/right
+            if abs(child_center.x) > 0.001:
+                if child_center.x < 0:
+                    left_legs.append(child)
+                else:
+                    right_legs.append(child)
+
+# Map legs
+if len(left_legs) > 0:
+    # Choose the leftmost leg
+    left_upper_leg = min(left_legs, key=lambda b: bone_info[b.name]['center'].x)
+    bone_mapping[left_upper_leg.name] = "leftUpperLeg"
+    print(f"  {left_upper_leg.name} -> leftUpperLeg")
+
+    # Follow leg chain: upperLeg -> lowerLeg -> foot -> toes
+    leg_chain = [left_upper_leg]
+    current = left_upper_leg
+    for _ in range(3):
+        if len(current.children) > 0:
+            # Choose child that continues downward
+            next_bone = max(current.children, key=lambda b: bone_length(b))
+            leg_chain.append(next_bone)
+            current = next_bone
+        else:
+            break
+
+    vrm_leg_names = ["leftUpperLeg", "leftLowerLeg", "leftFoot", "leftToes"]
+    for i, bone in enumerate(leg_chain[:len(vrm_leg_names)]):
+        if bone.name not in bone_mapping:
+            bone_mapping[bone.name] = vrm_leg_names[i]
+            print(f"  {bone.name} -> {vrm_leg_names[i]}")
+
+if len(right_legs) > 0:
+    # Choose the rightmost leg
+    right_upper_leg = max(right_legs, key=lambda b: bone_info[b.name]['center'].x)
+    bone_mapping[right_upper_leg.name] = "rightUpperLeg"
+    print(f"  {right_upper_leg.name} -> rightUpperLeg")
+
+    # Follow leg chain
+    leg_chain = [right_upper_leg]
+    current = right_upper_leg
+    for _ in range(3):
+        if len(current.children) > 0:
+            next_bone = max(current.children, key=lambda b: bone_length(b))
+            leg_chain.append(next_bone)
+            current = next_bone
+        else:
+            break
+
+    vrm_leg_names = ["rightUpperLeg", "rightLowerLeg", "rightFoot", "rightToes"]
+    for i, bone in enumerate(leg_chain[:len(vrm_leg_names)]):
+        if bone.name not in bone_mapping:
+            bone_mapping[bone.name] = vrm_leg_names[i]
+            print(f"  {bone.name} -> {vrm_leg_names[i]}")
+
+# Step 6: Map remaining bones (fingers, etc.) based on hierarchy and position
+# Find hand bones and map fingers
+for bone_name, vrm_name in list(bone_mapping.items()):
+    if vrm_name in ["leftHand", "rightHand"]:
+        hand_bone = bone_info[bone_name]['bone']
+        side = "left" if "left" in vrm_name else "right"
+
+        # Map finger bones (thumb, index, middle, ring, little)
+        finger_names = ["Thumb", "Index", "Middle", "Ring", "Little"]
+        finger_children = sorted(hand_bone.children,
+                                key=lambda b: bone_info[b.name]['center'].x if side == "left"
+                                else -bone_info[b.name]['center'].x)
+
+        for i, finger_bone in enumerate(finger_children[:len(finger_names)]):
+            if finger_bone.name not in bone_mapping:
+                finger_vrm_name = f"{side}{finger_names[i]}"
+                bone_mapping[finger_bone.name] = finger_vrm_name
+                print(f"  {finger_bone.name} -> {finger_vrm_name}")
+
+print(f"[OK] Geometric mapping complete: {len(bone_mapping)} bones mapped")
+
+# Re-annotate images with VRM names
+print("")
+print("=== Re-annotating images with VRM bone names ===")
+try:
+    from PIL import Image, ImageDraw, ImageFont
+
+    # Try to load fonts
+    try:
+        font_large = ImageFont.truetype("arial.ttf", 20)
+    except:
+        try:
+            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+        except:
+            font_large = ImageFont.load_default()
+
+    # Re-annotate each view
+    for view_idx, view_name in enumerate(views):
+        if view_name not in view_bone_data:
+            continue
+
+        img_path = annotated_images[view_idx]
+        bone_data_list = view_bone_data[view_name]
+
+        # Load the base image (normal map or white background)
+        try:
+            img_pil = Image.open(img_path).convert("RGBA")
+            draw = ImageDraw.Draw(img_pil)
+
+            # Redraw labels with VRM names
+            for bone_data in bone_data_list:
                 try:
-                    from PIL import Image, ImageDraw, ImageFont
+                    bone = bone_data['bone']
+                    head_pix = bone_data['head_pix']
+                    label_x = int(bone_data['label_x'])
+                    label_y = int(bone_data['label_y'])
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
 
-                    # Try to load fonts
+                    # Get VRM name from mapping, or keep original name
+                    display_name = bone_mapping.get(bone.name, bone.name)
+
+                    # Get updated text size
                     try:
-                        font_large = ImageFont.truetype("arial.ttf", 20)
+                        bbox = draw.textbbox((0, 0), display_name, font=font_large)
+                        new_text_width = bbox[2] - bbox[0]
+                        new_text_height = bbox[3] - bbox[1]
                     except:
-                        try:
-                            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-                        except:
-                            font_large = ImageFont.load_default()
+                        new_text_width = len(display_name) * 12
+                        new_text_height = 22
 
-                    # Re-annotate each view
-                    for view_idx, view_name in enumerate(views):
-                        if view_name not in view_bone_data:
-                            continue
+                    # Draw semi-transparent background for label
+                    padding = 5
+                    draw.rectangle([label_x - padding, label_y - padding,
+                                   label_x + new_text_width + padding, label_y + new_text_height + padding],
+                                  fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
 
-                        img_path = annotated_images[view_idx]
-                        bone_data_list = view_bone_data[view_name]
+                    # Draw connecting line from label to bone head
+                    draw.line([head_pix, (label_x, label_y + new_text_height // 2)],
+                             fill=(255, 255, 255, 180), width=2)
 
-                        # Load the base image (normal map or white background)
-                        try:
-                            img_pil = Image.open(img_path).convert("RGBA")
-                            draw = ImageDraw.Draw(img_pil)
+                    # Add text label with VRM name
+                    draw.text((label_x, label_y), display_name,
+                             fill=(255, 255, 255, 255), font=font_large)
 
-                            # Redraw labels with VRM names
-                            for bone_data in bone_data_list:
-                                try:
-                                    bone = bone_data['bone']
-                                    head_pix = bone_data['head_pix']
-                                    label_x = int(bone_data['label_x'])
-                                    label_y = int(bone_data['label_y'])
-                                    text_width = bone_data['text_width']
-                                    text_height = bone_data['text_height']
-
-                                    # Get VRM name from mapping, or keep original name
-                                    display_name = iteration_mapping.get(bone.name, bone.name)
-
-                                    # Get updated text size
-                                    try:
-                                        bbox = draw.textbbox((0, 0), display_name, font=font_large)
-                                        new_text_width = bbox[2] - bbox[0]
-                                        new_text_height = bbox[3] - bbox[1]
-                                    except:
-                                        new_text_width = len(display_name) * 12
-                                        new_text_height = 22
-
-                                    # Draw semi-transparent background for label
-                                    padding = 5
-                                    draw.rectangle([label_x - padding, label_y - padding,
-                                                   label_x + new_text_width + padding, label_y + new_text_height + padding],
-                                                  fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
-
-                                    # Draw connecting line from label to bone head
-                                    draw.line([head_pix, (label_x, label_y + new_text_height // 2)],
-                                             fill=(255, 255, 255, 180), width=2)
-
-                                    # Add text label with VRM name
-                                    draw.text((label_x, label_y), display_name,
-                                             fill=(255, 255, 255, 255), font=font_large)
-
-                                    # Update bone_data with new text dimensions
-                                    bone_data['text_width'] = new_text_width
-                                    bone_data['text_height'] = new_text_height
-
-                                except Exception as e:
-                                    continue
-
-                            # Save updated image (overwrite original)
-                            img_pil.save(img_path)
-                            # Also save a copy with iteration number for reference
-                            iter_path = annotated_images_dir / f"bone_view_{view_name.lower()}_iter1.png"
-                            img_pil.save(iter_path)
-                            print(f"  Re-annotated {view_name} with VRM names")
-
-                        except Exception as e:
-                            print(f"  [WARN] Error re-annotating {view_name}: {e}")
-                            continue
-
-                    # Reload images for next iteration
-                    images = []
-                    for img_path in annotated_images:
-                        img = Image.open(img_path).convert("RGB")
-                        images.append(img)
-                    print("[OK] Images re-annotated and reloaded for next iteration")
+                    # Update bone_data with new text dimensions
+                    bone_data['text_width'] = new_text_width
+                    bone_data['text_height'] = new_text_height
 
                 except Exception as e:
-                    print(f"[WARN] Error during re-annotation: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # Continue with original images
+                    continue
 
-    except Exception as e:
-        print(f"[ERROR] Error parsing JSON from Qwen3VL response (iteration {iteration + 1}): {e}")
-        print(f"Response was: {response}")
-        import traceback
-        traceback.print_exc()
-        continue  # Continue to next iteration
+            # Save updated image
+            img_pil.save(img_path)
+            # Also save a copy with geometric annotation
+            geom_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
+            img_pil.save(geom_path)
+            print(f"  Re-annotated {view_name} with VRM names (geometric mapping)")
 
-# Merge mappings from all iterations using voting
-print("")
-print("=== Merging Results from 2 Iterations ===")
-if len(all_mappings) == 0:
-    raise ValueError("No valid mappings found in any iteration")
+        except Exception as e:
+            print(f"  [WARN] Error re-annotating {view_name}: {e}")
+            continue
 
-# Count votes for each bone->VRM mapping
-from collections import defaultdict, Counter
-vote_counts = defaultdict(Counter)
+    print("[OK] Images re-annotated with geometric mapping results")
 
-for mapping in all_mappings:
-    for bone_name, vrm_name in mapping.items():
-        vote_counts[bone_name][vrm_name] += 1
+except Exception as e:
+    print(f"[WARN] Error during re-annotation: {e}")
+    import traceback
+    traceback.print_exc()
 
-# Create final mapping using majority vote
-bone_mapping = {}
-for bone_name, votes in vote_counts.items():
-    # Get the most common VRM name for this bone
-    most_common = votes.most_common(1)[0]
-    vrm_name, count = most_common
-    bone_mapping[bone_name] = vrm_name
-    print(f"  {bone_name} -> {vrm_name} (voted {count}/{len(all_mappings)} times)")
-
-print(f"[OK] Merged {len(bone_mapping)} bone mappings from {len(all_mappings)} iterations")
+# Create single mapping result (no voting needed for geometric approach)
+all_mappings = [bone_mapping]  # For compatibility with existing code
 
 # Save final merged mapping to file
 mapping_file = output_dir / "bone_mapping_final.json"
@@ -1420,27 +1428,35 @@ if len(mapped_bones) != len(bone_mapping.values()):
 
 print("[OK] VRM compliance check completed")
 
-# Save detailed voting results
+# Save geometric mapping results
 print("")
 print("=== Saving Analysis Results ===")
-vote_results_file = output_dir / "voting_results.json"
-vote_results = {}
-for bone_name, votes in vote_counts.items():
-    vote_results[bone_name] = {
-        "final_mapping": bone_mapping.get(bone_name),
-        "votes": dict(votes),
-        "total_iterations": len(all_mappings),
-        "confidence": votes.most_common(1)[0][1] / len(all_mappings) if len(all_mappings) > 0 else 0.0
-    }
-with open(vote_results_file, 'w', encoding='utf-8') as f:
-    json.dump(vote_results, f, indent=2, ensure_ascii=False)
-print(f"  Voting results saved to: {vote_results_file}")
+geometric_results_file = output_dir / "geometric_mapping_results.json"
+geometric_results = {
+    "method": "geometric_decision_tree",
+    "mapping": bone_mapping,
+    "bone_info": {name: {
+        "head": info['head_local'],
+        "tail": info['tail_local'],
+        "length": info['length'],
+        "depth": info['depth'],
+        "parent": info['parent'],
+        "children": info['children'],
+        "is_left": info['is_left'],
+        "is_right": info['is_right'],
+        "vertical_pos": info['vertical_pos'],
+        "is_upper_body": info['is_upper_body']
+    } for name, info in bone_info.items()}
+}
+with open(geometric_results_file, 'w', encoding='utf-8') as f:
+    json.dump(geometric_results, f, indent=2, ensure_ascii=False)
+print(f"  Geometric mapping results saved to: {geometric_results_file}")
 
-# Save all iteration mappings for comparison
-all_iterations_file = output_dir / "all_iteration_mappings.json"
+# Save mapping for reference
+all_iterations_file = output_dir / "geometric_mapping.json"
 with open(all_iterations_file, 'w', encoding='utf-8') as f:
-    json.dump(all_mappings, f, indent=2, ensure_ascii=False)
-print(f"  All iteration mappings saved to: {all_iterations_file}")
+    json.dump(bone_mapping, f, indent=2, ensure_ascii=False)
+print(f"  Geometric mapping saved to: {all_iterations_file}")
 
 # Save validation results
 validation_results = {
@@ -1463,14 +1479,13 @@ analysis_summary = {
     "output_file": str(output_path),
     "total_bones_extracted": len(bone_data),
     "total_bones_mapped": len(bone_mapping),
-    "iterations_run": len(all_mappings),
+    "mapping_method": "geometric_decision_tree",
     "final_mapping": bone_mapping,
     "validation": validation_results,
     "views_captured": len(views),
     "annotated_images": [str(img) for img in annotated_images],
     "normal_maps_dir": str(normal_maps_dir),
     "annotated_images_dir": str(annotated_images_dir),
-    "qwen3vl_responses_dir": str(output_dir / "qwen3vl_responses"),
     "gltf_hierarchy_available": gltf_json_hierarchy is not None
 }
 summary_file = output_dir / "analysis_summary.json"
@@ -1576,12 +1591,7 @@ try:
         export_materials=True,
         export_uvmaps=True,
         export_normals=True,
-        root_prim_path="",
-        material_prim_path="materials",
-        preview_surface_prim_path="preview",
-        shader_prim_path="shaders",
         export_armatures=True,
-        export_skins=True,
         relative_paths=True
     )
     print(f"[OK] Exported to: {output_path}")
@@ -1601,12 +1611,11 @@ print(f"All analysis results saved to: {output_dir}")
 print(f"  - Extracted bone data: extracted_bone_data.json")
 print(f"  - GLTF hierarchy: gltf_hierarchy.json")
 print(f"  - Final bone mapping: bone_mapping_final.json")
-print(f"  - Voting results: voting_results.json")
-print(f"  - All iteration mappings: all_iteration_mappings.json")
+print(f"  - Geometric mapping results: geometric_mapping_results.json")
+print(f"  - Geometric mapping: geometric_mapping.json")
 print(f"  - Validation results: validation_results.json")
 print(f"  - Analysis summary: analysis_summary.json")
 print(f"  - Renaming log: renaming_log.json")
-print(f"  - Qwen3VL responses: qwen3vl_responses/")
 print(f"  - Normal maps: {normal_maps_dir}")
 print(f"  - Annotated images: {annotated_images_dir}")
 """, %{})
