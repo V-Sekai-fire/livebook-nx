@@ -151,13 +151,17 @@ config = ArgsParser.parse(System.argv())
 # Normalize to forward slashes for cross-platform compatibility with Blender
 absolute_input_path = Path.expand(config.input_path) |> String.replace("\\", "/")
 
-# Generate output path (replace extension with .usdc)
-input_dir = Path.dirname(absolute_input_path)
+# Create timestamped output directory
+output_dir = OutputDir.create()
+IO.puts("Output directory: #{output_dir}")
+
+# Generate output path (replace extension with .usdc) in output directory
 input_basename = Path.basename(absolute_input_path, Path.extname(absolute_input_path))
-output_path = Path.join(input_dir, "#{input_basename}_vrm.usdc") |> String.replace("\\", "/")
+output_path = Path.join(output_dir, "#{input_basename}_vrm.usdc") |> String.replace("\\", "/")
 
 config = Map.put(config, :input_path, absolute_input_path)
 config = Map.put(config, :output_path, output_path)
+config = Map.put(config, :output_dir, output_dir)
 
 IO.puts("""
 === VRM Bone Renaming ===
@@ -273,9 +277,15 @@ for obj in bpy.context.scene.objects:
 armature.data.display_type = 'STICK'
 armature.show_in_front = True
 
-# Create temp directory for screenshots
-temp_dir = Path(tempfile.gettempdir()) / f"vrm_bone_renamer_{os.getpid()}"
-temp_dir.mkdir(exist_ok=True, parents=True)
+# Create output directory structure for intermediate files
+output_dir = Path(config.get('output_dir', 'output'))
+output_dir.mkdir(exist_ok=True, parents=True)
+
+# Create subdirectories for intermediate files
+normal_maps_dir = output_dir / "normal_maps"
+normal_maps_dir.mkdir(exist_ok=True, parents=True)
+annotated_images_dir = output_dir / "annotated_images"
+annotated_images_dir.mkdir(exist_ok=True, parents=True)
 
 # Capture screenshots from different camera angles (4 views using Fibonacci sphere)
 # This maximizes viewing angle coverage using golden angle spiral distribution
@@ -441,7 +451,7 @@ for i, view_name in enumerate(views):
     camera.data.angle = math.radians(50.0)  # Field of view
 
     # Step 1: Render normal map (with mesh visible, armature hidden)
-    normal_map_path = temp_dir / f"normal_map_{view_name.lower()}.png"
+    normal_map_path = normal_maps_dir / f"normal_map_{view_name.lower()}.png"
     normal_map_rendered = False
     mesh_objects = []  # Initialize before try block
     try:
@@ -531,7 +541,7 @@ for i, view_name in enumerate(views):
             pass
 
     # Step 2: Create base image (normal map or white background)
-    screenshot_path = temp_dir / f"bone_view_{view_name.lower()}.png"
+    screenshot_path = annotated_images_dir / f"bone_view_{view_name.lower()}.png"
     try:
         from PIL import Image
 
@@ -823,11 +833,15 @@ for i, view_name in enumerate(views):
                 # Skip bones that can't be projected
                 continue
 
+        # Save initial annotated image with iteration 0 suffix
+        iter0_path = annotated_images_dir / f"bone_view_{view_name.lower()}_iter0.png"
+        img_pil.save(iter0_path)
+        # Also save without suffix for use in Qwen3VL
         img_pil.save(screenshot_path)
         annotated_images.append(str(screenshot_path))
         # Store bone data for this view for potential re-annotation
         view_bone_data[view_name] = bone_data_list
-        print(f"    Annotated image saved: {screenshot_path}")
+        print(f"    Annotated image saved: {screenshot_path} (also saved as {iter0_path.name})")
     except Exception as e:
         print(f"    Error annotating image: {e}")
         import traceback
@@ -873,7 +887,7 @@ try:
     from transformers import Qwen3VLForConditionalGeneration, AutoProcessor, BitsAndBytesConfig
     import torch
 
-    four_str = "2"
+    four_str = "4"
     MODEL_ID = f"huihui-ai/Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -900,7 +914,7 @@ try:
         load_kwargs["dtype"] = dtype
 
     # Try loading from local cache first
-    four_str = "2"
+    four_str = "4"
     model_weights_dir = Path("pretrained_weights") / f"Huihui-Qwen3-VL-{four_str}B-Instruct-abliterated"
     if model_weights_dir.exists() and (model_weights_dir / "config.json").exists():
         print(f"Loading from local directory: {model_weights_dir}")
@@ -1081,6 +1095,14 @@ for iteration in range(3):
         print("[OK] Qwen3VL response received")
         response_preview = response[0:200] if len(response) > 200 else response
         print(f"Response preview: {response_preview}...")
+        
+        # Save Qwen3VL response to file
+        response_dir = output_dir / "qwen3vl_responses"
+        response_dir.mkdir(exist_ok=True, parents=True)
+        response_file = response_dir / f"response_iter{iteration + 1}.txt"
+        with open(response_file, 'w', encoding='utf-8') as f:
+            f.write(response)
+        print(f"  Response saved to: {response_file}")
 
     except Exception as e:
         print(f"[ERROR] Error during Qwen3VL inference (iteration {iteration + 1}): {e}")
@@ -1212,8 +1234,11 @@ for iteration in range(3):
                                 except Exception as e:
                                     continue
 
-                            # Save updated image
+                            # Save updated image (overwrite original)
                             img_pil.save(img_path)
+                            # Also save a copy with iteration number for reference
+                            iter_path = annotated_images_dir / f"bone_view_{view_name.lower()}_iter1.png"
+                            img_pil.save(iter_path)
                             print(f"  Re-annotated {view_name} with VRM names")
 
                         except Exception as e:
@@ -1264,6 +1289,12 @@ for bone_name, votes in vote_counts.items():
     print(f"  {bone_name} -> {vrm_name} (voted {count}/{len(all_mappings)} times)")
 
 print(f"[OK] Merged {len(bone_mapping)} bone mappings from {len(all_mappings)} iterations")
+
+# Save final merged mapping to file
+mapping_file = output_dir / "bone_mapping_final.json"
+with open(mapping_file, 'w', encoding='utf-8') as f:
+    json.dump(bone_mapping, f, indent=2, ensure_ascii=False)
+print(f"Final bone mapping saved to: {mapping_file}")
 
 # Validate VRM compliance
 print("=== Validating VRM Compliance ===")
@@ -1375,13 +1406,9 @@ print("")
 print("=== Complete ===")
 print(f"Renamed {renamed_count} bones to VRM specification")
 print(f"Exported to: {output_path}")
-
-# Cleanup temp files
-try:
-    import shutil
-    shutil.rmtree(temp_dir)
-except:
-    pass
+print(f"Intermediate files saved to: {output_dir}")
+print(f"  - Normal maps: {normal_maps_dir}")
+print(f"  - Annotated images: {annotated_images_dir}")
 """, %{})
 rescue
   e ->
