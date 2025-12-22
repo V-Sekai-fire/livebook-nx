@@ -937,6 +937,129 @@ if len(annotated_images) == 0:
 
 print(f"Created {len(annotated_images)} annotated images")
 
+# Create depth map views (12 additional views with depth visualization)
+print("")
+print("=== Creating Depth Map Views ===")
+
+# Create depth map material (emission shader using camera distance)
+depth_mat = bpy.data.materials.new(name="DepthMapMaterial")
+depth_mat.use_nodes = True
+nodes_depth = depth_mat.node_tree.nodes
+links_depth = depth_mat.node_tree.links
+
+# Clear default nodes
+for node in nodes_depth:
+    nodes_depth.remove(node)
+
+# Create Camera Data node to get distance from camera
+camera_data = nodes_depth.new(type='ShaderNodeCameraData')
+
+# Create Map Range node to normalize depth (0 = near/white, 1 = far/black)
+map_range = nodes_depth.new(type='ShaderNodeMapRange')
+map_range.inputs['From Min'].default_value = 0.0
+map_range.inputs['From Max'].default_value = 5.0  # Will be adjusted per view
+map_range.inputs['To Min'].default_value = 1.0  # White for near
+map_range.inputs['To Max'].default_value = 0.0  # Black for far
+map_range.clamp = True
+
+# Create Combine RGB to make grayscale from single value
+combine_rgb = nodes_depth.new(type='ShaderNodeCombineRGB')
+
+# Create Emission shader to output depth as grayscale
+emission = nodes_depth.new(type='ShaderNodeEmission')
+output_depth = nodes_depth.new(type='ShaderNodeOutputMaterial')
+
+# Link: Camera View Distance -> Map Range -> Combine RGB (grayscale) -> Emission -> Output
+links_depth.new(camera_data.outputs['View Distance'], map_range.inputs['Value'])
+links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['R'])
+links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['G'])
+links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['B'])
+links_depth.new(combine_rgb.outputs['Image'], emission.inputs['Color'])
+links_depth.new(emission.outputs['Emission'], output_depth.inputs['Surface'])
+
+# Apply depth material to all mesh objects
+for obj in bpy.context.scene.objects:
+    if obj.type == 'MESH':
+        if len(obj.data.materials) == 0:
+            obj.data.materials.append(depth_mat)
+        else:
+            obj.data.materials[0] = depth_mat
+
+# Generate 12 depth map views using same camera positions
+depth_images = []
+for i, view_name in enumerate(views):
+    print(f"  Capturing {view_name} depth map...")
+
+    # Ensure correct scene state: meshes visible, armature visible
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            obj.hide_set(False)
+    armature.hide_set(False)
+
+    # Force scene update
+    bpy.context.view_layer.update()
+
+    # Recalculate bounding box for each frame
+    bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+    bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+    has_bones = False
+
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'ARMATURE' and not obj.hide_get():
+            for bone in obj.data.bones:
+                head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
+                tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+
+                bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
+                                           min(bbox_min.y, head_world.y, tail_world.y),
+                                           min(bbox_min.z, head_world.z, tail_world.z)))
+                bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
+                                           max(bbox_max.y, head_world.y, tail_world.y),
+                                           max(bbox_max.z, head_world.z, tail_world.z)))
+                has_bones = True
+
+    if has_bones:
+        frame_center = (bbox_min + bbox_max) / 2
+        frame_size = bbox_max - bbox_min
+        diagonal = frame_size.length
+        fov_rad = math.radians(50.0)
+        frame_distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
+        min_distance = max(frame_size.x, frame_size.y, frame_size.z) * 1.5
+        frame_distance = max(frame_distance, min_distance)
+
+        # Update map range based on scene scale (depth range from near to far)
+        max_depth = diagonal * 2.5  # Maximum expected depth
+        map_range.inputs['From Max'].default_value = max_depth
+    else:
+        frame_center = center
+        frame_distance = distance
+
+    # Get point on unit sphere and scale by distance
+    x, y, z = sphere_points[i]
+    camera_pos = mathutils.Vector((x * frame_distance, y * frame_distance, z * frame_distance))
+
+    # Position camera
+    camera.location = frame_center + camera_pos
+    look_at(camera, frame_center)
+
+    # Disable compositor for simple rendering
+    scene.use_nodes = False
+
+    # Render depth map image
+    depth_path = annotated_images_dir / f"bone_view_{view_name.lower()}_depth.png"
+    scene.render.filepath = str(depth_path)
+
+    try:
+        bpy.ops.render.render(write_still=True)
+        print(f"    Depth map rendered: {depth_path}")
+        depth_images.append(str(depth_path))
+    except Exception as e:
+        print(f"    Error rendering depth map: {e}")
+        import traceback
+        traceback.print_exc()
+
+print(f"Created {len(depth_images)} depth map views")
+
 # Geometric Bone Mapping Analysis
 print("=== Geometric Bone Mapping Analysis ===")
 print("Using geometric decision tree based on bone positions, hierarchy, and GLTF data")
