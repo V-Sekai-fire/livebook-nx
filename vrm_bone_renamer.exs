@@ -1231,6 +1231,7 @@ for bone_name in spine_chain:
         continue
     bone = bone_info[bone_name]['bone']
     # Look for lateral children (arms extend horizontally)
+    has_horizontal_child = False
     for child in bone.children:
         if child.name not in bone_mapping:
             child_head = Vector(child.head_local)
@@ -1239,8 +1240,10 @@ for bone_name in spine_chain:
             horizontal_extent = math.sqrt((child_tail.x - child_head.x)**2 + (child_tail.z - child_head.z)**2)
             vertical_extent = abs(child_tail.y - child_head.y)
             if horizontal_extent > vertical_extent * 1.5:  # More horizontal than vertical
-                arm_attachment_bones.append(bone_name)
+                has_horizontal_child = True
                 break
+    if has_horizontal_child and bone_name not in arm_attachment_bones:
+        arm_attachment_bones.append(bone_name)
 
 # Find arm branches from attachment points
 left_arm_start = None
@@ -1261,9 +1264,27 @@ for attach_bone_name in arm_attachment_bones:
         vertical_extent = abs(child_info['tail'].y - child_info['head'].y)
 
         if horizontal_extent > vertical_extent * 1.2:  # More horizontal
-            if child_center.x > 0.05 and left_arm_start is None:  # Right side (positive X)
+            # Use a more lenient threshold (0.01 instead of 0.05) to catch arms closer to center
+            if child_center.x > 0.01 and right_arm_start is None:  # Right side (positive X)
                 right_arm_start = child
-            elif child_center.x < -0.05 and right_arm_start is None:  # Left side (negative X)
+            elif child_center.x < -0.01 and left_arm_start is None:  # Left side (negative X)
+                left_arm_start = child
+
+# Fallback: if we didn't find both arms, check all unmapped children of attachment bones
+if left_arm_start is None or right_arm_start is None:
+    for attach_bone_name in arm_attachment_bones:
+        attach_bone = bone_info[attach_bone_name]['bone']
+        for child in attach_bone.children:
+            if child.name in bone_mapping:
+                continue
+
+            child_info = bone_info[child.name]
+            child_center = child_info['center']
+
+            # Check if it's clearly on left or right side
+            if child_center.x > 0.01 and right_arm_start is None:
+                right_arm_start = child
+            elif child_center.x < -0.01 and left_arm_start is None:
                 left_arm_start = child
 
 # Map arms
@@ -1403,16 +1424,77 @@ for bone_name, vrm_name in list(bone_mapping.items()):
     if vrm_name in ["leftHand", "rightHand"]:
         hand_bone = bone_info[bone_name]['bone']
         side = "left" if "left" in vrm_name else "right"
+        hand_center = bone_info[bone_name]['center']
 
-        # Map finger bones (thumb, index, middle, ring, little)
-        finger_names = ["Thumb", "Index", "Middle", "Ring", "Little"]
-        finger_children = sorted(hand_bone.children,
-                                key=lambda b: bone_info[b.name]['center'].x if side == "left"
-                                else -bone_info[b.name]['center'].x)
+        # Get unmapped finger children
+        finger_children = [child for child in hand_bone.children
+                          if child.name not in bone_mapping]
 
-        for i, finger_bone in enumerate(finger_children[:len(finger_names)]):
+        if len(finger_children) == 0:
+            continue
+
+        # Identify thumb first (it's typically at a different angle/position)
+        # Thumb is usually the one with the most different Y position or angle
+        thumb_bone = None
+        if len(finger_children) >= 1:
+            # Calculate distance from hand center and angle for each finger
+            finger_scores = []
+            for child in finger_children:
+                child_center = bone_info[child.name]['center']
+                child_head = bone_info[child.name]['head']
+                child_tail = bone_info[child.name]['tail']
+
+                # Vector from hand center to finger start
+                to_finger = child_head - hand_center
+                distance = to_finger.length
+
+                # Angle from horizontal (thumb is typically more horizontal)
+                finger_vec = child_tail - child_head
+                horizontal_component = math.sqrt(finger_vec.x**2 + finger_vec.z**2)
+                vertical_component = abs(finger_vec.y)
+
+                # Thumb score: more horizontal, different Y position
+                angle_score = horizontal_component / (vertical_component + 0.001)
+                y_diff = abs(child_center.y - hand_center.y)
+
+                # For left hand, thumb is typically on the left (negative X relative to other fingers)
+                # For right hand, thumb is typically on the right (positive X relative to other fingers)
+                x_pos = child_center.x
+                if side == "left":
+                    x_score = -x_pos  # More negative = more likely thumb
+                else:
+                    x_score = x_pos  # More positive = more likely thumb
+
+                # Combined score (higher = more likely to be thumb)
+                score = angle_score * 0.5 + y_diff * 10.0 + x_score * 5.0
+                finger_scores.append((score, child))
+
+            # The thumb is typically the one with highest score
+            finger_scores.sort(key=lambda x: x[0], reverse=True)
+            thumb_bone = finger_scores[0][1]
+            finger_children.remove(thumb_bone)
+
+        # Sort remaining fingers by Y position (vertical)
+        # For right hand: index (highest Y) -> middle -> ring -> little (lowest Y)
+        # For left hand: same order (index highest, little lowest)
+        remaining_fingers = sorted(finger_children,
+                                  key=lambda b: bone_info[b.name]['center'].y,
+                                  reverse=True)  # Highest Y first (index)
+
+        # Map thumb first if found
+        finger_mappings = []
+        if thumb_bone:
+            finger_mappings.append(("Thumb", thumb_bone))
+
+        # Map remaining fingers: Index, Middle, Ring, Little
+        finger_names = ["Index", "Middle", "Ring", "Little"]
+        for i, finger_bone in enumerate(remaining_fingers[:len(finger_names)]):
+            finger_mappings.append((finger_names[i], finger_bone))
+
+        # Apply mappings
+        for finger_name, finger_bone in finger_mappings:
             if finger_bone.name not in bone_mapping:
-                finger_vrm_name = f"{side}{finger_names[i]}"
+                finger_vrm_name = f"{side}{finger_name}"
                 bone_mapping[finger_bone.name] = finger_vrm_name
                 print(f"  {finger_bone.name} -> {finger_vrm_name}")
 
