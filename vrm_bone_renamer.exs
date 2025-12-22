@@ -407,31 +407,27 @@ if camera is None:
 # Set camera as active
 bpy.context.scene.camera = camera
 
-# Calculate camera positioning from mesh extrema (armature bone positions)
+# Calculate camera positioning from mesh extrema (mesh bounding boxes)
 import mathutils
 bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
 bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
-has_bones = False
+has_meshes = False
 
-# Calculate bounding box from visible armature bone positions
+# Calculate bounding box from visible mesh objects
 for obj in bpy.context.scene.objects:
-    if obj.type == 'ARMATURE' and not obj.hide_get():
-        # Use bone head and tail positions for accurate extrema
-        for bone in obj.data.bones:
-            # Transform bone head and tail to world space
-            head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
-            tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+    if obj.type == 'MESH' and not obj.hide_get():
+        # Get mesh bounding box
+        for vertex in obj.bound_box:
+            world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
+            bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x),
+                                       min(bbox_min.y, world_vertex.y),
+                                       min(bbox_min.z, world_vertex.z)))
+            bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x),
+                                       max(bbox_max.y, world_vertex.y),
+                                       max(bbox_max.z, world_vertex.z)))
+            has_meshes = True
 
-            # Update bounding box extrema
-            bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
-                                       min(bbox_min.y, head_world.y, tail_world.y),
-                                       min(bbox_min.z, head_world.z, tail_world.z)))
-            bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
-                                       max(bbox_max.y, head_world.y, tail_world.y),
-                                       max(bbox_max.z, head_world.z, tail_world.z)))
-            has_bones = True
-
-if has_bones:
+if has_meshes:
     center = (bbox_min + bbox_max) / 2
     size = bbox_max - bbox_min
     # Calculate distance based on mesh extrema
@@ -490,26 +486,25 @@ for i, view_name in enumerate(views):
     # Force scene update after visibility changes
     bpy.context.view_layer.update()
 
-    # Recalculate bounding box for each frame based on currently visible objects
+    # Recalculate bounding box for each frame based on currently visible mesh objects
     bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
     bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
-    has_bones = False
+    has_meshes = False
 
     for obj in bpy.context.scene.objects:
-        if obj.type == 'ARMATURE' and not obj.hide_get():
-            for bone in obj.data.bones:
-                head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
-                tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+        if obj.type == 'MESH' and not obj.hide_get():
+            # Get mesh bounding box
+            for vertex in obj.bound_box:
+                world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
+                bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x),
+                                           min(bbox_min.y, world_vertex.y),
+                                           min(bbox_min.z, world_vertex.z)))
+                bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x),
+                                           max(bbox_max.y, world_vertex.y),
+                                           max(bbox_max.z, world_vertex.z)))
+                has_meshes = True
 
-                bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
-                                           min(bbox_min.y, head_world.y, tail_world.y),
-                                           min(bbox_min.z, head_world.z, tail_world.z)))
-                bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
-                                           max(bbox_max.y, head_world.y, tail_world.y),
-                                           max(bbox_max.z, head_world.z, tail_world.z)))
-                has_bones = True
-
-    if has_bones:
+    if has_meshes:
         frame_center = (bbox_min + bbox_max) / 2
         frame_size = bbox_max - bbox_min
         diagonal = frame_size.length
@@ -606,10 +601,129 @@ for i, view_name in enumerate(views):
         bpy.ops.render.render(write_still=True)
         print(f"    Normal map rendered: {normal_map_path}")
 
-        # Restore scene state: re-hide meshes and re-show armature
+        # Restore scene state: re-hide meshes and re-show armature for label projection
         for obj in mesh_objects:
             obj.hide_set(True)
         armature.hide_set(False)
+
+        # Add SAM-style labels to normal map using foci points (bone heads)
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            normal_img = Image.open(normal_map_path).convert("RGBA")
+            draw = ImageDraw.Draw(normal_img)
+
+            # Try to load fonts
+            try:
+                font_large = ImageFont.truetype("arial.ttf", 18)
+            except:
+                try:
+                    font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
+                except:
+                    font_large = ImageFont.load_default()
+
+            res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
+            bone_data_list = []
+
+            # Collect bone foci points (head positions) - SAM strategy
+            for bone in armature.data.bones:
+                try:
+                    head_world = armature.matrix_world @ Vector(bone.head_local)
+                    head_2d = bpy_extras.object_utils.world_to_camera_view(scene, camera, head_world)
+                    head_pix = (int(head_2d.x * res_x), int((1 - head_2d.y) * res_y))
+
+                    # Only process if within image bounds
+                    if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y):
+                        # Get text size
+                        try:
+                            bbox = draw.textbbox((0, 0), bone.name, font=font_large)
+                            text_width = bbox[2] - bbox[0]
+                            text_height = bbox[3] - bbox[1]
+                        except:
+                            text_width = len(bone.name) * 10
+                            text_height = 18
+
+                        # Initial label position offset from foci point
+                        offset_x = 20
+                        offset_y = -20
+                        label_x = float(head_pix[0] + offset_x)
+                        label_y = float(head_pix[1] + offset_y)
+
+                        bone_data_list.append({
+                            'bone': bone,
+                            'foci': head_pix,  # Foci point (bone head)
+                            'label_x': label_x,
+                            'label_y': label_y,
+                            'text_width': text_width,
+                            'text_height': text_height
+                        })
+                except:
+                    continue
+
+            # Simple overlap avoidance: adjust positions to avoid overlaps
+            padding = 8
+            for i, bone_data in enumerate(bone_data_list):
+                for j, other_data in enumerate(bone_data_list):
+                    if i == j:
+                        continue
+
+                    # Check if labels overlap
+                    x1, y1 = bone_data['label_x'], bone_data['label_y']
+                    w1, h1 = bone_data['text_width'], bone_data['text_height']
+                    x2, y2 = other_data['label_x'], other_data['label_y']
+                    w2, h2 = other_data['text_width'], other_data['text_height']
+
+                    if not (x1 + w1 + padding < x2 or x2 + w2 + padding < x1 or
+                           y1 + h1 + padding < y2 or y2 + h2 + padding < y1):
+                        # Overlap detected - shift this label
+                        dx = x1 - x2
+                        dy = y1 - y2
+                        dist = math.sqrt(dx*dx + dy*dy) if (dx != 0 or dy != 0) else 1.0
+                        if dist > 0:
+                            shift_x = (dx / dist) * (w1 + w2) / 2
+                            shift_y = (dy / dist) * (h1 + h2) / 2
+                            bone_data['label_x'] += shift_x * 0.3
+                            bone_data['label_y'] += shift_y * 0.3
+
+            # Draw labels with translucent backgrounds (SAM-style)
+            for bone_data in bone_data_list:
+                try:
+                    bone = bone_data['bone']
+                    foci = bone_data['foci']
+                    label_x = int(bone_data['label_x'])
+                    label_y = int(bone_data['label_y'])
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+
+                    # Ensure label is within bounds
+                    label_x = max(10, min(res_x - text_width - 10, label_x))
+                    label_y = max(10, min(res_y - text_height - 10, label_y))
+
+                    # Draw translucent connecting line from foci to label
+                    label_center_y = label_y + text_height // 2
+                    draw.line([foci, (label_x, label_center_y)],
+                             fill=(255, 255, 255, 120), width=1)
+
+                    # Draw foci point (small circle)
+                    foci_radius = 4
+                    draw.ellipse([foci[0]-foci_radius, foci[1]-foci_radius,
+                                 foci[0]+foci_radius, foci[1]+foci_radius],
+                                fill=(255, 255, 0, 180), outline=(255, 255, 255, 150), width=1)
+
+                    # Draw text (translucent white)
+                    draw.text((label_x, label_y), bone.name,
+                             fill=(255, 255, 255, 200), font=font_large)
+                except:
+                    continue
+
+            # Save annotated normal map
+            normal_img.save(normal_map_path)
+            # Store bone data for re-annotation
+            view_bone_data[view_name] = bone_data_list
+            print(f"    Normal map annotated with labels: {normal_map_path}")
+        except Exception as e:
+            print(f"    Error adding labels to normal map: {e}")
+            import traceback
+            traceback.print_exc()
 
     except Exception as e:
         print(f"    Error rendering normal map: {e}")
@@ -623,692 +737,17 @@ for i, view_name in enumerate(views):
         except:
             pass
 
-    # Step 2: Create geometric view with labels (armature visible, annotated)
-    geometric_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-
-        # Load normal map as base (or create white background if normal map failed)
-        try:
-            base_img = Image.open(normal_map_path).convert("RGBA")
-        except:
-            base_img = Image.new("RGBA", (scene.render.resolution_x, scene.render.resolution_y), (255, 255, 255, 255))
-
-        draw = ImageDraw.Draw(base_img)
-
-        # Try to load fonts, fallback to default
-        try:
-            font = ImageFont.truetype("arial.ttf", 16)
-            font_large = ImageFont.truetype("arial.ttf", 20)
-        except:
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
-                font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-            except:
-                font = ImageFont.load_default()
-                font_large = ImageFont.load_default()
-
-        res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
-
-        # Store bone positions for connecting dots
-        bone_positions = {}
-        # Track label positions to avoid overlaps
-        label_positions = []
-
-        # First pass: collect all bone positions
-        for bone in armature.data.bones:
-            try:
-                # Project 3D bone positions to 2D screen space
-                # Convert local to world coordinates
-                # bone.head_local and bone.tail_local are in armature local space
-                # Transform through armature's world matrix
-                head_world = armature.matrix_world @ Vector(bone.head_local)
-                tail_world = armature.matrix_world @ Vector(bone.tail_local)
-
-                # Get bone's local transformation matrix for axis calculations
-                bone_matrix = armature.matrix_world @ bone.matrix_local
-
-                # Project to camera view
-                head_2d = bpy_extras.object_utils.world_to_camera_view(
-                    scene, camera, head_world)
-                tail_2d = bpy_extras.object_utils.world_to_camera_view(
-                    scene, camera, tail_world)
-
-                head_pix = (int(head_2d.x * res_x), int((1 - head_2d.y) * res_y))
-                tail_pix = (int(tail_2d.x * res_x), int((1 - tail_2d.y) * res_y))
-
-                # Store positions
-                bone_positions[bone.name] = {
-                    'head': head_pix,
-                    'tail': tail_pix,
-                    'head_world': head_world,
-                    'tail_world': tail_world,
-                    'matrix': bone_matrix,
-                    'bone': bone
-                }
-            except Exception as e:
-                continue
-
-        # Second pass: Draw skeleton connections (parent to child)
-        for bone in armature.data.bones:
-            if bone.name not in bone_positions:
-                continue
-
-            if bone.parent and bone.parent.name in bone_positions:
-                try:
-                    parent_pos = bone_positions[bone.parent.name]
-                    child_pos = bone_positions[bone.name]
-
-                    # Draw line from parent tail to child head (skeleton connection)
-                    parent_tail = parent_pos['tail']
-                    child_head = child_pos['head']
-
-                    if (0 <= parent_tail[0] < res_x and 0 <= parent_tail[1] < res_y and
-                        0 <= child_head[0] < res_x and 0 <= child_head[1] < res_y):
-                        # Draw skeleton connection (cyan)
-                        draw.line([parent_tail, child_head], fill=(0, 255, 255, 255), width=2)
-                except:
-                    pass
-
-        # Third pass: Collect bone data and initial label positions for force-directed layout
-        bone_data_list = []
-        for bone in armature.data.bones:
-            if bone.name not in bone_positions:
-                continue
-
-            try:
-                pos = bone_positions[bone.name]
-                head_pix = pos['head']
-                tail_pix = pos['tail']
-                bone_matrix = pos['matrix']
-                head_world = pos['head_world']
-                tail_world = pos['tail_world']
-
-                # Only process if within image bounds
-                if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y and
-                    0 <= tail_pix[0] < res_x and 0 <= tail_pix[1] < res_y):
-
-                    # Get text size for label
-                    try:
-                        bbox = draw.textbbox((0, 0), bone.name, font=font_large)
-                        text_width = bbox[2] - bbox[0]
-                        text_height = bbox[3] - bbox[1]
-                    except:
-                        text_width = len(bone.name) * 12
-                        text_height = 22
-
-                    # Initial label position (offset from bone head)
-                    initial_x = head_pix[0] + 15
-                    initial_y = head_pix[1] - 15
-
-                    bone_data_list.append({
-                        'bone': bone,
-                        'head_pix': head_pix,
-                        'tail_pix': tail_pix,
-                        'bone_matrix': bone_matrix,
-                        'head_world': head_world,
-                        'tail_world': tail_world,
-                        'label_x': float(initial_x),
-                        'label_y': float(initial_y),
-                        'text_width': text_width,
-                        'text_height': text_height
-                    })
-            except Exception as e:
-                continue
-
-        # Apply force-directed graph layout to labels
-        if len(bone_data_list) > 0:
-            # Force-directed layout parameters
-            repulsion_strength = 5000.0   # Reduced repulsion to prevent pushing to edges
-            attraction_strength = 0.3    # Increased attraction to keep labels near bone heads
-            damping = 0.85               # Velocity damping
-            iterations = 150             # Increased iterations for better convergence
-            padding = 5                 # Label padding for overlap detection
-
-            # Helper function to check if two labels overlap
-            def labels_overlap(data1, data2):
-                x1, y1 = data1['label_x'], data1['label_y']
-                w1, h1 = data1['text_width'], data1['text_height']
-                x2, y2 = data2['label_x'], data2['label_y']
-                w2, h2 = data2['text_width'], data2['text_height']
-
-                # Check bounding box overlap
-                return not (x1 + w1 + padding < x2 - padding or
-                           x2 + w2 + padding < x1 - padding or
-                           y1 + h1 + padding < y2 - padding or
-                           y2 + h2 + padding < y1 - padding)
-
-            # Run force-directed layout iterations
-            for iteration in range(iterations):
-                # Calculate forces for each label
-                forces_x = [0.0] * len(bone_data_list)
-                forces_y = [0.0] * len(bone_data_list)
-
-                for i, bone_data in enumerate(bone_data_list):
-                    label_x = bone_data['label_x']
-                    label_y = bone_data['label_y']
-                    head_pix = bone_data['head_pix']
-
-                    # Attraction force to bone head (spring-like)
-                    dx_attract = head_pix[0] - label_x
-                    dy_attract = head_pix[1] - label_y
-                    dist_attract = math.sqrt(dx_attract*dx_attract + dy_attract*dy_attract)
-                    if dist_attract > 0.1:
-                        forces_x[i] += attraction_strength * dx_attract
-                        forces_y[i] += attraction_strength * dy_attract
-
-                    # Repulsion forces from other labels
-                    for j, other_data in enumerate(bone_data_list):
-                        if i == j:
-                            continue
-                        other_x = other_data['label_x']
-                        other_y = other_data['label_y']
-
-                        dx = label_x - other_x
-                        dy = label_y - other_y
-                        dist = math.sqrt(dx*dx + dy*dy)
-
-                        # Check for overlap using bounding boxes
-                        is_overlapping = labels_overlap(bone_data, other_data)
-
-                        if is_overlapping:
-                            if dist > 0.1:
-                                # Strong repulsion when overlapping
-                                force_magnitude = (repulsion_strength * 3.0) / (dist * dist + 1.0)
-                                forces_x[i] += force_magnitude * (dx / dist)
-                                forces_y[i] += force_magnitude * (dy / dist)
-                            else:
-                                # Very close - push apart in a random direction to avoid division by zero
-                                angle = (i * 2.0 * math.pi) / len(bone_data_list)
-                                forces_x[i] += repulsion_strength * math.cos(angle)
-                                forces_y[i] += repulsion_strength * math.sin(angle)
-
-                # Add edge repulsion forces to keep labels away from screen edges
-                edge_padding = 100  # Larger zone to keep labels away from edges
-                edge_repulsion = 2000.0  # Much stronger repulsion from edges
-                for i, bone_data in enumerate(bone_data_list):
-                    label_x = bone_data['label_x']
-                    label_y = bone_data['label_y']
-                    text_width = bone_data['text_width']
-                    text_height = bone_data['text_height']
-
-                    # Repulsion from left edge (starts at edge_padding distance)
-                    if label_x < edge_padding:
-                        distance_from_edge = edge_padding - label_x
-                        forces_x[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from right edge
-                    if label_x + text_width > res_x - edge_padding:
-                        distance_from_edge = (label_x + text_width) - (res_x - edge_padding)
-                        forces_x[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from top edge
-                    if label_y < edge_padding:
-                        distance_from_edge = edge_padding - label_y
-                        forces_y[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from bottom edge
-                    if label_y + text_height > res_y - edge_padding:
-                        distance_from_edge = (label_y + text_height) - (res_y - edge_padding)
-                        forces_y[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
-
-                # Update positions with damping
-                for i, bone_data in enumerate(bone_data_list):
-                    bone_data['label_x'] += forces_x[i] * damping
-                    bone_data['label_y'] += forces_y[i] * damping
-
-                    # Boundary constraints (keep labels within image bounds with padding)
-                    # Use larger padding to keep labels away from edges
-                    boundary_padding = 50
-                    text_width = bone_data['text_width']
-                    text_height = bone_data['text_height']
-                    bone_data['label_x'] = max(boundary_padding, min(res_x - text_width - boundary_padding, bone_data['label_x']))
-                    bone_data['label_y'] = max(boundary_padding, min(res_y - text_height - boundary_padding, bone_data['label_y']))
-
-        # Fourth pass: Draw bones, labels, and connecting lines with force-directed positions
-        for bone_data in bone_data_list:
-            try:
-                bone = bone_data['bone']
-                head_pix = bone_data['head_pix']
-                tail_pix = bone_data['tail_pix']
-                label_x = int(bone_data['label_x'])
-                label_y = int(bone_data['label_y'])
-                text_width = bone_data['text_width']
-                text_height = bone_data['text_height']
-
-                # Draw bone line (red) - from head to tail
-                draw.line([head_pix, tail_pix], fill=(255, 0, 0, 255), width=3)
-
-                # Draw numbered marker circle (foci) at bone head (green with yellow outline)
-                marker_radius = 10
-                draw.ellipse([head_pix[0]-marker_radius, head_pix[1]-marker_radius,
-                             head_pix[0]+marker_radius, head_pix[1]+marker_radius],
-                            fill=(0, 255, 0, 220), outline=(255, 255, 0, 255), width=3)
-
-                # Draw semi-transparent background for label
-                padding = 5
-                draw.rectangle([label_x - padding, label_y - padding,
-                               label_x + text_width + padding, label_y + text_height + padding],
-                              fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
-
-                # Draw connecting line from label to bone head (foci)
-                # Use a dashed or solid line to clearly connect label to marker
-                draw.line([head_pix, (label_x, label_y + text_height // 2)],
-                         fill=(255, 255, 255, 180), width=2)
-
-                # Add text label (white text on dark background for maximum readability)
-                draw.text((label_x, label_y), bone.name,
-                         fill=(255, 255, 255, 255), font=font_large)
-            except Exception as e:
-                # Skip bones that can't be projected
-                continue
-
-        # Save geometric view with labels
-        base_img.save(geometric_path)
-        # Store bone data for this view for potential re-annotation with VRM names
-        view_bone_data[view_name] = bone_data_list
-        print(f"    Geometric view saved: {geometric_path}")
-
-    except Exception as e:
-        print(f"    Error creating geometric view: {e}")
-        import traceback
-        traceback.print_exc()
-        continue
-
-    # Step 3: Annotate with bone labels and foci (draw skeleton directly on image) - REMOVED, using geometric view instead
-    try:
-        from PIL import Image, ImageDraw, ImageFont
-
-        img_pil = Image.open(screenshot_path).convert("RGBA")
-        draw = ImageDraw.Draw(img_pil)
-
-        # Try to load fonts, fallback to default
-        try:
-            font = ImageFont.truetype("arial.ttf", 16)
-            font_large = ImageFont.truetype("arial.ttf", 20)
-        except:
-            try:
-                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
-                font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
-            except:
-                font = ImageFont.load_default()
-                font_large = ImageFont.load_default()
-
-        res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
-
-        # Store bone positions for connecting dots
-        bone_positions = {}
-        # Track label positions to avoid overlaps
-        label_positions = []
-
-        # First pass: collect all bone positions
-        for bone in armature.data.bones:
-            try:
-                # Project 3D bone positions to 2D screen space
-                # Convert local to world coordinates
-                # bone.head_local and bone.tail_local are in armature local space
-                # Transform through armature's world matrix
-                head_world = armature.matrix_world @ Vector(bone.head_local)
-                tail_world = armature.matrix_world @ Vector(bone.tail_local)
-
-                # Get bone's local transformation matrix for axis calculations
-                bone_matrix = armature.matrix_world @ bone.matrix_local
-
-                # Project to camera view
-                head_2d = bpy_extras.object_utils.world_to_camera_view(
-                    scene, camera, head_world)
-                tail_2d = bpy_extras.object_utils.world_to_camera_view(
-                    scene, camera, tail_world)
-
-                head_pix = (int(head_2d.x * res_x), int((1 - head_2d.y) * res_y))
-                tail_pix = (int(tail_2d.x * res_x), int((1 - tail_2d.y) * res_y))
-
-                # Store positions
-                bone_positions[bone.name] = {
-                    'head': head_pix,
-                    'tail': tail_pix,
-                    'head_world': head_world,
-                    'tail_world': tail_world,
-                    'matrix': bone_matrix,
-                    'bone': bone
-                }
-            except Exception as e:
-                continue
-
-        # Second pass: Draw skeleton connections (parent to child)
-        for bone in armature.data.bones:
-            if bone.name not in bone_positions:
-                continue
-
-            if bone.parent and bone.parent.name in bone_positions:
-                try:
-                    parent_pos = bone_positions[bone.parent.name]
-                    child_pos = bone_positions[bone.name]
-
-                    # Draw line from parent tail to child head (skeleton connection)
-                    parent_tail = parent_pos['tail']
-                    child_head = child_pos['head']
-
-                    if (0 <= parent_tail[0] < res_x and 0 <= parent_tail[1] < res_y and
-                        0 <= child_head[0] < res_x and 0 <= child_head[1] < res_y):
-                        # Draw skeleton connection (cyan)
-                        draw.line([parent_tail, child_head], fill=(0, 255, 255, 255), width=2)
-                except:
-                    pass
-
-        # Third pass: Collect bone data and initial label positions for force-directed layout
-        bone_data_list = []
-        for bone in armature.data.bones:
-            if bone.name not in bone_positions:
-                continue
-
-            try:
-                pos = bone_positions[bone.name]
-                head_pix = pos['head']
-                tail_pix = pos['tail']
-                bone_matrix = pos['matrix']
-                head_world = pos['head_world']
-                tail_world = pos['tail_world']
-
-                # Only process if within image bounds
-                if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y and
-                    0 <= tail_pix[0] < res_x and 0 <= tail_pix[1] < res_y):
-
-                    # Get text size for label
-                    try:
-                        bbox = draw.textbbox((0, 0), bone.name, font=font_large)
-                        text_width = bbox[2] - bbox[0]
-                        text_height = bbox[3] - bbox[1]
-                    except:
-                        text_width = len(bone.name) * 12
-                        text_height = 22
-
-                    # Initial label position (offset from bone head)
-                    initial_x = head_pix[0] + 15
-                    initial_y = head_pix[1] - 15
-
-                    bone_data_list.append({
-                        'bone': bone,
-                        'head_pix': head_pix,
-                        'tail_pix': tail_pix,
-                        'bone_matrix': bone_matrix,
-                        'head_world': head_world,
-                        'tail_world': tail_world,
-                        'label_x': float(initial_x),
-                        'label_y': float(initial_y),
-                        'text_width': text_width,
-                        'text_height': text_height
-                    })
-            except Exception as e:
-                continue
-
-        # Apply force-directed graph layout to labels
-        if len(bone_data_list) > 0:
-            # Force-directed layout parameters
-            repulsion_strength = 5000.0   # Reduced repulsion to prevent pushing to edges
-            attraction_strength = 0.3    # Increased attraction to keep labels near bone heads
-            damping = 0.85               # Velocity damping
-            iterations = 150             # Increased iterations for better convergence
-            padding = 5                 # Label padding for overlap detection
-
-            # Helper function to check if two labels overlap
-            def labels_overlap(data1, data2):
-                x1, y1 = data1['label_x'], data1['label_y']
-                w1, h1 = data1['text_width'], data1['text_height']
-                x2, y2 = data2['label_x'], data2['label_y']
-                w2, h2 = data2['text_width'], data2['text_height']
-
-                # Check bounding box overlap
-                return not (x1 + w1 + padding < x2 - padding or
-                           x2 + w2 + padding < x1 - padding or
-                           y1 + h1 + padding < y2 - padding or
-                           y2 + h2 + padding < y1 - padding)
-
-            # Run force-directed layout iterations
-            for iteration in range(iterations):
-                # Calculate forces for each label
-                forces_x = [0.0] * len(bone_data_list)
-                forces_y = [0.0] * len(bone_data_list)
-
-                for i, bone_data in enumerate(bone_data_list):
-                    label_x = bone_data['label_x']
-                    label_y = bone_data['label_y']
-                    head_pix = bone_data['head_pix']
-
-                    # Attraction force to bone head (spring-like)
-                    dx_attract = head_pix[0] - label_x
-                    dy_attract = head_pix[1] - label_y
-                    dist_attract = math.sqrt(dx_attract*dx_attract + dy_attract*dy_attract)
-                    if dist_attract > 0.1:
-                        forces_x[i] += attraction_strength * dx_attract
-                        forces_y[i] += attraction_strength * dy_attract
-
-                    # Repulsion forces from other labels
-                    for j, other_data in enumerate(bone_data_list):
-                        if i == j:
-                            continue
-                        other_x = other_data['label_x']
-                        other_y = other_data['label_y']
-
-                        dx = label_x - other_x
-                        dy = label_y - other_y
-                        dist = math.sqrt(dx*dx + dy*dy)
-
-                        # Check for overlap using bounding boxes
-                        is_overlapping = labels_overlap(bone_data, other_data)
-
-                        if is_overlapping:
-                            if dist > 0.1:
-                                # Strong repulsion when overlapping
-                                force_magnitude = (repulsion_strength * 3.0) / (dist * dist + 1.0)
-                                forces_x[i] += force_magnitude * (dx / dist)
-                                forces_y[i] += force_magnitude * (dy / dist)
-                            else:
-                                # Very close - push apart in a random direction to avoid division by zero
-                                angle = (i * 2.0 * math.pi) / len(bone_data_list)
-                                forces_x[i] += repulsion_strength * math.cos(angle)
-                                forces_y[i] += repulsion_strength * math.sin(angle)
-
-                # Add edge repulsion forces to keep labels away from screen edges
-                edge_padding = 100  # Larger zone to keep labels away from edges
-                edge_repulsion = 2000.0  # Much stronger repulsion from edges
-                for i, bone_data in enumerate(bone_data_list):
-                    label_x = bone_data['label_x']
-                    label_y = bone_data['label_y']
-                    text_width = bone_data['text_width']
-                    text_height = bone_data['text_height']
-
-                    # Repulsion from left edge (starts at edge_padding distance)
-                    if label_x < edge_padding:
-                        distance_from_edge = edge_padding - label_x
-                        forces_x[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from right edge
-                    if label_x + text_width > res_x - edge_padding:
-                        distance_from_edge = (label_x + text_width) - (res_x - edge_padding)
-                        forces_x[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from top edge
-                    if label_y < edge_padding:
-                        distance_from_edge = edge_padding - label_y
-                        forces_y[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
-                    # Repulsion from bottom edge
-                    if label_y + text_height > res_y - edge_padding:
-                        distance_from_edge = (label_y + text_height) - (res_y - edge_padding)
-                        forces_y[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
-
-                # Update positions with damping
-                for i, bone_data in enumerate(bone_data_list):
-                    bone_data['label_x'] += forces_x[i] * damping
-                    bone_data['label_y'] += forces_y[i] * damping
-
-                    # Boundary constraints (keep labels within image bounds with padding)
-                    # Use larger padding to keep labels away from edges
-                    boundary_padding = 50
-                    text_width = bone_data['text_width']
-                    text_height = bone_data['text_height']
-                    bone_data['label_x'] = max(boundary_padding, min(res_x - text_width - boundary_padding, bone_data['label_x']))
-                    bone_data['label_y'] = max(boundary_padding, min(res_y - text_height - boundary_padding, bone_data['label_y']))
-
-        # Fourth pass: Draw bones, labels, and connecting lines with force-directed positions
-        for bone_data in bone_data_list:
-            try:
-                bone = bone_data['bone']
-                head_pix = bone_data['head_pix']
-                tail_pix = bone_data['tail_pix']
-                label_x = int(bone_data['label_x'])
-                label_y = int(bone_data['label_y'])
-                text_width = bone_data['text_width']
-                text_height = bone_data['text_height']
-
-                # Draw bone line (red) - from head to tail
-                draw.line([head_pix, tail_pix], fill=(255, 0, 0, 255), width=3)
-
-                # Draw numbered marker circle (foci) at bone head (green with yellow outline)
-                marker_radius = 10
-                draw.ellipse([head_pix[0]-marker_radius, head_pix[1]-marker_radius,
-                             head_pix[0]+marker_radius, head_pix[1]+marker_radius],
-                            fill=(0, 255, 0, 220), outline=(255, 255, 0, 255), width=3)
-
-                # Draw semi-transparent background for label
-                padding = 5
-                draw.rectangle([label_x - padding, label_y - padding,
-                               label_x + text_width + padding, label_y + text_height + padding],
-                              fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
-
-                # Draw connecting line from label to bone head (foci)
-                # Use a dashed or solid line to clearly connect label to marker
-                draw.line([head_pix, (label_x, label_y + text_height // 2)],
-                         fill=(255, 255, 255, 180), width=2)
-
-                # Add text label (white text on dark background for maximum readability)
-                draw.text((label_x, label_y), bone.name,
-                         fill=(255, 255, 255, 255), font=font_large)
-            except Exception as e:
-                # Skip bones that can't be projected
-                continue
-
-        # Save geometric view with labels
-        base_img.save(geometric_path)
-        # Store bone data for this view for potential re-annotation with VRM names
-        view_bone_data[view_name] = bone_data_list
-        print(f"    Geometric view saved: {geometric_path}")
-
-    except Exception as e:
-        print(f"    Error creating geometric view: {e}")
-        import traceback
-        traceback.print_exc()
-        continue
+    # Store bone data for this view for potential re-annotation with VRM names
+    # (bone positions collected during normal map labeling)
 
 print(f"Created {len(views)} normal maps")
-print(f"Created {len(views)} geometric views")
 
-# Create clay views (4 views with clay rendering)
+# Create base color maps
 print("")
-print("=== Creating Clay Views ===")
+print("=== Creating Base Color Maps ===")
 
-# Create clay material (simple uniform material using emission to ensure visibility)
-clay_mat = bpy.data.materials.new(name="ClayMaterial")
-clay_mat.use_nodes = True
-nodes_clay = clay_mat.node_tree.nodes
-links_clay = clay_mat.node_tree.links
-
-# Clear default nodes
-for node in nodes_clay:
-    nodes_clay.remove(node)
-
-# Create Emission shader with light beige/clay color (ensures visibility without lighting)
-emission_clay = nodes_clay.new(type='ShaderNodeEmission')
-output_clay = nodes_clay.new(type='ShaderNodeOutputMaterial')
-
-# Set clay color (light beige/tan - typical clay render color)
-clay_color = (0.85, 0.8, 0.75, 1.0)  # Light beige
-emission_clay.inputs['Color'].default_value = clay_color[:3] + (1.0,)
-emission_clay.inputs['Strength'].default_value = 1.0
-
-# Link emission to output
-links_clay.new(emission_clay.outputs['Emission'], output_clay.inputs['Surface'])
-
-# Apply clay material to all mesh objects
-for obj in bpy.context.scene.objects:
-    if obj.type == 'MESH':
-        if len(obj.data.materials) == 0:
-            obj.data.materials.append(clay_mat)
-        else:
-            obj.data.materials[0] = clay_mat
-
-# Generate clay views using same camera positions
-clay_images = []
-for i, view_name in enumerate(views):
-    print(f"  Capturing {view_name} clay view...")
-
-    # Ensure correct scene state: meshes visible, armature hidden for clean clay render
-    for obj in bpy.context.scene.objects:
-        if obj.type == 'MESH':
-            obj.hide_set(False)
-    armature.hide_set(True)  # Hide armature for clean clay render
-
-    # Force scene update
-    bpy.context.view_layer.update()
-
-    # Recalculate bounding box for each frame
-    bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
-    bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
-    has_meshes = False
-
-    # Calculate bounding box from mesh objects
-    for obj in bpy.context.scene.objects:
-        if obj.type == 'MESH' and not obj.hide_get():
-            # Get mesh bounding box
-            for vertex in obj.bound_box:
-                world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
-                bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x),
-                                           min(bbox_min.y, world_vertex.y),
-                                           min(bbox_min.z, world_vertex.z)))
-                bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x),
-                                           max(bbox_max.y, world_vertex.y),
-                                           max(bbox_max.z, world_vertex.z)))
-                has_meshes = True
-
-    if has_meshes:
-        frame_center = (bbox_min + bbox_max) / 2
-        frame_size = bbox_max - bbox_min
-        diagonal = frame_size.length
-        fov_rad = math.radians(50.0)
-        frame_distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
-        min_distance = max(frame_size.x, frame_size.y, frame_size.z) * 1.5
-        frame_distance = max(frame_distance, min_distance)
-    else:
-        frame_center = center
-        frame_distance = distance
-
-    # Get point on unit sphere and scale by distance
-    x, y, z = sphere_points[i]
-    camera_pos = mathutils.Vector((x * frame_distance, y * frame_distance, z * frame_distance))
-
-    # Position camera
-    camera.location = frame_center + camera_pos
-    look_at(camera, frame_center)
-
-    # Disable compositor for simple rendering
-    scene.use_nodes = False
-
-    # Render clay image
-    clay_path = annotated_images_dir / f"bone_view_{view_name.lower()}_clay.png"
-    scene.render.filepath = str(clay_path)
-
-    try:
-        bpy.ops.render.render(write_still=True)
-        print(f"    Clay view rendered: {clay_path}")
-        clay_images.append(str(clay_path))
-    except Exception as e:
-        print(f"    Error rendering clay view: {e}")
-        import traceback
-        traceback.print_exc()
-
-print(f"Created {len(clay_images)} clay views")
-
-# Create PBR maps (base color, roughness, metallic)
-print("")
-print("=== Creating PBR Maps ===")
-
-# Generate PBR maps for each view (original_materials already stored above)
-pbr_images = {"basecolor": [], "roughness": [], "metallic": []}
+# Generate base color maps for each view (original_materials already stored above)
+pbr_images = {"basecolor": []}
 
 for i, view_name in enumerate(views):
     print(f"  Capturing {view_name} PBR maps...")
@@ -1328,20 +767,19 @@ for i, view_name in enumerate(views):
     has_bones = False
 
     for obj in bpy.context.scene.objects:
-        if obj.type == 'ARMATURE' and not obj.hide_get():
-            for bone in obj.data.bones:
-                head_world = obj.matrix_world @ mathutils.Vector(bone.head_local)
-                tail_world = obj.matrix_world @ mathutils.Vector(bone.tail_local)
+        if obj.type == 'MESH' and not obj.hide_get():
+            # Get mesh bounding box
+            for vertex in obj.bound_box:
+                world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
+                bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x),
+                                           min(bbox_min.y, world_vertex.y),
+                                           min(bbox_min.z, world_vertex.z)))
+                bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x),
+                                           max(bbox_max.y, world_vertex.y),
+                                           max(bbox_max.z, world_vertex.z)))
+                has_meshes = True
 
-                bbox_min = mathutils.Vector((min(bbox_min.x, head_world.x, tail_world.x),
-                                           min(bbox_min.y, head_world.y, tail_world.y),
-                                           min(bbox_min.z, head_world.z, tail_world.z)))
-                bbox_max = mathutils.Vector((max(bbox_max.x, head_world.x, tail_world.x),
-                                           max(bbox_max.y, head_world.y, tail_world.y),
-                                           max(bbox_max.z, head_world.z, tail_world.z)))
-                has_bones = True
-
-    if has_bones:
+    if has_meshes:
         frame_center = (bbox_min + bbox_max) / 2
         frame_size = bbox_max - bbox_min
         diagonal = frame_size.length
@@ -1471,6 +909,124 @@ for i, view_name in enumerate(views):
         scene.render.filepath = str(basecolor_path)
         bpy.ops.render.render(write_still=True)
         print(f"    Base color map rendered: {basecolor_path}")
+
+        # Add SAM-style labels to base color map using foci points
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            basecolor_img = Image.open(basecolor_path).convert("RGBA")
+            draw = ImageDraw.Draw(basecolor_img)
+
+            # Try to load fonts
+            try:
+                font_large = ImageFont.truetype("arial.ttf", 18)
+            except:
+                try:
+                    font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
+                except:
+                    font_large = ImageFont.load_default()
+
+            res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
+            bone_data_list = []
+
+            # Collect bone foci points (head positions) - SAM strategy
+            for bone in armature.data.bones:
+                try:
+                    head_world = armature.matrix_world @ Vector(bone.head_local)
+                    head_2d = bpy_extras.object_utils.world_to_camera_view(scene, camera, head_world)
+                    head_pix = (int(head_2d.x * res_x), int((1 - head_2d.y) * res_y))
+
+                    # Only process if within image bounds
+                    if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y):
+                        # Get text size
+                        try:
+                            bbox = draw.textbbox((0, 0), bone.name, font=font_large)
+                            text_width = bbox[2] - bbox[0]
+                            text_height = bbox[3] - bbox[1]
+                        except:
+                            text_width = len(bone.name) * 10
+                            text_height = 18
+
+                        # Initial label position offset from foci point
+                        offset_x = 20
+                        offset_y = -20
+                        label_x = float(head_pix[0] + offset_x)
+                        label_y = float(head_pix[1] + offset_y)
+
+                        bone_data_list.append({
+                            'bone': bone,
+                            'foci': head_pix,  # Foci point (bone head)
+                            'label_x': label_x,
+                            'label_y': label_y,
+                            'text_width': text_width,
+                            'text_height': text_height
+                        })
+                except:
+                    continue
+
+            # Simple overlap avoidance: adjust positions to avoid overlaps
+            padding = 8
+            for i, bone_data in enumerate(bone_data_list):
+                for j, other_data in enumerate(bone_data_list):
+                    if i == j:
+                        continue
+
+                    # Check if labels overlap
+                    x1, y1 = bone_data['label_x'], bone_data['label_y']
+                    w1, h1 = bone_data['text_width'], bone_data['text_height']
+                    x2, y2 = other_data['label_x'], other_data['label_y']
+                    w2, h2 = other_data['text_width'], other_data['text_height']
+
+                    if not (x1 + w1 + padding < x2 or x2 + w2 + padding < x1 or
+                           y1 + h1 + padding < y2 or y2 + h2 + padding < y1):
+                        # Overlap detected - shift this label
+                        dx = x1 - x2
+                        dy = y1 - y2
+                        dist = math.sqrt(dx*dx + dy*dy) if (dx != 0 or dy != 0) else 1.0
+                        if dist > 0:
+                            shift_x = (dx / dist) * (w1 + w2) / 2
+                            shift_y = (dy / dist) * (h1 + h2) / 2
+                            bone_data['label_x'] += shift_x * 0.3
+                            bone_data['label_y'] += shift_y * 0.3
+
+            # Draw labels with translucent backgrounds (SAM-style)
+            for bone_data in bone_data_list:
+                try:
+                    bone = bone_data['bone']
+                    foci = bone_data['foci']
+                    label_x = int(bone_data['label_x'])
+                    label_y = int(bone_data['label_y'])
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+
+                    # Ensure label is within bounds
+                    label_x = max(10, min(res_x - text_width - 10, label_x))
+                    label_y = max(10, min(res_y - text_height - 10, label_y))
+
+                    # Draw translucent connecting line from foci to label
+                    label_center_y = label_y + text_height // 2
+                    draw.line([foci, (label_x, label_center_y)],
+                             fill=(255, 255, 255, 120), width=1)
+
+                    # Draw foci point (small circle)
+                    foci_radius = 4
+                    draw.ellipse([foci[0]-foci_radius, foci[1]-foci_radius,
+                                 foci[0]+foci_radius, foci[1]+foci_radius],
+                                fill=(255, 255, 0, 180), outline=(255, 255, 255, 150), width=1)
+
+                    # Draw text (translucent white)
+                    draw.text((label_x, label_y), bone.name,
+                             fill=(255, 255, 255, 200), font=font_large)
+                except:
+                    continue
+
+            # Save annotated base color map
+            basecolor_img.save(basecolor_path)
+            print(f"    Base color map annotated with labels: {basecolor_path}")
+        except Exception as e:
+            print(f"    Error adding labels to base color map: {e}")
+            import traceback
+            traceback.print_exc()
+
         pbr_images["basecolor"].append(str(basecolor_path))
 
         # Clean up temporary materials
@@ -1483,157 +1039,7 @@ for i, view_name in enumerate(views):
         import traceback
         traceback.print_exc()
 
-    # Generate Roughness map
-    try:
-        # Create roughness materials for each object that sample from their original materials
-        roughness_materials = {}
-
-        for obj in bpy.context.scene.objects:
-            if obj.type != 'MESH':
-                continue
-
-            # Create a material that outputs roughness from original material
-            roughness_mat = bpy.data.materials.new(name=f"RoughnessMaterial_{obj.name}")
-            roughness_mat.use_nodes = True
-            nodes_r = roughness_mat.node_tree.nodes
-            links_r = roughness_mat.node_tree.links
-
-            # Clear default nodes
-            for node in nodes_r:
-                nodes_r.remove(node)
-
-            # Try to get roughness from original material
-            roughness_value = 0.5  # Default
-            roughness_input = None
-            if obj.name in original_materials and len(original_materials[obj.name]) > 0:
-                orig_mat_name = original_materials[obj.name][0]
-                if orig_mat_name in bpy.data.materials:
-                    orig_mat = bpy.data.materials[orig_mat_name]
-                    if orig_mat.use_nodes:
-                        # Find Principled BSDF in original material
-                        for node in orig_mat.node_tree.nodes:
-                            if node.type == 'BSDF_PRINCIPLED':
-                                roughness_input = node.inputs['Roughness']
-                                if not roughness_input.is_linked:
-                                    roughness_value = roughness_input.default_value
-                                break
-
-            # Create Emission shader to output roughness as grayscale (no lighting needed)
-            emission_r = nodes_r.new(type='ShaderNodeEmission')
-            output_r = nodes_r.new(type='ShaderNodeOutputMaterial')
-
-            # If roughness input is linked to a texture, try to use it
-            if roughness_input and roughness_input.is_linked:
-                connected_node = roughness_input.links[0].from_node
-                if connected_node.type == 'TEX_IMAGE':
-                    # Copy the image texture
-                    tex_node = nodes_r.new(type='ShaderNodeTexImage')
-                    if connected_node.image:
-                        tex_node.image = connected_node.image
-                        links_r.new(tex_node.outputs['Color'], emission_r.inputs['Color'])
-                    else:
-                        emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
-                else:
-                    # For other node types, use the value
-                    emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
-            else:
-                # Use the roughness value directly
-                emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
-
-            emission_r.inputs['Strength'].default_value = 1.0
-
-            # Link to output
-            links_r.new(emission_r.outputs['Emission'], output_r.inputs['Surface'])
-            roughness_materials[obj.name] = roughness_mat
-
-        # Apply roughness materials to objects
-        for obj in bpy.context.scene.objects:
-            if obj.type == 'MESH' and obj.name in roughness_materials:
-                if len(obj.data.materials) == 0:
-                    obj.data.materials.append(roughness_materials[obj.name])
-                else:
-                    obj.data.materials[0] = roughness_materials[obj.name]
-
-        # Render roughness map
-        roughness_path = annotated_images_dir / f"bone_view_{view_name.lower()}_roughness.png"
-        scene.render.filepath = str(roughness_path)
-        bpy.ops.render.render(write_still=True)
-        print(f"    Roughness map rendered: {roughness_path}")
-        pbr_images["roughness"].append(str(roughness_path))
-
-        # Clean up temporary materials
-        for mat in roughness_materials.values():
-            if mat.name in bpy.data.materials:
-                bpy.data.materials.remove(mat)
-
-    except Exception as e:
-        print(f"    Error rendering roughness map: {e}")
-        import traceback
-        traceback.print_exc()
-
-    # Generate Metallic map
-    try:
-        # Create metallic material using emission shader (grayscale visualization)
-        metallic_mat = bpy.data.materials.new(name="MetallicMaterial")
-        metallic_mat.use_nodes = True
-        nodes_m = metallic_mat.node_tree.nodes
-        links_m = metallic_mat.node_tree.links
-
-        # Clear default nodes
-        for node in nodes_m:
-            nodes_m.remove(node)
-
-        # Try to get metallic from original materials, or use default
-        metallic_value = 0.0  # Default
-        for obj in bpy.context.scene.objects:
-            if obj.type == 'MESH' and obj.name in original_materials and len(original_materials[obj.name]) > 0:
-                orig_mat_name = original_materials[obj.name][0]
-                if orig_mat_name in bpy.data.materials:
-                    mat = bpy.data.materials[orig_mat_name]
-                    if mat.use_nodes:
-                        for node in mat.node_tree.nodes:
-                            if node.type == 'BSDF_PRINCIPLED':
-                                if node.inputs['Metallic'].default_value is not None:
-                                    metallic_value = node.inputs['Metallic'].default_value
-                                    break
-                break
-
-        # Create grayscale color from metallic (white = metallic, black = non-metallic)
-        metallic_color = (metallic_value, metallic_value, metallic_value, 1.0)
-
-        # Create Emission shader to output metallic as grayscale (no lighting needed)
-        emission_m = nodes_m.new(type='ShaderNodeEmission')
-        output_m = nodes_m.new(type='ShaderNodeOutputMaterial')
-
-        # Set emission color to metallic grayscale
-        emission_m.inputs['Color'].default_value = metallic_color[:3] + (1.0,)
-        emission_m.inputs['Strength'].default_value = 1.0
-
-        # Link to output
-        links_m.new(emission_m.outputs['Emission'], output_m.inputs['Surface'])
-
-        # Apply to all mesh objects
-        for obj in bpy.context.scene.objects:
-            if obj.type == 'MESH':
-                if len(obj.data.materials) == 0:
-                    obj.data.materials.append(metallic_mat)
-                else:
-                    obj.data.materials[0] = metallic_mat
-
-        # Render metallic map
-        metallic_path = annotated_images_dir / f"bone_view_{view_name.lower()}_metallic.png"
-        scene.render.filepath = str(metallic_path)
-        bpy.ops.render.render(write_still=True)
-        print(f"    Metallic map rendered: {metallic_path}")
-        pbr_images["metallic"].append(str(metallic_path))
-    except Exception as e:
-        print(f"    Error rendering metallic map: {e}")
-        import traceback
-        traceback.print_exc()
-
 print(f"Created {len(pbr_images['basecolor'])} base color maps")
-print(f"Created {len(pbr_images['roughness'])} roughness maps")
-print(f"Created {len(pbr_images['metallic'])} metallic maps")
 
 # Restore original materials
 for obj_name, mat_names in original_materials.items():
@@ -2020,80 +1426,123 @@ try:
 
     # Try to load fonts
     try:
-        font_large = ImageFont.truetype("arial.ttf", 20)
+        font_large = ImageFont.truetype("arial.ttf", 18)
     except:
         try:
-            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+            font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 18)
         except:
             font_large = ImageFont.load_default()
 
-    # Re-annotate each view (update geometric views with VRM names)
+    # Re-annotate each view (update normal and base color maps with VRM names)
     for view_idx, view_name in enumerate(views):
         if view_name not in view_bone_data:
             continue
 
-        # Use geometric view path
-        geometric_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
-        if not geometric_path.exists():
-            continue
-
         bone_data_list = view_bone_data[view_name]
 
-        # Load the geometric view image
-        try:
-            img_pil = Image.open(geometric_path).convert("RGBA")
-            draw = ImageDraw.Draw(img_pil)
+        # Update normal map
+        normal_path = annotated_images_dir / f"bone_view_{view_name.lower()}_normal.png"
+        if normal_path.exists():
+            try:
+                img_pil = Image.open(normal_path).convert("RGBA")
+                draw = ImageDraw.Draw(img_pil)
 
-            # Redraw labels with VRM names
-            for bone_data in bone_data_list:
-                try:
-                    bone = bone_data['bone']
-                    head_pix = bone_data['head_pix']
-                    label_x = int(bone_data['label_x'])
-                    label_y = int(bone_data['label_y'])
-                    text_width = bone_data['text_width']
-                    text_height = bone_data['text_height']
-
-                    # Get VRM name from mapping, or keep original name
-                    display_name = bone_mapping.get(bone.name, bone.name)
-
-                    # Get updated text size
+                # Redraw labels with VRM names
+                for bone_data in bone_data_list:
                     try:
-                        bbox = draw.textbbox((0, 0), display_name, font=font_large)
-                        new_text_width = bbox[2] - bbox[0]
-                        new_text_height = bbox[3] - bbox[1]
-                    except:
-                        new_text_width = len(display_name) * 12
-                        new_text_height = 22
+                        bone = bone_data['bone']
+                        foci = bone_data['foci']
+                        label_x = int(bone_data['label_x'])
+                        label_y = int(bone_data['label_y'])
 
-                    # Draw semi-transparent background for label
-                    padding = 5
-                    draw.rectangle([label_x - padding, label_y - padding,
-                                   label_x + new_text_width + padding, label_y + new_text_height + padding],
-                                  fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
+                        # Get VRM name from mapping, or keep original name
+                        display_name = bone_mapping.get(bone.name, bone.name)
 
-                    # Draw connecting line from label to bone head
-                    draw.line([head_pix, (label_x, label_y + new_text_height // 2)],
-                             fill=(255, 255, 255, 180), width=2)
+                        # Get updated text size
+                        try:
+                            bbox = draw.textbbox((0, 0), display_name, font=font_large)
+                            new_text_width = bbox[2] - bbox[0]
+                            new_text_height = bbox[3] - bbox[1]
+                        except:
+                            new_text_width = len(display_name) * 10
+                            new_text_height = 18
 
-                    # Add text label with VRM name
-                    draw.text((label_x, label_y), display_name,
-                             fill=(255, 255, 255, 255), font=font_large)
+                        # Draw connecting line from foci to label
+                        label_center_y = label_y + new_text_height // 2
+                        draw.line([foci, (label_x, label_center_y)],
+                                 fill=(255, 255, 255, 120), width=1)
 
-                    # Update bone_data with new text dimensions
-                    bone_data['text_width'] = new_text_width
-                    bone_data['text_height'] = new_text_height
+                        # Draw foci point
+                        foci_radius = 4
+                        draw.ellipse([foci[0]-foci_radius, foci[1]-foci_radius,
+                                     foci[0]+foci_radius, foci[1]+foci_radius],
+                                    fill=(255, 255, 0, 180), outline=(255, 255, 255, 150), width=1)
 
-                except Exception as e:
-                    continue
+                        # Add text label with VRM name (translucent)
+                        draw.text((label_x, label_y), display_name,
+                                 fill=(255, 255, 255, 200), font=font_large)
 
-            # Save updated geometric view with VRM names
-            img_pil.save(geometric_path)
-            print(f"  Re-annotated {view_name} with VRM names (geometric mapping)")
+                    except Exception as e:
+                        continue
 
-        except Exception as e:
-            print(f"  [WARN] Error re-annotating {view_name}: {e}")
-            continue
+                # Save updated normal map with VRM names
+                img_pil.save(normal_path)
+                print(f"  Re-annotated {view_name} normal map with VRM names")
+
+            except Exception as e:
+                print(f"  [WARN] Error re-annotating {view_name} normal map: {e}")
+
+        # Update base color map
+        basecolor_path = annotated_images_dir / f"bone_view_{view_name.lower()}_basecolor.png"
+        if basecolor_path.exists():
+            try:
+                img_pil = Image.open(basecolor_path).convert("RGBA")
+                draw = ImageDraw.Draw(img_pil)
+
+                # Redraw labels with VRM names
+                for bone_data in bone_data_list:
+                    try:
+                        bone = bone_data['bone']
+                        foci = bone_data['foci']
+                        label_x = int(bone_data['label_x'])
+                        label_y = int(bone_data['label_y'])
+
+                        # Get VRM name from mapping, or keep original name
+                        display_name = bone_mapping.get(bone.name, bone.name)
+
+                        # Get updated text size
+                        try:
+                            bbox = draw.textbbox((0, 0), display_name, font=font_large)
+                            new_text_width = bbox[2] - bbox[0]
+                            new_text_height = bbox[3] - bbox[1]
+                        except:
+                            new_text_width = len(display_name) * 10
+                            new_text_height = 18
+
+                        # Draw connecting line from foci to label
+                        label_center_y = label_y + new_text_height // 2
+                        draw.line([foci, (label_x, label_center_y)],
+                                 fill=(255, 255, 255, 120), width=1)
+
+                        # Draw foci point
+                        foci_radius = 4
+                        draw.ellipse([foci[0]-foci_radius, foci[1]-foci_radius,
+                                     foci[0]+foci_radius, foci[1]+foci_radius],
+                                    fill=(255, 255, 0, 180), outline=(255, 255, 255, 150), width=1)
+
+                        # Add text label with VRM name (translucent)
+                        draw.text((label_x, label_y), display_name,
+                                 fill=(255, 255, 255, 200), font=font_large)
+
+                    except Exception as e:
+                        continue
+
+                # Save updated base color map with VRM names
+                img_pil.save(basecolor_path)
+                print(f"  Re-annotated {view_name} base color map with VRM names")
+
+            except Exception as e:
+                print(f"  [WARN] Error re-annotating {view_name} base color map: {e}")
 
     print("[OK] Images re-annotated with geometric mapping results")
 
@@ -2193,12 +1642,8 @@ analysis_summary = {
     "views_captured": len(views),
     "annotated_images_dir": str(annotated_images_dir),
     "image_types": {
-        "normal_maps": f"{len(views)} views (no labels)",
-        "geometric_views": f"{len(views)} views (with labels)",
-        "clay_views": f"{len(clay_images)} views (no labels)",
-        "basecolor_maps": f"{len(pbr_images['basecolor'])} views (no labels)",
-        "roughness_maps": f"{len(pbr_images['roughness'])} views (no labels)",
-        "metallic_maps": f"{len(pbr_images['metallic'])} views (no labels)"
+        "normal_maps": f"{len(views)} views (with translucent labels)",
+        "basecolor_maps": f"{len(pbr_images['basecolor'])} views (with translucent labels)"
     },
     "gltf_hierarchy_available": gltf_json_hierarchy is not None
 }
@@ -2330,12 +1775,8 @@ print(f"  - Geometric mapping: geometric_mapping.json")
 print(f"  - Validation results: validation_results.json")
 print(f"  - Analysis summary: analysis_summary.json")
 print(f"  - Renaming log: renaming_log.json")
-print(f"  - Normal maps: {annotated_images_dir} (no labels)")
-print(f"  - Geometric views: {annotated_images_dir} (with labels)")
-print(f"  - Clay views: {annotated_images_dir} (no labels)")
-print(f"  - Base color maps: {annotated_images_dir} (no labels)")
-print(f"  - Roughness maps: {annotated_images_dir} (no labels)")
-print(f"  - Metallic maps: {annotated_images_dir} (no labels)")
+print(f"  - Normal maps: {annotated_images_dir} (with translucent labels)")
+print(f"  - Base color maps: {annotated_images_dir} (with translucent labels)")
 """, %{})
 rescue
   e ->
