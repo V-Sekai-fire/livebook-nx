@@ -253,6 +253,122 @@ def get_matrix(ob):
         ob = ob.parent
     return m
 
+def create_skeleton_mesh(
+    bones: ndarray,  # (J, 6) where [:3] is head, [3:] is tail
+    parents: List[Union[int, None]],
+    names: List[str],
+    cylinder_radius: float = None,
+    vertices_per_cross_section: int = 8
+) -> Tuple[ndarray, ndarray, ndarray]:
+    """
+    Create a skeleton line/tube mesh from bones (similar to SIGGRAPH 2025 Roblox rigging).
+    
+    Args:
+        bones: (J, 6) array where bones[i, :3] is head, bones[i, 3:] is tail
+        parents: List of parent indices (None for root)
+        names: List of bone names
+        cylinder_radius: Radius of bone cylinders (default: 1% of average bone length)
+        vertices_per_cross_section: Number of vertices around bone (default: 8)
+    
+    Returns:
+        skeleton_vertices: (N_skeleton, 3) array of skeleton mesh vertices
+        skeleton_faces: (F_skeleton, 3) array of skeleton mesh faces
+        skeleton_skin: (N_skeleton, J) array of skin weights for skeleton mesh
+    """
+    J = len(names)
+    if J == 0:
+        return np.array([], dtype=np.float32).reshape(0, 3), np.array([], dtype=np.int32).reshape(0, 3), np.array([], dtype=np.float32).reshape(0, 0)
+    
+    # Calculate average bone length for default radius
+    bone_lengths = np.linalg.norm(bones[:, 3:] - bones[:, :3], axis=1)
+    avg_bone_length = np.mean(bone_lengths[bone_lengths > 0])
+    if cylinder_radius is None:
+        cylinder_radius = max(avg_bone_length * 0.01, 0.001)  # 1% of average, minimum 0.001
+    
+    skeleton_vertices_list = []
+    skeleton_faces_list = []
+    skeleton_skin_list = []
+    vertex_offset = 0
+    
+    # Create cylinder for each bone
+    for bone_idx in range(J):
+        head = bones[bone_idx, :3]
+        tail = bones[bone_idx, 3:]
+        bone_dir = tail - head
+        bone_length = np.linalg.norm(bone_dir)
+        
+        if bone_length < 1e-6:
+            # Skip zero-length bones
+            continue
+        
+        bone_dir_normalized = bone_dir / bone_length
+        
+        # Create orthogonal basis for cylinder cross-section
+        # Use a stable method to find perpendicular vectors
+        if abs(bone_dir_normalized[2]) < 0.9:
+            perp1 = np.array([0, 0, 1])
+        else:
+            perp1 = np.array([1, 0, 0])
+        perp1 = perp1 - np.dot(perp1, bone_dir_normalized) * bone_dir_normalized
+        perp1 = perp1 / np.linalg.norm(perp1)
+        perp2 = np.cross(bone_dir_normalized, perp1)
+        perp2 = perp2 / np.linalg.norm(perp2)
+        
+        # Generate vertices for this bone cylinder
+        bone_vertices = []
+        for i in range(vertices_per_cross_section):
+            angle = 2 * np.pi * i / vertices_per_cross_section
+            # Create circle in plane perpendicular to bone direction
+            circle_vec = np.cos(angle) * perp1 + np.sin(angle) * perp2
+            # Add vertices at head and tail of bone
+            bone_vertices.append(head + cylinder_radius * circle_vec)
+            bone_vertices.append(tail + cylinder_radius * circle_vec)
+        
+        bone_vertices = np.array(bone_vertices)
+        skeleton_vertices_list.append(bone_vertices)
+        
+        # Generate faces for this bone cylinder
+        # Each cross-section has vertices_per_cross_section vertices
+        # Connect adjacent vertices to form quads (triangulated)
+        bone_faces = []
+        for i in range(vertices_per_cross_section):
+            # Current and next vertex indices in cross-section
+            curr_head = vertex_offset + i * 2
+            curr_tail = vertex_offset + i * 2 + 1
+            next_head = vertex_offset + ((i + 1) % vertices_per_cross_section) * 2
+            next_tail = vertex_offset + ((i + 1) % vertices_per_cross_section) * 2 + 1
+            
+            # Create two triangles per quad
+            # Triangle 1: curr_head, next_head, curr_tail
+            bone_faces.append([curr_head, next_head, curr_tail])
+            # Triangle 2: next_head, next_tail, curr_tail
+            bone_faces.append([next_head, next_tail, curr_tail])
+        
+        skeleton_faces_list.append(np.array(bone_faces, dtype=np.int32))
+        
+        # Generate skin weights for this bone
+        # Each vertex gets weight 1.0 for this bone, 0.0 for others
+        num_vertices_bone = len(bone_vertices)
+        bone_skin = np.zeros((num_vertices_bone, J), dtype=np.float32)
+        bone_skin[:, bone_idx] = 1.0
+        skeleton_skin_list.append(bone_skin)
+        
+        vertex_offset += num_vertices_bone
+    
+    if len(skeleton_vertices_list) == 0:
+        return np.array([], dtype=np.float32).reshape(0, 3), np.array([], dtype=np.int32).reshape(0, 3), np.array([], dtype=np.float32).reshape(0, J)
+    
+    # Concatenate all bones
+    skeleton_vertices = np.vstack(skeleton_vertices_list)
+    skeleton_faces = np.vstack(skeleton_faces_list)
+    skeleton_skin = np.vstack(skeleton_skin_list)
+    
+    # At joints, blend weights from connected bones
+    # For now, we'll keep the simple approach where each bone segment has its own weight
+    # Joint blending can be added later if needed
+    
+    return skeleton_vertices, skeleton_faces, skeleton_skin
+
 def make_armature(
     vertices: ndarray,
     bones: ndarray, # (joint, tail)
@@ -285,10 +401,76 @@ def make_armature(
     
     bpy.ops.object.add(type="ARMATURE", location=(0, 0, 0))
     armature = context.object
-    if hasattr(armature.data, 'vrm_addon_extension'):
-        armature.data.vrm_addon_extension.spec_version = "1.0"
-        humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
-        is_vrm = True
+    humanoid = None  # Initialize humanoid variable
+    
+    # Initialize VRM extension if needed
+    if is_vrm:
+        # Ensure VRM addon is enabled
+        vrm_addon_enabled = False
+        vrm_module_name = None
+        for addon in bpy.context.preferences.addons:
+            if 'vrm' in addon.module.lower():
+                vrm_module_name = addon.module
+                if addon.enabled:
+                    vrm_addon_enabled = True
+                    break
+        
+        if not vrm_addon_enabled:
+            if vrm_module_name:
+                try:
+                    bpy.ops.preferences.addon_enable(module=vrm_module_name)
+                    vrm_addon_enabled = True
+                    print(f"[Info] Enabled VRM addon: {vrm_module_name}")
+                except Exception as e:
+                    print(f"[Warning] Could not enable VRM addon: {e}")
+        
+        # Add VRM extension to armature if addon is enabled
+        if vrm_addon_enabled:
+            # The VRM addon should automatically add the extension when enabled
+            # If it doesn't exist, try to initialize it
+            if not hasattr(armature.data, 'vrm_addon_extension'):
+                # Try to add the extension by accessing it (VRM addon should create it)
+                try:
+                    # Switch to object mode to ensure armature is in correct state
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                    # Access the extension - VRM addon should create it if enabled
+                    # This might require the addon to be properly initialized
+                    armature.data.vrm_addon_extension
+                except AttributeError:
+                    print("[Warning] VRM addon extension not available. VRM features may not work correctly.")
+                    print("[Info] The VRM addon may need to be properly initialized. Trying to refresh...")
+                    # Try refreshing the addon
+                    try:
+                        import importlib
+                        if vrm_module_name:
+                            importlib.reload(__import__(vrm_module_name))
+                    except:
+                        pass
+                    is_vrm = False
+                except Exception as e:
+                    print(f"[Warning] Could not initialize VRM extension: {e}")
+                    is_vrm = False
+            
+            if hasattr(armature.data, 'vrm_addon_extension'):
+                try:
+                    armature.data.vrm_addon_extension.spec_version = "1.0"
+                    humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
+                    print("[Info] VRM extension initialized successfully")
+                except Exception as e:
+                    print(f"[Warning] Could not set VRM extension properties: {e}")
+                    is_vrm = False
+        else:
+            print("[Warning] VRM addon is not enabled. VRM features will be disabled.")
+            is_vrm = False
+    elif hasattr(armature.data, 'vrm_addon_extension'):
+        # VRM extension exists but is_vrm was False - use it anyway
+        try:
+            armature.data.vrm_addon_extension.spec_version = "1.0"
+            humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
+            is_vrm = True
+        except Exception as e:
+            print(f"[Warning] Could not use existing VRM extension: {e}")
+            is_vrm = False
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = armature.data.edit_bones
     if add_root:
@@ -336,27 +518,65 @@ def make_armature(
     vertex_group_reweight = vertex_group_reweight / vertex_group_reweight[..., :group_per_vertex].sum(axis=1)[...,None]
     vertex_group_reweight = np.nan_to_num(vertex_group_reweight)
     
-    # Build source mesh faces from vertices (create a simple triangulation for robust transfer)
-    # For robust transfer, we need faces. If we don't have explicit faces, create a simple mesh
-    # This is a fallback - ideally we'd have the actual mesh topology
-    try:
-        # Try to get faces from mesh_vertices if available
-        # For now, we'll use a simple approach: create faces from a convex hull or use KDTree-based triangulation
-        from scipy.spatial import ConvexHull
-        try:
-            # Try to create a simple mesh from vertices using convex hull
-            # This is not ideal but works for the robust transfer
-            hull = ConvexHull(vertices)
-            source_faces = hull.simplices
-        except:
-            # If convex hull fails, create a minimal mesh structure
-            # This is a fallback - the robust transfer will use fallback methods
-            source_faces = np.array([], dtype=np.int32).reshape(0, 3)
-    except Exception as e:
-        print(f"[Warning] Could not create source mesh faces: {e}")
-        source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+    # Detect cold start: check if vertices are skeleton joints (count matches bone count)
+    # In cold start, vertices are skeleton joints, not mesh vertices
+    is_cold_start = (vertices.shape[0] == len(names)) and (vertices.shape[0] < 1000)  # Heuristic: skeleton joints are few
     
-    tree = cKDTree(vertices)
+    # Initialize source data variables
+    source_vertices = vertices
+    source_skin = skin
+    source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+    
+    # Build source mesh faces from vertices
+    # For cold start: create skeleton mesh from bones
+    # For normal case: use convex hull or existing mesh topology
+    if is_cold_start:
+        print(f"[Info] Cold start detected: vertices are skeleton joints ({vertices.shape[0]} joints, {len(names)} bones)")
+        print(f"[Info] Creating skeleton mesh for robust weight transfer...")
+        try:
+            # Create skeleton mesh from bones
+            skeleton_vertices, skeleton_faces, skeleton_skin = create_skeleton_mesh(
+                bones=bones,
+                parents=parents,
+                names=names,
+                cylinder_radius=None,  # Auto-calculate
+                vertices_per_cross_section=8
+            )
+            
+            if len(skeleton_vertices) > 0 and len(skeleton_faces) > 0:
+                print(f"[Info] Created skeleton mesh: {len(skeleton_vertices)} vertices, {len(skeleton_faces)} faces")
+                # Use skeleton mesh as source
+                source_vertices = skeleton_vertices
+                source_faces = skeleton_faces
+                source_skin = skeleton_skin
+            else:
+                print(f"[Warning] Skeleton mesh creation failed, falling back to ConvexHull")
+                is_cold_start = False
+        except Exception as e:
+            print(f"[Warning] Skeleton mesh creation failed: {e}")
+            import traceback
+            traceback.print_exc()
+            is_cold_start = False
+    
+    # If not using skeleton mesh, try ConvexHull for source faces
+    if not is_cold_start or len(source_faces) == 0:
+        try:
+            # Try to get faces from mesh_vertices if available
+            # For now, we'll use a simple approach: create faces from a convex hull
+            from scipy.spatial import ConvexHull
+            try:
+                # Try to create a simple mesh from vertices using convex hull
+                hull = ConvexHull(source_vertices)
+                source_faces = hull.simplices
+                print(f"[Info] Created source mesh from ConvexHull: {len(source_vertices)} vertices, {len(source_faces)} faces")
+            except Exception as e:
+                # If convex hull fails, create a minimal mesh structure
+                print(f"[Warning] ConvexHull failed: {e}")
+                source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+        except Exception as e:
+            print(f"[Warning] Could not create source mesh faces: {e}")
+            source_faces = np.array([], dtype=np.int32).reshape(0, 3)
+    
     for ob in objects:
         if ob.type != 'MESH':
             continue
@@ -391,31 +611,82 @@ def make_armature(
                 f"Both meshes must have valid face data."
             )
         
+        # Check if we have valid source data
+        if source_vertices.shape[0] == 0 or source_skin.shape[0] != source_vertices.shape[0]:
+            raise ValueError(
+                f"Invalid source data for robust transfer: vertices={source_vertices.shape[0]}, skin={source_skin.shape[0]}"
+            )
+        
         print(f"[Info] Using robust skin weight transfer for {ob.name}")
+        if is_cold_start:
+            print(f"[Info] Using skeleton mesh as source (cold start mode)")
         # Transfer weights using robust method
         # Compute search radius as 5% of target mesh bounding box diagonal
         bbox_min = n_vertices.min(axis=0)
         bbox_max = n_vertices.max(axis=0)
         search_radius = 0.05 * np.linalg.norm(bbox_max - bbox_min)
         
-        # Transfer weights
-        transferred_skin, success = robust_skin_weights_transfer(
-            V1=vertices,
-            F1=source_faces,
-            W1=skin,
-            V2=n_vertices,
-            F2=target_faces,
-            SearchRadius=search_radius,
-            NormalThreshold=30.0,
-            num_smooth_iter_steps=10,
-            smooth_alpha=0.2,
-            use_smoothing=True
-        )
-        
-        if not success:
-            # Inpainting failed, but we still have interpolated weights to use
-            # Continue with the interpolated weights as fallback
-            print(f"[Warning] Robust skin weight transfer inpainting failed for {ob.name}, using interpolated weights as fallback")
+        # Transfer weights with error handling
+        try:
+            transferred_skin, success = robust_skin_weights_transfer(
+                V1=source_vertices,  # Use skeleton mesh in cold start, or original vertices otherwise
+                F1=source_faces,      # Use skeleton mesh faces in cold start, or ConvexHull faces otherwise
+                W1=source_skin,       # Use skeleton mesh weights in cold start, or original skin otherwise
+                V2=n_vertices,        # Target mesh vertices
+                F2=target_faces,      # Target mesh faces
+                SearchRadius=search_radius,
+                NormalThreshold=30.0,
+                num_smooth_iter_steps=10,
+                smooth_alpha=0.2,
+                use_smoothing=True
+            )
+            
+            if not success:
+                # Inpainting failed, but we still have interpolated weights to use
+                # Continue with the interpolated weights as fallback
+                print(f"[Warning] Robust skin weight transfer inpainting failed for {ob.name}, using interpolated weights as fallback")
+        except Exception as e:
+            # Robust transfer raised an exception (e.g., libigl error, numerical issues, etc.)
+            # Fall back to simple interpolation-based transfer
+            print(f"[Error] Robust skin weight transfer failed with exception for {ob.name}: {e}")
+            print(f"[Info] Falling back to simple interpolation-based weight transfer")
+            import traceback
+            traceback.print_exc()
+            
+            # Use simple interpolation fallback
+            # Find closest vertices and interpolate weights
+            try:
+                tree = cKDTree(source_vertices)
+                distances, indices = tree.query(n_vertices, k=min(4, len(source_vertices)))
+                
+                # Initialize transferred skin with zeros
+                transferred_skin = np.zeros((len(n_vertices), source_skin.shape[1]))
+                
+                # Interpolate weights using inverse distance weighting
+                for i, (dists, idxs) in enumerate(zip(distances, indices)):
+                    if isinstance(dists, np.ndarray):
+                        # Multiple neighbors
+                        weights = 1.0 / (dists + 1e-10)  # Add small epsilon to avoid division by zero
+                        weights = weights / weights.sum()
+                        for j, (w, idx) in enumerate(zip(weights, idxs)):
+                            transferred_skin[i] += w * source_skin[int(idx)]
+                    else:
+                        # Single neighbor
+                        transferred_skin[i] = source_skin[int(idxs)]
+                
+                # Normalize weights
+                row_sums = transferred_skin.sum(axis=1, keepdims=True)
+                row_sums[row_sums == 0] = 1.0  # Avoid division by zero
+                transferred_skin = transferred_skin / row_sums
+            except Exception as fallback_error:
+                # Even the fallback failed, use nearest neighbor only
+                print(f"[Warning] Interpolation fallback also failed: {fallback_error}")
+                print(f"[Info] Using nearest neighbor only for {ob.name}")
+                tree = cKDTree(source_vertices)
+                _, indices = tree.query(n_vertices, k=1)
+                transferred_skin = source_skin[indices.flatten()] if hasattr(indices, 'flatten') else source_skin[indices]
+            
+            success = False
         
         # Recompute argsorted and vertex_group_reweight for transferred skin
         transferred_argsorted = np.argsort(-transferred_skin, axis=1)
@@ -442,27 +713,62 @@ def make_armature(
     
     # set vrm bones link
     if is_vrm:
-        armature.data.vrm_addon_extension.spec_version = "1.0"
-        humanoid.human_bones.hips.node.bone_name = "J_Bip_C_Hips"
-        humanoid.human_bones.spine.node.bone_name = "J_Bip_C_Spine"
+        # Ensure VRM extension exists and get humanoid
+        if not hasattr(armature.data, 'vrm_addon_extension'):
+            # Try to ensure VRM addon is enabled and extension is available
+            vrm_addon_enabled = False
+            for addon in bpy.context.preferences.addons:
+                if 'vrm' in addon.module.lower() and addon.enabled:
+                    vrm_addon_enabled = True
+                    break
+            
+            if vrm_addon_enabled:
+                # VRM addon is enabled but extension doesn't exist
+                # Try to refresh or reinitialize
+                print("[Warning] VRM extension not found on armature, trying to initialize...")
+                try:
+                    # Switch to object mode and select armature
+                    bpy.ops.object.mode_set(mode='OBJECT')
+                    bpy.context.view_layer.objects.active = armature
+                    # The extension should be created automatically when VRM addon is enabled
+                    # Try accessing it to trigger creation
+                    _ = armature.data.vrm_addon_extension
+                except:
+                    print("[Error] Could not create VRM extension. VRM features will be disabled.")
+                    is_vrm = False
         
-        humanoid.human_bones.chest.node.bone_name = "J_Bip_C_Chest"
-        humanoid.human_bones.neck.node.bone_name = "J_Bip_C_Neck"
-        humanoid.human_bones.head.node.bone_name = "J_Bip_C_Head"
-        humanoid.human_bones.left_upper_leg.node.bone_name = "J_Bip_L_UpperLeg"
-        humanoid.human_bones.left_lower_leg.node.bone_name = "J_Bip_L_LowerLeg"
-        humanoid.human_bones.left_foot.node.bone_name = "J_Bip_L_Foot"
-        humanoid.human_bones.right_upper_leg.node.bone_name = "J_Bip_R_UpperLeg"
-        humanoid.human_bones.right_lower_leg.node.bone_name = "J_Bip_R_LowerLeg"
-        humanoid.human_bones.right_foot.node.bone_name = "J_Bip_R_Foot"
-        humanoid.human_bones.left_upper_arm.node.bone_name = "J_Bip_L_UpperArm"
-        humanoid.human_bones.left_lower_arm.node.bone_name = "J_Bip_L_LowerArm"
-        humanoid.human_bones.left_hand.node.bone_name = "J_Bip_L_Hand"
-        humanoid.human_bones.right_upper_arm.node.bone_name = "J_Bip_R_UpperArm"
-        humanoid.human_bones.right_lower_arm.node.bone_name = "J_Bip_R_LowerArm"
-        humanoid.human_bones.right_hand.node.bone_name = "J_Bip_R_Hand"
-        
-        bpy.ops.vrm.assign_vrm1_humanoid_human_bones_automatically(armature_name="Armature")
+        if is_vrm and hasattr(armature.data, 'vrm_addon_extension'):
+            try:
+                armature.data.vrm_addon_extension.spec_version = "1.0"
+                humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
+                humanoid.human_bones.hips.node.bone_name = "J_Bip_C_Hips"
+                humanoid.human_bones.spine.node.bone_name = "J_Bip_C_Spine"
+                
+                humanoid.human_bones.chest.node.bone_name = "J_Bip_C_Chest"
+                humanoid.human_bones.neck.node.bone_name = "J_Bip_C_Neck"
+                humanoid.human_bones.head.node.bone_name = "J_Bip_C_Head"
+                humanoid.human_bones.left_upper_leg.node.bone_name = "J_Bip_L_UpperLeg"
+                humanoid.human_bones.left_lower_leg.node.bone_name = "J_Bip_L_LowerLeg"
+                humanoid.human_bones.left_foot.node.bone_name = "J_Bip_L_Foot"
+                humanoid.human_bones.right_upper_leg.node.bone_name = "J_Bip_R_UpperLeg"
+                humanoid.human_bones.right_lower_leg.node.bone_name = "J_Bip_R_LowerLeg"
+                humanoid.human_bones.right_foot.node.bone_name = "J_Bip_R_Foot"
+                humanoid.human_bones.left_upper_arm.node.bone_name = "J_Bip_L_UpperArm"
+                humanoid.human_bones.left_lower_arm.node.bone_name = "J_Bip_L_LowerArm"
+                humanoid.human_bones.left_hand.node.bone_name = "J_Bip_L_Hand"
+                humanoid.human_bones.right_upper_arm.node.bone_name = "J_Bip_R_UpperArm"
+                humanoid.human_bones.right_lower_arm.node.bone_name = "J_Bip_R_LowerArm"
+                humanoid.human_bones.right_hand.node.bone_name = "J_Bip_R_Hand"
+                
+                # Try to automatically assign bones
+                try:
+                    bpy.ops.vrm.assign_vrm1_humanoid_human_bones_automatically(armature_name=armature.name)
+                except Exception as e:
+                    print(f"[Warning] Could not automatically assign VRM bones: {e}")
+            except Exception as e:
+                print(f"[Error] Failed to set VRM bone links: {e}")
+                import traceback
+                traceback.print_exc()
 
 def merge(
     path: str,
@@ -505,7 +811,10 @@ def merge(
     if dirpath != '':
         os.makedirs(dirpath, exist_ok=True)
     try:
-        if is_vrm:
+        # Export based on file extension, not is_vrm flag
+        # is_vrm is only used for bone naming, not export format
+        if output_path.endswith(".vrm"):
+            # Only export as VRM if the file extension explicitly requests it
             bpy.ops.export_scene.vrm(filepath=output_path)
         elif output_path.endswith(".fbx") or output_path.endswith(".FBX"):
             bpy.ops.export_scene.fbx(filepath=output_path, add_leaf_bones=True)
