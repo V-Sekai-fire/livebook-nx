@@ -199,6 +199,8 @@ with open(config_file_path, 'r', encoding='utf-8') as f:
 
 # Normalize paths to use forward slashes for cross-platform compatibility
 input_path = str(Path(config['input_path'])).replace("\\\\", "/")
+output_dir = Path(config.get('output_dir', 'output'))
+output_dir.mkdir(exist_ok=True, parents=True)
 
 # Detect input format
 input_ext = Path(input_path).suffix.lower()
@@ -260,6 +262,12 @@ for bone in armature.data.bones:
     print(f"  Bone: {bone.name} (parent: {bone.parent.name if bone.parent else 'None'})")
 
 print(f"[OK] Extracted {len(bone_data)} bones")
+
+# Save extracted bone data to output directory
+bone_data_file = output_dir / "extracted_bone_data.json"
+with open(bone_data_file, 'w', encoding='utf-8') as f:
+    json.dump(bone_data, f, indent=2, ensure_ascii=False)
+print(f"  Extracted bone data saved to: {bone_data_file}")
 
 # Export as GLTF to extract hierarchy (works for all input formats)
 print("")
@@ -370,8 +378,7 @@ for obj in bpy.context.scene.objects:
 armature.data.display_type = 'STICK'
 armature.show_in_front = True
 
-# Create output directory structure for intermediate files
-output_dir = Path(config.get('output_dir', 'output'))
+# Create output directory structure for intermediate files (output_dir already defined above)
 output_dir.mkdir(exist_ok=True, parents=True)
 
 # Create subdirectories for intermediate files
@@ -1402,6 +1409,7 @@ if missing_required:
     print(f"[WARN] Missing required VRM bones: {missing_required}")
 
 # Check for duplicate mappings
+duplicates = []
 if len(mapped_bones) != len(bone_mapping.values()):
     print("[WARN] Duplicate VRM bone mappings detected")
     # Find duplicates
@@ -1411,6 +1419,64 @@ if len(mapped_bones) != len(bone_mapping.values()):
     print(f"  Duplicates: {duplicates}")
 
 print("[OK] VRM compliance check completed")
+
+# Save detailed voting results
+print("")
+print("=== Saving Analysis Results ===")
+vote_results_file = output_dir / "voting_results.json"
+vote_results = {}
+for bone_name, votes in vote_counts.items():
+    vote_results[bone_name] = {
+        "final_mapping": bone_mapping.get(bone_name),
+        "votes": dict(votes),
+        "total_iterations": len(all_mappings),
+        "confidence": votes.most_common(1)[0][1] / len(all_mappings) if len(all_mappings) > 0 else 0.0
+    }
+with open(vote_results_file, 'w', encoding='utf-8') as f:
+    json.dump(vote_results, f, indent=2, ensure_ascii=False)
+print(f"  Voting results saved to: {vote_results_file}")
+
+# Save all iteration mappings for comparison
+all_iterations_file = output_dir / "all_iteration_mappings.json"
+with open(all_iterations_file, 'w', encoding='utf-8') as f:
+    json.dump(all_mappings, f, indent=2, ensure_ascii=False)
+print(f"  All iteration mappings saved to: {all_iterations_file}")
+
+# Save validation results
+validation_results = {
+    "required_bones": required_bones,
+    "mapped_bones": list(mapped_bones),
+    "missing_required": missing_required,
+    "duplicate_mappings": duplicates,
+    "total_bones_mapped": len(bone_mapping),
+    "total_required_bones": len(required_bones),
+    "compliance_percentage": (len(required_bones) - len(missing_required)) / len(required_bones) * 100 if len(required_bones) > 0 else 0.0
+}
+validation_file = output_dir / "validation_results.json"
+with open(validation_file, 'w', encoding='utf-8') as f:
+    json.dump(validation_results, f, indent=2, ensure_ascii=False)
+print(f"  Validation results saved to: {validation_file}")
+
+# Save comprehensive analysis summary
+analysis_summary = {
+    "input_file": input_path,
+    "output_file": str(output_path),
+    "total_bones_extracted": len(bone_data),
+    "total_bones_mapped": len(bone_mapping),
+    "iterations_run": len(all_mappings),
+    "final_mapping": bone_mapping,
+    "validation": validation_results,
+    "views_captured": len(views),
+    "annotated_images": [str(img) for img in annotated_images],
+    "normal_maps_dir": str(normal_maps_dir),
+    "annotated_images_dir": str(annotated_images_dir),
+    "qwen3vl_responses_dir": str(output_dir / "qwen3vl_responses"),
+    "gltf_hierarchy_available": gltf_json_hierarchy is not None
+}
+summary_file = output_dir / "analysis_summary.json"
+with open(summary_file, 'w', encoding='utf-8') as f:
+    json.dump(analysis_summary, f, indent=2, ensure_ascii=False)
+print(f"  Analysis summary saved to: {summary_file}")
 
 # Rename bones in Blender
 print("")
@@ -1426,6 +1492,8 @@ bpy.ops.object.mode_set(mode='EDIT')
 
 renamed_count = 0
 skipped_count = 0
+renaming_log_entries = []
+
 for bone in armature.data.edit_bones:
     if bone.name in bone_mapping:
         old_name = bone.name
@@ -1435,16 +1503,34 @@ for bone in armature.data.edit_bones:
         if new_name in [b.name for b in armature.data.edit_bones if b != bone]:
             print(f"  [WARN] Skipping {old_name} -> {new_name} (target name already exists)")
             skipped_count += 1
+            renaming_log_entries.append({
+                "original_name": old_name,
+                "new_name": new_name,
+                "status": "skipped",
+                "reason": "target name already exists"
+            })
             continue
 
         try:
             bone.name = new_name
             print(f"  {old_name} -> {new_name}")
             renamed_count += 1
+            renaming_log_entries.append({
+                "original_name": old_name,
+                "new_name": new_name,
+                "status": "renamed",
+                "vrm_spec": new_name
+            })
         except Exception as e:
             error_msg = f"  [ERROR] Error renaming {old_name} -> {new_name}"
             print(error_msg + ": " + str(e))
             skipped_count += 1
+            renaming_log_entries.append({
+                "original_name": old_name,
+                "new_name": new_name,
+                "status": "error",
+                "error": str(e)
+            })
 
 # Switch back to object mode
 bpy.ops.object.mode_set(mode='OBJECT')
@@ -1452,14 +1538,26 @@ print(f"[OK] Renamed {renamed_count} bones")
 if skipped_count > 0:
     print(f"[WARN] Skipped {skipped_count} bones (conflicts or errors)")
 
+# Save renaming log
+renaming_log = {
+    "total_bones_in_mapping": len(bone_mapping),
+    "successfully_renamed": renamed_count,
+    "skipped": skipped_count,
+    "renamed_bones": renaming_log_entries
+}
+
+renaming_log_file = output_dir / "renaming_log.json"
+with open(renaming_log_file, 'w', encoding='utf-8') as f:
+    json.dump(renaming_log, f, indent=2, ensure_ascii=False)
+print(f"  Renaming log saved to: {renaming_log_file}")
+
 # Export to USDC
 print("")
 print("=== Exporting to USDC ===")
 output_path = config.get('output_path', str(Path(input_path).with_suffix('.usdc')))
 output_path = str(Path(output_path)).replace("\\\\", "/")
 
-# Ensure output directory exists
-output_dir = Path(output_path).parent
+# Ensure output directory exists (output_dir already defined from config above)
 output_dir.mkdir(parents=True, exist_ok=True)
 
 print(f"Exporting to: {output_path}")
@@ -1497,7 +1595,18 @@ print("")
 print("=== Complete ===")
 print(f"Renamed {renamed_count} bones to VRM specification")
 print(f"Exported to: {output_path}")
-print(f"Intermediate files saved to: {output_dir}")
+print(f"")
+print("=== Analysis Files Saved ===")
+print(f"All analysis results saved to: {output_dir}")
+print(f"  - Extracted bone data: extracted_bone_data.json")
+print(f"  - GLTF hierarchy: gltf_hierarchy.json")
+print(f"  - Final bone mapping: bone_mapping_final.json")
+print(f"  - Voting results: voting_results.json")
+print(f"  - All iteration mappings: all_iteration_mappings.json")
+print(f"  - Validation results: validation_results.json")
+print(f"  - Analysis summary: analysis_summary.json")
+print(f"  - Renaming log: renaming_log.json")
+print(f"  - Qwen3VL responses: qwen3vl_responses/")
 print(f"  - Normal maps: {normal_maps_dir}")
 print(f"  - Annotated images: {annotated_images_dir}")
 """, %{})
