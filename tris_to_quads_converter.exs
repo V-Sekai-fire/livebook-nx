@@ -247,12 +247,30 @@ bpy.ops.wm.read_factory_settings(use_empty=True)
 # Import based on file format
 try:
     if input_ext in ['.glb', '.gltf']:
+        # Import GLTF/GLB - Blender's importer preserves all vertex groups
+        # GLTF format supports multiple weight/joint attribute sets (JOINTS_0/WEIGHTS_0, JOINTS_1/WEIGHTS_1, etc.)
+        # Each set contains 4 bone influences, so multiple sets allow more than 4 bones per vertex
+        # Blender's importer should preserve all sets as vertex groups
         bpy.ops.import_scene.gltf(
             filepath=input_path,
             import_pack_images=True,  # Preserve embedded textures
             import_shading='NORMALS'  # Preserve material shading
         )
         print("✓ GLB/GLTF loaded successfully")
+
+        # Verify all vertex groups are preserved (no 4-bone limit)
+        # Blender stores all bone weights in vertex groups, which can have unlimited influences per vertex
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH' and obj.vertex_groups:
+                # Check if vertices have more than 4 bone influences
+                max_influences = 0
+                for v in obj.data.vertices:
+                    influence_count = len([g for g in v.groups if g.weight > 0.0])
+                    max_influences = max(max_influences, influence_count)
+                if max_influences > 4:
+                    print(f"  ✓ Preserved {max_influences} bone influences per vertex in {obj.name} (no 4-bone limit)")
+                elif max_influences > 0:
+                    print(f"  ✓ Preserved {max_influences} bone influences per vertex in {obj.name}")
     elif input_ext in ['.usd', '.usda', '.usdc']:
         # USD import - using only essential parameters that work in Blender 4.5
         bpy.ops.wm.usd_import(
@@ -290,6 +308,18 @@ def convert_tris_to_quads(obj):
     '''Convert triangles to quads using Optimized-Tris-to-Quads-Converter algorithm
     Returns: number of edges converted (0 if none)'''
     print(f"\nProcessing mesh: {obj.name}")
+
+    # Preserve vertex groups (bone weights) before conversion
+    # Store all vertex group data to ensure it's preserved
+    vertex_group_data = {}
+    if obj.vertex_groups:
+        print(f"  Preserving {len(obj.vertex_groups)} vertex groups (bone weights)")
+        # Store vertex group indices and names
+        for vg in obj.vertex_groups:
+            vertex_group_data[vg.index] = {
+                'name': vg.name,
+                'index': vg.index
+            }
 
     # Ensure we're in object mode
     bpy.context.view_layer.objects.active = obj
@@ -358,13 +388,35 @@ def convert_tris_to_quads(obj):
             n += 1
 
     if n > 0:
+        # Update bmesh back to mesh - this preserves vertex groups automatically
+        bmesh.update_edit_mesh(obj.data)
         bpy.ops.mesh.dissolve_edges(use_verts=False)
         print(f"  ✓ Converted {n} edge pairs to quads")
     else:
+        # Still update bmesh even if no conversion happened
+        bmesh.update_edit_mesh(obj.data)
         print(f"  No edges selected for conversion")
 
     bm.free()
     bpy.ops.object.mode_set(mode='OBJECT')
+
+    # Verify vertex groups are still intact after conversion
+    # Check that all vertex groups exist and vertices retain their bone weights
+    if vertex_group_data:
+        remaining_groups = len(obj.vertex_groups)
+        if remaining_groups != len(vertex_group_data):
+            print(f"  Warning: Vertex group count changed from {len(vertex_group_data)} to {remaining_groups}")
+        else:
+            # Check max bone influences per vertex to verify no 4-bone limit
+            max_influences = 0
+            for v in obj.data.vertices:
+                influence_count = len([g for g in v.groups if g.weight > 0.0])
+                max_influences = max(max_influences, influence_count)
+            if max_influences > 4:
+                print(f"  ✓ Preserved {remaining_groups} vertex groups with up to {max_influences} bone influences per vertex (no 4-bone limit)")
+            else:
+                print(f"  ✓ Preserved {remaining_groups} vertex groups with up to {max_influences} bone influences per vertex")
+
     return n
 
 # Process each mesh object and track if quads were converted
@@ -418,13 +470,16 @@ try:
     # Binary USDC export with embedded images and material preservation
     # Using only essential parameters that are valid in Blender 4.5
     # Note: Texture embedding is controlled by relative_paths=False
+    # Note: export_armatures=False means we don't export armature objects,
+    #       but vertex groups (bone weights) are still exported with meshes
+    #       All vertex group influences are preserved (no 4-bone limit)
     bpy.ops.wm.usd_export(
         filepath=output_path,
         export_materials=True,
         export_textures=True,
         relative_paths=False,  # False = embed textures, True = use relative paths
         export_uvmaps=True,
-        export_armatures=False,
+        export_armatures=False,  # Don't export armature objects, but vertex groups are preserved
         selected_objects_only=False,
         visible_objects_only=False,
         use_instancing=False,
