@@ -377,7 +377,6 @@ def make_armature(
     skin: ndarray,
     group_per_vertex: int=4,
     add_root: bool=False,
-    is_vrm: bool=False,
 ):
     context = bpy.context
     
@@ -401,76 +400,6 @@ def make_armature(
     
     bpy.ops.object.add(type="ARMATURE", location=(0, 0, 0))
     armature = context.object
-    humanoid = None  # Initialize humanoid variable
-    
-    # Initialize VRM extension if needed
-    if is_vrm:
-        # Ensure VRM addon is enabled
-        vrm_addon_enabled = False
-        vrm_module_name = None
-        for addon in bpy.context.preferences.addons:
-            if 'vrm' in addon.module.lower():
-                vrm_module_name = addon.module
-                if addon.enabled:
-                    vrm_addon_enabled = True
-                    break
-        
-        if not vrm_addon_enabled:
-            if vrm_module_name:
-                try:
-                    bpy.ops.preferences.addon_enable(module=vrm_module_name)
-                    vrm_addon_enabled = True
-                    print(f"[Info] Enabled VRM addon: {vrm_module_name}")
-                except Exception as e:
-                    print(f"[Warning] Could not enable VRM addon: {e}")
-        
-        # Add VRM extension to armature if addon is enabled
-        if vrm_addon_enabled:
-            # The VRM addon should automatically add the extension when enabled
-            # If it doesn't exist, try to initialize it
-            if not hasattr(armature.data, 'vrm_addon_extension'):
-                # Try to add the extension by accessing it (VRM addon should create it)
-                try:
-                    # Switch to object mode to ensure armature is in correct state
-                    bpy.ops.object.mode_set(mode='OBJECT')
-                    # Access the extension - VRM addon should create it if enabled
-                    # This might require the addon to be properly initialized
-                    armature.data.vrm_addon_extension
-                except AttributeError:
-                    print("[Warning] VRM addon extension not available. VRM features may not work correctly.")
-                    print("[Info] The VRM addon may need to be properly initialized. Trying to refresh...")
-                    # Try refreshing the addon
-                    try:
-                        import importlib
-                        if vrm_module_name:
-                            importlib.reload(__import__(vrm_module_name))
-                    except:
-                        pass
-                    is_vrm = False
-                except Exception as e:
-                    print(f"[Warning] Could not initialize VRM extension: {e}")
-                    is_vrm = False
-            
-            if hasattr(armature.data, 'vrm_addon_extension'):
-                try:
-                    armature.data.vrm_addon_extension.spec_version = "1.0"
-                    humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
-                    print("[Info] VRM extension initialized successfully")
-                except Exception as e:
-                    print(f"[Warning] Could not set VRM extension properties: {e}")
-                    is_vrm = False
-        else:
-            print("[Warning] VRM addon is not enabled. VRM features will be disabled.")
-            is_vrm = False
-    elif hasattr(armature.data, 'vrm_addon_extension'):
-        # VRM extension exists but is_vrm was False - use it anyway
-        try:
-            armature.data.vrm_addon_extension.spec_version = "1.0"
-            humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
-            is_vrm = True
-        except Exception as e:
-            print(f"[Warning] Could not use existing VRM extension: {e}")
-            is_vrm = False
     bpy.ops.object.mode_set(mode="EDIT")
     edit_bones = armature.data.edit_bones
     if add_root:
@@ -510,43 +439,6 @@ def make_armature(
     # must set to object mode to enable parent_set
     bpy.ops.object.mode_set(mode='OBJECT')
     
-    # When is_vrm is True, ensure bones match the names from UniRig
-    # UniRig generates VRM names via Order.make_names() when cls='vroid'
-    # The names list should already contain the correct VRM names
-    # We only rename bones if they exist and have different names
-    if is_vrm:
-        bpy.ops.object.mode_set(mode='EDIT')
-        edit_bones = armature.data.edit_bones
-        
-        renamed_count = 0
-        for i, expected_name in enumerate(names):
-            # Find bone by the name it was created with (from names list)
-            bone = edit_bones.get(expected_name)
-            if bone is None:
-                # Bone doesn't exist with expected name, skip
-                continue
-            
-            # Only rename if the bone name doesn't match the expected name
-            # (This handles cases where Blender might have auto-renamed due to conflicts)
-            if bone.name != expected_name:
-                # Check if target name already exists (from a previous bone)
-                existing_bone = edit_bones.get(expected_name)
-                if existing_bone is None or existing_bone == bone:
-                    bone.name = expected_name
-                    renamed_count += 1
-                    print(f"[Info] Renamed bone '{bone.name}' (index {i}) to '{expected_name}'")
-                else:
-                    print(f"[Warning] Cannot rename '{bone.name}' to '{expected_name}': target name already exists")
-        
-        bpy.ops.object.mode_set(mode='OBJECT')
-
-        if renamed_count > 0:
-            print(f"[Info] Renamed {renamed_count} bones to match UniRig-generated names")
-        else:
-            # Verify bones have VRM names
-            vrm_bone_count = sum(1 for name in names if name.startswith('J_Bip_'))
-            if vrm_bone_count > 0:
-                print(f"[Info] All bones already have correct names from UniRig (VRM names: {vrm_bone_count})")
     objects = bpy.data.objects
     for o in bpy.context.selected_objects:
         o.select_set(False)
@@ -748,65 +640,6 @@ def make_armature(
         armature.select_set(False)
         ob.select_set(False)
     armature.parent = local_parent
-    
-    # set vrm bones link
-    if is_vrm:
-        # Ensure VRM extension exists and get humanoid
-        if not hasattr(armature.data, 'vrm_addon_extension'):
-            # Try to ensure VRM addon is enabled and extension is available
-            vrm_addon_enabled = False
-            for addon in bpy.context.preferences.addons:
-                if 'vrm' in addon.module.lower() and addon.enabled:
-                    vrm_addon_enabled = True
-                    break
-            
-            if vrm_addon_enabled:
-                # VRM addon is enabled but extension doesn't exist
-                # Try to refresh or reinitialize
-                print("[Warning] VRM extension not found on armature, trying to initialize...")
-                try:
-                    # Switch to object mode and select armature
-                    bpy.ops.object.mode_set(mode='OBJECT')
-                    bpy.context.view_layer.objects.active = armature
-                    # The extension should be created automatically when VRM addon is enabled
-                    # Try accessing it to trigger creation
-                    _ = armature.data.vrm_addon_extension
-                except:
-                    print("[Error] Could not create VRM extension. VRM features will be disabled.")
-                    is_vrm = False
-        
-        if is_vrm and hasattr(armature.data, 'vrm_addon_extension'):
-            try:
-                armature.data.vrm_addon_extension.spec_version = "1.0"
-                humanoid = armature.data.vrm_addon_extension.vrm1.humanoid
-                humanoid.human_bones.hips.node.bone_name = "J_Bip_C_Hips"
-                humanoid.human_bones.spine.node.bone_name = "J_Bip_C_Spine"
-                
-                humanoid.human_bones.chest.node.bone_name = "J_Bip_C_Chest"
-                humanoid.human_bones.neck.node.bone_name = "J_Bip_C_Neck"
-                humanoid.human_bones.head.node.bone_name = "J_Bip_C_Head"
-                humanoid.human_bones.left_upper_leg.node.bone_name = "J_Bip_L_UpperLeg"
-                humanoid.human_bones.left_lower_leg.node.bone_name = "J_Bip_L_LowerLeg"
-                humanoid.human_bones.left_foot.node.bone_name = "J_Bip_L_Foot"
-                humanoid.human_bones.right_upper_leg.node.bone_name = "J_Bip_R_UpperLeg"
-                humanoid.human_bones.right_lower_leg.node.bone_name = "J_Bip_R_LowerLeg"
-                humanoid.human_bones.right_foot.node.bone_name = "J_Bip_R_Foot"
-                humanoid.human_bones.left_upper_arm.node.bone_name = "J_Bip_L_UpperArm"
-                humanoid.human_bones.left_lower_arm.node.bone_name = "J_Bip_L_LowerArm"
-                humanoid.human_bones.left_hand.node.bone_name = "J_Bip_L_Hand"
-                humanoid.human_bones.right_upper_arm.node.bone_name = "J_Bip_R_UpperArm"
-                humanoid.human_bones.right_lower_arm.node.bone_name = "J_Bip_R_LowerArm"
-                humanoid.human_bones.right_hand.node.bone_name = "J_Bip_R_Hand"
-                
-                # Try to automatically assign bones
-                try:
-                    bpy.ops.vrm.assign_vrm1_humanoid_human_bones_automatically(armature_name=armature.name)
-                except Exception as e:
-                    print(f"[Warning] Could not automatically assign VRM bones: {e}")
-            except Exception as e:
-                print(f"[Error] Failed to set VRM bone links: {e}")
-                import traceback
-                traceback.print_exc()
 
 def merge(
     path: str,
@@ -818,7 +651,6 @@ def merge(
     names: List[str],
     tails: ndarray,
     add_root: bool=False,
-    is_vrm: bool=False,
 ):
     '''
     Merge skin and bone into original file.
@@ -842,19 +674,13 @@ def merge(
         skin=skin,
         group_per_vertex=4,
         add_root=add_root,
-        is_vrm=is_vrm,
     )
     
     dirpath = os.path.dirname(output_path)
     if dirpath != '':
         os.makedirs(dirpath, exist_ok=True)
     try:
-        # Export based on file extension, not is_vrm flag
-        # is_vrm is only used for bone naming, not export format
-        if output_path.endswith(".vrm"):
-            # Only export as VRM if the file extension explicitly requests it
-            bpy.ops.export_scene.vrm(filepath=output_path)
-        elif output_path.endswith(".fbx") or output_path.endswith(".FBX"):
+        if output_path.endswith(".fbx") or output_path.endswith(".FBX"):
             bpy.ops.export_scene.fbx(filepath=output_path, add_leaf_bones=True)
         elif output_path.endswith(".glb") or output_path.endswith(".gltf"):
             bpy.ops.export_scene.gltf(filepath=output_path)
@@ -1034,7 +860,7 @@ if __name__ == "__main__":
                 names=raw_data.names,
                 tails=raw_data.tails,
                 add_root=add_root,
-                is_vrm=(raw_data.cls=='vroid'),
+                is_vrm=False,
             )
         except Exception as e:
             print(f"failed to merge {origin_file}: {e}")
