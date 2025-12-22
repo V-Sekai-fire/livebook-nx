@@ -365,19 +365,21 @@ armature.show_in_front = True
 output_dir.mkdir(exist_ok=True, parents=True)
 
 # Create subdirectories for intermediate files
-normal_maps_dir = output_dir / "normal_maps"
-normal_maps_dir.mkdir(exist_ok=True, parents=True)
 annotated_images_dir = output_dir / "annotated_images"
 annotated_images_dir.mkdir(exist_ok=True, parents=True)
 
-# Capture screenshots from different camera angles (4 views using Fibonacci sphere)
+# Store original materials BEFORE any modifications (for PBR map extraction)
+original_materials = {}
+for obj in bpy.context.scene.objects:
+    if obj.type == 'MESH' and obj.data.materials:
+        original_materials[obj.name] = [mat.name for mat in obj.data.materials]
+
+# Capture screenshots from different camera angles (8 views using Fibonacci sphere)
 # This maximizes viewing angle coverage using golden angle spiral distribution
 # Based on HKU/SAMPart3D camera trajectory methods
-# Run analysis 2 times and merge results for better accuracy
 import math
-num_views = 12
+num_views = 4
 views = [f'VIEW_{i}' for i in range(num_views)]
-annotated_images = []
 view_bone_data = {}  # Store bone data for each view for re-annotation
 
 # Set up camera and viewport
@@ -533,9 +535,8 @@ for i, view_name in enumerate(views):
     camera.data.type = 'PERSP'
     camera.data.angle = math.radians(50.0)  # Field of view
 
-    # Step 1: Render normal map (with mesh visible, armature hidden)
-    normal_map_path = normal_maps_dir / f"normal_map_{view_name.lower()}.png"
-    normal_map_rendered = False
+    # Step 1: Render normal map (with mesh visible, armature hidden) - NO LABELS
+    normal_map_path = annotated_images_dir / f"bone_view_{view_name.lower()}_normal.png"
     mesh_objects = []  # Initialize before try block
     try:
         # Show mesh objects for normal map rendering
@@ -604,7 +605,6 @@ for i, view_name in enumerate(views):
         # Render normal map
         bpy.ops.render.render(write_still=True)
         print(f"    Normal map rendered: {normal_map_path}")
-        normal_map_rendered = True
 
         # Restore scene state: re-hide meshes and re-show armature
         for obj in mesh_objects:
@@ -623,29 +623,296 @@ for i, view_name in enumerate(views):
         except:
             pass
 
-    # Step 2: Create base image (normal map or white background)
-    screenshot_path = annotated_images_dir / f"bone_view_{view_name.lower()}.png"
+    # Step 2: Create geometric view with labels (armature visible, annotated)
+    geometric_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
     try:
-        from PIL import Image
+        from PIL import Image, ImageDraw, ImageFont
 
-        if normal_map_rendered:
-            # Use normal map as background
+        # Load normal map as base (or create white background if normal map failed)
+        try:
             base_img = Image.open(normal_map_path).convert("RGBA")
-            base_img.save(screenshot_path)
-            print(f"    Base image saved: {screenshot_path}")
-        else:
-            # Create white background if normal map failed
+        except:
             base_img = Image.new("RGBA", (scene.render.resolution_x, scene.render.resolution_y), (255, 255, 255, 255))
-            base_img.save(screenshot_path)
-            print(f"    Base image saved (white background) - {screenshot_path}")
+
+        draw = ImageDraw.Draw(base_img)
+
+        # Try to load fonts, fallback to default
+        try:
+            font = ImageFont.truetype("arial.ttf", 16)
+            font_large = ImageFont.truetype("arial.ttf", 20)
+        except:
+            try:
+                font = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 16)
+                font_large = ImageFont.truetype("/System/Library/Fonts/Helvetica.ttc", 20)
+            except:
+                font = ImageFont.load_default()
+                font_large = ImageFont.load_default()
+
+        res_x, res_y = scene.render.resolution_x, scene.render.resolution_y
+
+        # Store bone positions for connecting dots
+        bone_positions = {}
+        # Track label positions to avoid overlaps
+        label_positions = []
+
+        # First pass: collect all bone positions
+        for bone in armature.data.bones:
+            try:
+                # Project 3D bone positions to 2D screen space
+                # Convert local to world coordinates
+                # bone.head_local and bone.tail_local are in armature local space
+                # Transform through armature's world matrix
+                head_world = armature.matrix_world @ Vector(bone.head_local)
+                tail_world = armature.matrix_world @ Vector(bone.tail_local)
+
+                # Get bone's local transformation matrix for axis calculations
+                bone_matrix = armature.matrix_world @ bone.matrix_local
+
+                # Project to camera view
+                head_2d = bpy_extras.object_utils.world_to_camera_view(
+                    scene, camera, head_world)
+                tail_2d = bpy_extras.object_utils.world_to_camera_view(
+                    scene, camera, tail_world)
+
+                head_pix = (int(head_2d.x * res_x), int((1 - head_2d.y) * res_y))
+                tail_pix = (int(tail_2d.x * res_x), int((1 - tail_2d.y) * res_y))
+
+                # Store positions
+                bone_positions[bone.name] = {
+                    'head': head_pix,
+                    'tail': tail_pix,
+                    'head_world': head_world,
+                    'tail_world': tail_world,
+                    'matrix': bone_matrix,
+                    'bone': bone
+                }
+            except Exception as e:
+                continue
+
+        # Second pass: Draw skeleton connections (parent to child)
+        for bone in armature.data.bones:
+            if bone.name not in bone_positions:
+                continue
+
+            if bone.parent and bone.parent.name in bone_positions:
+                try:
+                    parent_pos = bone_positions[bone.parent.name]
+                    child_pos = bone_positions[bone.name]
+
+                    # Draw line from parent tail to child head (skeleton connection)
+                    parent_tail = parent_pos['tail']
+                    child_head = child_pos['head']
+
+                    if (0 <= parent_tail[0] < res_x and 0 <= parent_tail[1] < res_y and
+                        0 <= child_head[0] < res_x and 0 <= child_head[1] < res_y):
+                        # Draw skeleton connection (cyan)
+                        draw.line([parent_tail, child_head], fill=(0, 255, 255, 255), width=2)
+                except:
+                    pass
+
+        # Third pass: Collect bone data and initial label positions for force-directed layout
+        bone_data_list = []
+        for bone in armature.data.bones:
+            if bone.name not in bone_positions:
+                continue
+
+            try:
+                pos = bone_positions[bone.name]
+                head_pix = pos['head']
+                tail_pix = pos['tail']
+                bone_matrix = pos['matrix']
+                head_world = pos['head_world']
+                tail_world = pos['tail_world']
+
+                # Only process if within image bounds
+                if (0 <= head_pix[0] < res_x and 0 <= head_pix[1] < res_y and
+                    0 <= tail_pix[0] < res_x and 0 <= tail_pix[1] < res_y):
+
+                    # Get text size for label
+                    try:
+                        bbox = draw.textbbox((0, 0), bone.name, font=font_large)
+                        text_width = bbox[2] - bbox[0]
+                        text_height = bbox[3] - bbox[1]
+                    except:
+                        text_width = len(bone.name) * 12
+                        text_height = 22
+
+                    # Initial label position (offset from bone head)
+                    initial_x = head_pix[0] + 15
+                    initial_y = head_pix[1] - 15
+
+                    bone_data_list.append({
+                        'bone': bone,
+                        'head_pix': head_pix,
+                        'tail_pix': tail_pix,
+                        'bone_matrix': bone_matrix,
+                        'head_world': head_world,
+                        'tail_world': tail_world,
+                        'label_x': float(initial_x),
+                        'label_y': float(initial_y),
+                        'text_width': text_width,
+                        'text_height': text_height
+                    })
+            except Exception as e:
+                continue
+
+        # Apply force-directed graph layout to labels
+        if len(bone_data_list) > 0:
+            # Force-directed layout parameters
+            repulsion_strength = 5000.0   # Reduced repulsion to prevent pushing to edges
+            attraction_strength = 0.3    # Increased attraction to keep labels near bone heads
+            damping = 0.85               # Velocity damping
+            iterations = 150             # Increased iterations for better convergence
+            padding = 5                 # Label padding for overlap detection
+
+            # Helper function to check if two labels overlap
+            def labels_overlap(data1, data2):
+                x1, y1 = data1['label_x'], data1['label_y']
+                w1, h1 = data1['text_width'], data1['text_height']
+                x2, y2 = data2['label_x'], data2['label_y']
+                w2, h2 = data2['text_width'], data2['text_height']
+
+                # Check bounding box overlap
+                return not (x1 + w1 + padding < x2 - padding or
+                           x2 + w2 + padding < x1 - padding or
+                           y1 + h1 + padding < y2 - padding or
+                           y2 + h2 + padding < y1 - padding)
+
+            # Run force-directed layout iterations
+            for iteration in range(iterations):
+                # Calculate forces for each label
+                forces_x = [0.0] * len(bone_data_list)
+                forces_y = [0.0] * len(bone_data_list)
+
+                for i, bone_data in enumerate(bone_data_list):
+                    label_x = bone_data['label_x']
+                    label_y = bone_data['label_y']
+                    head_pix = bone_data['head_pix']
+
+                    # Attraction force to bone head (spring-like)
+                    dx_attract = head_pix[0] - label_x
+                    dy_attract = head_pix[1] - label_y
+                    dist_attract = math.sqrt(dx_attract*dx_attract + dy_attract*dy_attract)
+                    if dist_attract > 0.1:
+                        forces_x[i] += attraction_strength * dx_attract
+                        forces_y[i] += attraction_strength * dy_attract
+
+                    # Repulsion forces from other labels
+                    for j, other_data in enumerate(bone_data_list):
+                        if i == j:
+                            continue
+                        other_x = other_data['label_x']
+                        other_y = other_data['label_y']
+
+                        dx = label_x - other_x
+                        dy = label_y - other_y
+                        dist = math.sqrt(dx*dx + dy*dy)
+
+                        # Check for overlap using bounding boxes
+                        is_overlapping = labels_overlap(bone_data, other_data)
+
+                        if is_overlapping:
+                            if dist > 0.1:
+                                # Strong repulsion when overlapping
+                                force_magnitude = (repulsion_strength * 3.0) / (dist * dist + 1.0)
+                                forces_x[i] += force_magnitude * (dx / dist)
+                                forces_y[i] += force_magnitude * (dy / dist)
+                            else:
+                                # Very close - push apart in a random direction to avoid division by zero
+                                angle = (i * 2.0 * math.pi) / len(bone_data_list)
+                                forces_x[i] += repulsion_strength * math.cos(angle)
+                                forces_y[i] += repulsion_strength * math.sin(angle)
+
+                # Add edge repulsion forces to keep labels away from screen edges
+                edge_padding = 100  # Larger zone to keep labels away from edges
+                edge_repulsion = 2000.0  # Much stronger repulsion from edges
+                for i, bone_data in enumerate(bone_data_list):
+                    label_x = bone_data['label_x']
+                    label_y = bone_data['label_y']
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+
+                    # Repulsion from left edge (starts at edge_padding distance)
+                    if label_x < edge_padding:
+                        distance_from_edge = edge_padding - label_x
+                        forces_x[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from right edge
+                    if label_x + text_width > res_x - edge_padding:
+                        distance_from_edge = (label_x + text_width) - (res_x - edge_padding)
+                        forces_x[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from top edge
+                    if label_y < edge_padding:
+                        distance_from_edge = edge_padding - label_y
+                        forces_y[i] += edge_repulsion * (distance_from_edge / edge_padding) ** 2
+                    # Repulsion from bottom edge
+                    if label_y + text_height > res_y - edge_padding:
+                        distance_from_edge = (label_y + text_height) - (res_y - edge_padding)
+                        forces_y[i] -= edge_repulsion * (distance_from_edge / edge_padding) ** 2
+
+                # Update positions with damping
+                for i, bone_data in enumerate(bone_data_list):
+                    bone_data['label_x'] += forces_x[i] * damping
+                    bone_data['label_y'] += forces_y[i] * damping
+
+                    # Boundary constraints (keep labels within image bounds with padding)
+                    # Use larger padding to keep labels away from edges
+                    boundary_padding = 50
+                    text_width = bone_data['text_width']
+                    text_height = bone_data['text_height']
+                    bone_data['label_x'] = max(boundary_padding, min(res_x - text_width - boundary_padding, bone_data['label_x']))
+                    bone_data['label_y'] = max(boundary_padding, min(res_y - text_height - boundary_padding, bone_data['label_y']))
+
+        # Fourth pass: Draw bones, labels, and connecting lines with force-directed positions
+        for bone_data in bone_data_list:
+            try:
+                bone = bone_data['bone']
+                head_pix = bone_data['head_pix']
+                tail_pix = bone_data['tail_pix']
+                label_x = int(bone_data['label_x'])
+                label_y = int(bone_data['label_y'])
+                text_width = bone_data['text_width']
+                text_height = bone_data['text_height']
+
+                # Draw bone line (red) - from head to tail
+                draw.line([head_pix, tail_pix], fill=(255, 0, 0, 255), width=3)
+
+                # Draw numbered marker circle (foci) at bone head (green with yellow outline)
+                marker_radius = 10
+                draw.ellipse([head_pix[0]-marker_radius, head_pix[1]-marker_radius,
+                             head_pix[0]+marker_radius, head_pix[1]+marker_radius],
+                            fill=(0, 255, 0, 220), outline=(255, 255, 0, 255), width=3)
+
+                # Draw semi-transparent background for label
+                padding = 5
+                draw.rectangle([label_x - padding, label_y - padding,
+                               label_x + text_width + padding, label_y + text_height + padding],
+                              fill=(0, 0, 0, 200), outline=(255, 255, 0, 255), width=2)
+
+                # Draw connecting line from label to bone head (foci)
+                # Use a dashed or solid line to clearly connect label to marker
+                draw.line([head_pix, (label_x, label_y + text_height // 2)],
+                         fill=(255, 255, 255, 180), width=2)
+
+                # Add text label (white text on dark background for maximum readability)
+                draw.text((label_x, label_y), bone.name,
+                         fill=(255, 255, 255, 255), font=font_large)
+            except Exception as e:
+                # Skip bones that can't be projected
+                continue
+
+        # Save geometric view with labels
+        base_img.save(geometric_path)
+        # Store bone data for this view for potential re-annotation with VRM names
+        view_bone_data[view_name] = bone_data_list
+        print(f"    Geometric view saved: {geometric_path}")
 
     except Exception as e:
-        print(f"    Error creating base image: {e}")
+        print(f"    Error creating geometric view: {e}")
         import traceback
         traceback.print_exc()
         continue
 
-    # Step 3: Annotate with bone labels and foci (draw skeleton directly on image)
+    # Step 3: Annotate with bone labels and foci (draw skeleton directly on image) - REMOVED, using geometric view instead
     try:
         from PIL import Image, ImageDraw, ImageFont
 
@@ -916,81 +1183,137 @@ for i, view_name in enumerate(views):
                 # Skip bones that can't be projected
                 continue
 
-        # Save initial annotated image with iteration 0 suffix
-        iter0_path = annotated_images_dir / f"bone_view_{view_name.lower()}_iter0.png"
-        img_pil.save(iter0_path)
-        # Also save without suffix for use in Qwen3VL
-        img_pil.save(screenshot_path)
-        annotated_images.append(str(screenshot_path))
-        # Store bone data for this view for potential re-annotation
+        # Save geometric view with labels
+        base_img.save(geometric_path)
+        # Store bone data for this view for potential re-annotation with VRM names
         view_bone_data[view_name] = bone_data_list
-        print(f"    Annotated image saved: {screenshot_path} (also saved as {iter0_path.name})")
+        print(f"    Geometric view saved: {geometric_path}")
+
     except Exception as e:
-        print(f"    Error annotating image: {e}")
+        print(f"    Error creating geometric view: {e}")
         import traceback
         traceback.print_exc()
-        # Continue with unannotated image
-        annotated_images.append(str(screenshot_path))
+        continue
 
-if len(annotated_images) == 0:
-    raise ValueError("Failed to create any annotated images")
+print(f"Created {len(views)} normal maps")
+print(f"Created {len(views)} geometric views")
 
-print(f"Created {len(annotated_images)} annotated images")
-
-# Create depth map views (12 additional views with depth visualization)
+# Create clay views (4 views with clay rendering)
 print("")
-print("=== Creating Depth Map Views ===")
+print("=== Creating Clay Views ===")
 
-# Create depth map material (emission shader using camera distance)
-depth_mat = bpy.data.materials.new(name="DepthMapMaterial")
-depth_mat.use_nodes = True
-nodes_depth = depth_mat.node_tree.nodes
-links_depth = depth_mat.node_tree.links
+# Create clay material (simple uniform material using emission to ensure visibility)
+clay_mat = bpy.data.materials.new(name="ClayMaterial")
+clay_mat.use_nodes = True
+nodes_clay = clay_mat.node_tree.nodes
+links_clay = clay_mat.node_tree.links
 
 # Clear default nodes
-for node in nodes_depth:
-    nodes_depth.remove(node)
+for node in nodes_clay:
+    nodes_clay.remove(node)
 
-# Create Camera Data node to get distance from camera
-camera_data = nodes_depth.new(type='ShaderNodeCameraData')
+# Create Emission shader with light beige/clay color (ensures visibility without lighting)
+emission_clay = nodes_clay.new(type='ShaderNodeEmission')
+output_clay = nodes_clay.new(type='ShaderNodeOutputMaterial')
 
-# Create Map Range node to normalize depth (0 = near/white, 1 = far/black)
-map_range = nodes_depth.new(type='ShaderNodeMapRange')
-map_range.inputs['From Min'].default_value = 0.0
-map_range.inputs['From Max'].default_value = 5.0  # Will be adjusted per view
-map_range.inputs['To Min'].default_value = 1.0  # White for near
-map_range.inputs['To Max'].default_value = 0.0  # Black for far
-map_range.clamp = True
+# Set clay color (light beige/tan - typical clay render color)
+clay_color = (0.85, 0.8, 0.75, 1.0)  # Light beige
+emission_clay.inputs['Color'].default_value = clay_color[:3] + (1.0,)
+emission_clay.inputs['Strength'].default_value = 1.0
 
-# Create Combine RGB to make grayscale from single value
-combine_rgb = nodes_depth.new(type='ShaderNodeCombineRGB')
+# Link emission to output
+links_clay.new(emission_clay.outputs['Emission'], output_clay.inputs['Surface'])
 
-# Create Emission shader to output depth as grayscale
-emission = nodes_depth.new(type='ShaderNodeEmission')
-output_depth = nodes_depth.new(type='ShaderNodeOutputMaterial')
-
-# Link: Camera View Distance -> Map Range -> Combine RGB (grayscale) -> Emission -> Output
-links_depth.new(camera_data.outputs['View Distance'], map_range.inputs['Value'])
-links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['R'])
-links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['G'])
-links_depth.new(map_range.outputs['Result'], combine_rgb.inputs['B'])
-links_depth.new(combine_rgb.outputs['Image'], emission.inputs['Color'])
-links_depth.new(emission.outputs['Emission'], output_depth.inputs['Surface'])
-
-# Apply depth material to all mesh objects
+# Apply clay material to all mesh objects
 for obj in bpy.context.scene.objects:
     if obj.type == 'MESH':
         if len(obj.data.materials) == 0:
-            obj.data.materials.append(depth_mat)
+            obj.data.materials.append(clay_mat)
         else:
-            obj.data.materials[0] = depth_mat
+            obj.data.materials[0] = clay_mat
 
-# Generate 12 depth map views using same camera positions
-depth_images = []
+# Generate clay views using same camera positions
+clay_images = []
 for i, view_name in enumerate(views):
-    print(f"  Capturing {view_name} depth map...")
+    print(f"  Capturing {view_name} clay view...")
 
-    # Ensure correct scene state: meshes visible, armature visible
+    # Ensure correct scene state: meshes visible, armature hidden for clean clay render
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH':
+            obj.hide_set(False)
+    armature.hide_set(True)  # Hide armature for clean clay render
+
+    # Force scene update
+    bpy.context.view_layer.update()
+
+    # Recalculate bounding box for each frame
+    bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
+    bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
+    has_meshes = False
+
+    # Calculate bounding box from mesh objects
+    for obj in bpy.context.scene.objects:
+        if obj.type == 'MESH' and not obj.hide_get():
+            # Get mesh bounding box
+            for vertex in obj.bound_box:
+                world_vertex = obj.matrix_world @ mathutils.Vector(vertex)
+                bbox_min = mathutils.Vector((min(bbox_min.x, world_vertex.x),
+                                           min(bbox_min.y, world_vertex.y),
+                                           min(bbox_min.z, world_vertex.z)))
+                bbox_max = mathutils.Vector((max(bbox_max.x, world_vertex.x),
+                                           max(bbox_max.y, world_vertex.y),
+                                           max(bbox_max.z, world_vertex.z)))
+                has_meshes = True
+
+    if has_meshes:
+        frame_center = (bbox_min + bbox_max) / 2
+        frame_size = bbox_max - bbox_min
+        diagonal = frame_size.length
+        fov_rad = math.radians(50.0)
+        frame_distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
+        min_distance = max(frame_size.x, frame_size.y, frame_size.z) * 1.5
+        frame_distance = max(frame_distance, min_distance)
+    else:
+        frame_center = center
+        frame_distance = distance
+
+    # Get point on unit sphere and scale by distance
+    x, y, z = sphere_points[i]
+    camera_pos = mathutils.Vector((x * frame_distance, y * frame_distance, z * frame_distance))
+
+    # Position camera
+    camera.location = frame_center + camera_pos
+    look_at(camera, frame_center)
+
+    # Disable compositor for simple rendering
+    scene.use_nodes = False
+
+    # Render clay image
+    clay_path = annotated_images_dir / f"bone_view_{view_name.lower()}_clay.png"
+    scene.render.filepath = str(clay_path)
+
+    try:
+        bpy.ops.render.render(write_still=True)
+        print(f"    Clay view rendered: {clay_path}")
+        clay_images.append(str(clay_path))
+    except Exception as e:
+        print(f"    Error rendering clay view: {e}")
+        import traceback
+        traceback.print_exc()
+
+print(f"Created {len(clay_images)} clay views")
+
+# Create PBR maps (base color, roughness, metallic)
+print("")
+print("=== Creating PBR Maps ===")
+
+# Generate PBR maps for each view (original_materials already stored above)
+pbr_images = {"basecolor": [], "roughness": [], "metallic": []}
+
+for i, view_name in enumerate(views):
+    print(f"  Capturing {view_name} PBR maps...")
+
+    # Ensure meshes are visible
     for obj in bpy.context.scene.objects:
         if obj.type == 'MESH':
             obj.hide_set(False)
@@ -999,7 +1322,7 @@ for i, view_name in enumerate(views):
     # Force scene update
     bpy.context.view_layer.update()
 
-    # Recalculate bounding box for each frame
+    # Recalculate bounding box for camera positioning
     bbox_min = mathutils.Vector((float('inf'), float('inf'), float('inf')))
     bbox_max = mathutils.Vector((float('-inf'), float('-inf'), float('-inf')))
     has_bones = False
@@ -1026,39 +1349,300 @@ for i, view_name in enumerate(views):
         frame_distance = (diagonal * 1.2) / (2 * math.tan(fov_rad / 2))
         min_distance = max(frame_size.x, frame_size.y, frame_size.z) * 1.5
         frame_distance = max(frame_distance, min_distance)
-
-        # Update map range based on scene scale (depth range from near to far)
-        max_depth = diagonal * 2.5  # Maximum expected depth
-        map_range.inputs['From Max'].default_value = max_depth
     else:
         frame_center = center
         frame_distance = distance
 
-    # Get point on unit sphere and scale by distance
+    # Position camera
     x, y, z = sphere_points[i]
     camera_pos = mathutils.Vector((x * frame_distance, y * frame_distance, z * frame_distance))
-
-    # Position camera
     camera.location = frame_center + camera_pos
     look_at(camera, frame_center)
 
     # Disable compositor for simple rendering
     scene.use_nodes = False
 
-    # Render depth map image
-    depth_path = annotated_images_dir / f"bone_view_{view_name.lower()}_depth.png"
-    scene.render.filepath = str(depth_path)
-
+    # Generate Base Color map
     try:
+        # Create base color materials for each object that sample from their original materials
+        # This ensures we get the actual base colors (including textures) from each object
+        basecolor_materials = {}
+
+        for obj in bpy.context.scene.objects:
+            if obj.type != 'MESH':
+                continue
+
+            # Create a material that outputs base color from original material
+            basecolor_mat = bpy.data.materials.new(name=f"BaseColorMaterial_{obj.name}")
+            basecolor_mat.use_nodes = True
+            nodes_bc = basecolor_mat.node_tree.nodes
+            links_bc = basecolor_mat.node_tree.links
+
+            # Clear default nodes
+            for node in nodes_bc:
+                nodes_bc.remove(node)
+
+            # Try to get base color from original material
+            base_color_input = None
+            if obj.name in original_materials and len(original_materials[obj.name]) > 0:
+                orig_mat_name = original_materials[obj.name][0]
+                if orig_mat_name in bpy.data.materials:
+                    orig_mat = bpy.data.materials[orig_mat_name]
+                    if orig_mat.use_nodes:
+                        # Find Principled BSDF in original material
+                        for node in orig_mat.node_tree.nodes:
+                            if node.type == 'BSDF_PRINCIPLED':
+                                base_color_input = node.inputs['Base Color']
+                                break
+
+                        # If we found a base color input, try to copy its connection
+                        if base_color_input and base_color_input.is_linked:
+                            # Get the connected node
+                            connected_node = base_color_input.links[0].from_node
+                            connected_socket = base_color_input.links[0].from_socket
+
+                            # Copy the connected node to our new material
+                            # Create a shader node that outputs the base color
+                            # Use a Material Output node to sample from original material
+                            # Actually, we need to copy the node tree structure
+                            # For simplicity, let's use the base color value or texture
+
+                            # Create an emission shader
+                            emission_bc = nodes_bc.new(type='ShaderNodeEmission')
+                            output_bc = nodes_bc.new(type='ShaderNodeOutputMaterial')
+
+                            # Try to get the actual color/texture value
+                            if connected_node.type == 'TEX_IMAGE':
+                                # Copy the image texture
+                                tex_node = nodes_bc.new(type='ShaderNodeTexImage')
+                                if connected_node.image:
+                                    tex_node.image = connected_node.image
+                                    links_bc.new(tex_node.outputs['Color'], emission_bc.inputs['Color'])
+                                else:
+                                    # Fallback to default color
+                                    emission_bc.inputs['Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+                            elif connected_node.type in ['RGB', 'VALUE']:
+                                # Use the color value
+                                if hasattr(connected_node, 'outputs') and len(connected_node.outputs) > 0:
+                                    links_bc.new(connected_node.outputs[0], emission_bc.inputs['Color'])
+                                else:
+                                    emission_bc.inputs['Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+                            else:
+                                # For other node types, try to get the output
+                                if hasattr(connected_node, 'outputs') and 'Color' in connected_node.outputs:
+                                    links_bc.new(connected_node.outputs['Color'], emission_bc.inputs['Color'])
+                                else:
+                                    emission_bc.inputs['Color'].default_value = (0.8, 0.8, 0.8, 1.0)
+
+                            emission_bc.inputs['Strength'].default_value = 1.0
+                            links_bc.new(emission_bc.outputs['Emission'], output_bc.inputs['Surface'])
+                            basecolor_materials[obj.name] = basecolor_mat
+                            continue
+
+            # Fallback: use default color or extract from Principled BSDF default value
+            base_color = (0.8, 0.8, 0.8, 1.0)  # Default gray
+            if base_color_input and not base_color_input.is_linked:
+                base_color = base_color_input.default_value
+                if len(base_color) == 3:
+                    base_color = base_color + (1.0,)
+
+            # Create Emission shader to output base color directly (no lighting needed)
+            emission_bc = nodes_bc.new(type='ShaderNodeEmission')
+            output_bc = nodes_bc.new(type='ShaderNodeOutputMaterial')
+
+            # Set emission color to base color
+            emission_bc.inputs['Color'].default_value = base_color[:3] + (1.0,)
+            emission_bc.inputs['Strength'].default_value = 1.0
+
+            # Link to output
+            links_bc.new(emission_bc.outputs['Emission'], output_bc.inputs['Surface'])
+            basecolor_materials[obj.name] = basecolor_mat
+
+        # Apply base color materials to objects
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH' and obj.name in basecolor_materials:
+                if len(obj.data.materials) == 0:
+                    obj.data.materials.append(basecolor_materials[obj.name])
+                else:
+                    obj.data.materials[0] = basecolor_materials[obj.name]
+
+        # Render base color map
+        basecolor_path = annotated_images_dir / f"bone_view_{view_name.lower()}_basecolor.png"
+        scene.render.filepath = str(basecolor_path)
         bpy.ops.render.render(write_still=True)
-        print(f"    Depth map rendered: {depth_path}")
-        depth_images.append(str(depth_path))
+        print(f"    Base color map rendered: {basecolor_path}")
+        pbr_images["basecolor"].append(str(basecolor_path))
+
+        # Clean up temporary materials
+        for mat in basecolor_materials.values():
+            if mat.name in bpy.data.materials:
+                bpy.data.materials.remove(mat)
+
     except Exception as e:
-        print(f"    Error rendering depth map: {e}")
+        print(f"    Error rendering base color map: {e}")
         import traceback
         traceback.print_exc()
 
-print(f"Created {len(depth_images)} depth map views")
+    # Generate Roughness map
+    try:
+        # Create roughness materials for each object that sample from their original materials
+        roughness_materials = {}
+
+        for obj in bpy.context.scene.objects:
+            if obj.type != 'MESH':
+                continue
+
+            # Create a material that outputs roughness from original material
+            roughness_mat = bpy.data.materials.new(name=f"RoughnessMaterial_{obj.name}")
+            roughness_mat.use_nodes = True
+            nodes_r = roughness_mat.node_tree.nodes
+            links_r = roughness_mat.node_tree.links
+
+            # Clear default nodes
+            for node in nodes_r:
+                nodes_r.remove(node)
+
+            # Try to get roughness from original material
+            roughness_value = 0.5  # Default
+            roughness_input = None
+            if obj.name in original_materials and len(original_materials[obj.name]) > 0:
+                orig_mat_name = original_materials[obj.name][0]
+                if orig_mat_name in bpy.data.materials:
+                    orig_mat = bpy.data.materials[orig_mat_name]
+                    if orig_mat.use_nodes:
+                        # Find Principled BSDF in original material
+                        for node in orig_mat.node_tree.nodes:
+                            if node.type == 'BSDF_PRINCIPLED':
+                                roughness_input = node.inputs['Roughness']
+                                if not roughness_input.is_linked:
+                                    roughness_value = roughness_input.default_value
+                                break
+
+            # Create Emission shader to output roughness as grayscale (no lighting needed)
+            emission_r = nodes_r.new(type='ShaderNodeEmission')
+            output_r = nodes_r.new(type='ShaderNodeOutputMaterial')
+
+            # If roughness input is linked to a texture, try to use it
+            if roughness_input and roughness_input.is_linked:
+                connected_node = roughness_input.links[0].from_node
+                if connected_node.type == 'TEX_IMAGE':
+                    # Copy the image texture
+                    tex_node = nodes_r.new(type='ShaderNodeTexImage')
+                    if connected_node.image:
+                        tex_node.image = connected_node.image
+                        links_r.new(tex_node.outputs['Color'], emission_r.inputs['Color'])
+                    else:
+                        emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
+                else:
+                    # For other node types, use the value
+                    emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
+            else:
+                # Use the roughness value directly
+                emission_r.inputs['Color'].default_value = (roughness_value, roughness_value, roughness_value, 1.0)
+
+            emission_r.inputs['Strength'].default_value = 1.0
+
+            # Link to output
+            links_r.new(emission_r.outputs['Emission'], output_r.inputs['Surface'])
+            roughness_materials[obj.name] = roughness_mat
+
+        # Apply roughness materials to objects
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH' and obj.name in roughness_materials:
+                if len(obj.data.materials) == 0:
+                    obj.data.materials.append(roughness_materials[obj.name])
+                else:
+                    obj.data.materials[0] = roughness_materials[obj.name]
+
+        # Render roughness map
+        roughness_path = annotated_images_dir / f"bone_view_{view_name.lower()}_roughness.png"
+        scene.render.filepath = str(roughness_path)
+        bpy.ops.render.render(write_still=True)
+        print(f"    Roughness map rendered: {roughness_path}")
+        pbr_images["roughness"].append(str(roughness_path))
+
+        # Clean up temporary materials
+        for mat in roughness_materials.values():
+            if mat.name in bpy.data.materials:
+                bpy.data.materials.remove(mat)
+
+    except Exception as e:
+        print(f"    Error rendering roughness map: {e}")
+        import traceback
+        traceback.print_exc()
+
+    # Generate Metallic map
+    try:
+        # Create metallic material using emission shader (grayscale visualization)
+        metallic_mat = bpy.data.materials.new(name="MetallicMaterial")
+        metallic_mat.use_nodes = True
+        nodes_m = metallic_mat.node_tree.nodes
+        links_m = metallic_mat.node_tree.links
+
+        # Clear default nodes
+        for node in nodes_m:
+            nodes_m.remove(node)
+
+        # Try to get metallic from original materials, or use default
+        metallic_value = 0.0  # Default
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH' and obj.name in original_materials and len(original_materials[obj.name]) > 0:
+                orig_mat_name = original_materials[obj.name][0]
+                if orig_mat_name in bpy.data.materials:
+                    mat = bpy.data.materials[orig_mat_name]
+                    if mat.use_nodes:
+                        for node in mat.node_tree.nodes:
+                            if node.type == 'BSDF_PRINCIPLED':
+                                if node.inputs['Metallic'].default_value is not None:
+                                    metallic_value = node.inputs['Metallic'].default_value
+                                    break
+                break
+
+        # Create grayscale color from metallic (white = metallic, black = non-metallic)
+        metallic_color = (metallic_value, metallic_value, metallic_value, 1.0)
+
+        # Create Emission shader to output metallic as grayscale (no lighting needed)
+        emission_m = nodes_m.new(type='ShaderNodeEmission')
+        output_m = nodes_m.new(type='ShaderNodeOutputMaterial')
+
+        # Set emission color to metallic grayscale
+        emission_m.inputs['Color'].default_value = metallic_color[:3] + (1.0,)
+        emission_m.inputs['Strength'].default_value = 1.0
+
+        # Link to output
+        links_m.new(emission_m.outputs['Emission'], output_m.inputs['Surface'])
+
+        # Apply to all mesh objects
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH':
+                if len(obj.data.materials) == 0:
+                    obj.data.materials.append(metallic_mat)
+                else:
+                    obj.data.materials[0] = metallic_mat
+
+        # Render metallic map
+        metallic_path = annotated_images_dir / f"bone_view_{view_name.lower()}_metallic.png"
+        scene.render.filepath = str(metallic_path)
+        bpy.ops.render.render(write_still=True)
+        print(f"    Metallic map rendered: {metallic_path}")
+        pbr_images["metallic"].append(str(metallic_path))
+    except Exception as e:
+        print(f"    Error rendering metallic map: {e}")
+        import traceback
+        traceback.print_exc()
+
+print(f"Created {len(pbr_images['basecolor'])} base color maps")
+print(f"Created {len(pbr_images['roughness'])} roughness maps")
+print(f"Created {len(pbr_images['metallic'])} metallic maps")
+
+# Restore original materials
+for obj_name, mat_names in original_materials.items():
+    obj = bpy.data.objects.get(obj_name)
+    if obj and obj.type == 'MESH':
+        obj.data.materials.clear()
+        for mat_name in mat_names:
+            if mat_name in bpy.data.materials:
+                obj.data.materials.append(bpy.data.materials[mat_name])
 
 # Geometric Bone Mapping Analysis
 print("=== Geometric Bone Mapping Analysis ===")
@@ -1443,17 +2027,21 @@ try:
         except:
             font_large = ImageFont.load_default()
 
-    # Re-annotate each view
+    # Re-annotate each view (update geometric views with VRM names)
     for view_idx, view_name in enumerate(views):
         if view_name not in view_bone_data:
             continue
 
-        img_path = annotated_images[view_idx]
+        # Use geometric view path
+        geometric_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
+        if not geometric_path.exists():
+            continue
+
         bone_data_list = view_bone_data[view_name]
 
-        # Load the base image (normal map or white background)
+        # Load the geometric view image
         try:
-            img_pil = Image.open(img_path).convert("RGBA")
+            img_pil = Image.open(geometric_path).convert("RGBA")
             draw = ImageDraw.Draw(img_pil)
 
             # Redraw labels with VRM names
@@ -1499,11 +2087,8 @@ try:
                 except Exception as e:
                     continue
 
-            # Save updated image
-            img_pil.save(img_path)
-            # Also save a copy with geometric annotation
-            geom_path = annotated_images_dir / f"bone_view_{view_name.lower()}_geometric.png"
-            img_pil.save(geom_path)
+            # Save updated geometric view with VRM names
+            img_pil.save(geometric_path)
             print(f"  Re-annotated {view_name} with VRM names (geometric mapping)")
 
         except Exception as e:
@@ -1606,9 +2191,15 @@ analysis_summary = {
     "final_mapping": bone_mapping,
     "validation": validation_results,
     "views_captured": len(views),
-    "annotated_images": [str(img) for img in annotated_images],
-    "normal_maps_dir": str(normal_maps_dir),
     "annotated_images_dir": str(annotated_images_dir),
+    "image_types": {
+        "normal_maps": f"{len(views)} views (no labels)",
+        "geometric_views": f"{len(views)} views (with labels)",
+        "clay_views": f"{len(clay_images)} views (no labels)",
+        "basecolor_maps": f"{len(pbr_images['basecolor'])} views (no labels)",
+        "roughness_maps": f"{len(pbr_images['roughness'])} views (no labels)",
+        "metallic_maps": f"{len(pbr_images['metallic'])} views (no labels)"
+    },
     "gltf_hierarchy_available": gltf_json_hierarchy is not None
 }
 summary_file = output_dir / "analysis_summary.json"
@@ -1739,8 +2330,12 @@ print(f"  - Geometric mapping: geometric_mapping.json")
 print(f"  - Validation results: validation_results.json")
 print(f"  - Analysis summary: analysis_summary.json")
 print(f"  - Renaming log: renaming_log.json")
-print(f"  - Normal maps: {normal_maps_dir}")
-print(f"  - Annotated images: {annotated_images_dir}")
+print(f"  - Normal maps: {annotated_images_dir} (no labels)")
+print(f"  - Geometric views: {annotated_images_dir} (with labels)")
+print(f"  - Clay views: {annotated_images_dir} (no labels)")
+print(f"  - Base color maps: {annotated_images_dir} (no labels)")
+print(f"  - Roughness maps: {annotated_images_dir} (no labels)")
+print(f"  - Metallic maps: {annotated_images_dir} (no labels)")
 """, %{})
 rescue
   e ->
