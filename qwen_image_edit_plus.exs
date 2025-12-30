@@ -50,6 +50,7 @@ dependencies = [
   "numpy",
   "huggingface-hub",
   "gitpython",
+  "bitsandbytes",
 ]
 
 [tool.uv.sources]
@@ -85,8 +86,9 @@ defmodule ArgsParser do
 
     Options:
       --go-fast, -f             Use fast inference mode (fewer steps, default: true)
+      --use-4bit                Use 4-bit quantization to reduce VRAM (default: false, requires bitsandbytes)
       --aspect-ratio <ratio>    Aspect ratio: "match_input_image", "1:1", "16:9", "9:16", "4:3", "3:4" (default: "match_input_image", note: currently not used by pipeline)
-      --output-format, -o <fmt> Output format: webp, png, jpg, jpeg (default: "webp")
+      --output-format, -o <fmt>  Output format: webp, png, jpg, jpeg (default: "webp")
       --output-quality, -q <int> Output quality for webp/jpg (default: 95, range: 1-100)
       --help, -h                 Show this help message
 
@@ -97,8 +99,9 @@ defmodule ArgsParser do
       elixir qwen_image_edit_plus.exs image.jpg "Edit text in the image" --output-format png
 
     Notes:
-      - First generation will download model weights if not present (~20GB)
+      - First generation will download model weights if not present (~20GB full precision, ~10GB with 4-bit)
       - Model supports multiple images (pass as list to pipeline)
+      - Use --use-4bit to reduce VRAM usage (recommended for GPUs with <24GB VRAM)
       - Output saved to output/<timestamp>/qwen_edit_<timestamp>.<format>
       - Based on Qwen-Image-Edit-2509: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
     """)
@@ -109,6 +112,7 @@ defmodule ArgsParser do
     {opts, args, _} = OptionParser.parse(args,
       switches: [
         go_fast: :boolean,
+        use_4bit: :boolean,
         aspect_ratio: :string,
         output_format: :string,
         output_quality: :integer,
@@ -201,6 +205,7 @@ defmodule ArgsParser do
       images: images,
       prompt: prompt,
       go_fast: Keyword.get(opts, :go_fast, true),
+      use_4bit: Keyword.get(opts, :use_4bit, false),
       aspect_ratio: aspect_ratio,
       output_format: output_format,
       output_quality: output_quality
@@ -239,7 +244,7 @@ defmodule QwenImageEdit.Behaviour do
   Behaviour for Qwen Image Edit Plus model operations.
   """
   @callback setup() :: :ok | {:error, term()}
-  @callback edit(list(String.t()), String.t(), boolean(), String.t(), String.t(), integer()) :: {:ok, Path.t()} | {:error, term()}
+  @callback edit(list(String.t()), String.t(), boolean(), boolean(), String.t(), String.t(), integer()) :: {:ok, Path.t()} | {:error, term()}
 end
 
 # State machine for editing workflow using :gen_statem (OTP built-in)
@@ -372,10 +377,10 @@ defmodule QwenImageEdit.Server do
     GenServer.call(server, :setup)
   end
 
-  def edit(server \\ __MODULE__, images, prompt, go_fast, aspect_ratio, output_format, output_quality) do
+  def edit(server \\ __MODULE__, images, prompt, go_fast, use_4bit, aspect_ratio, output_format, output_quality) do
     # Timeout: 30 minutes (1,800,000 ms) - model loading can take 10-15 minutes on first run
     timeout_ms = 1_800_000
-    case GenServer.call(server, {:edit, images, prompt, go_fast, aspect_ratio, output_format, output_quality}, timeout_ms) do
+    case GenServer.call(server, {:edit, images, prompt, go_fast, use_4bit, aspect_ratio, output_format, output_quality}, timeout_ms) do
       {:error, _reason} = error -> error
       {:ok, _path} = ok -> ok
       other -> {:error, "Unexpected response: #{inspect(other)}"}
@@ -414,13 +419,14 @@ defmodule QwenImageEdit.Server do
   end
 
   @impl true
-  def handle_call({:edit, images, prompt, go_fast, aspect_ratio, output_format, output_quality}, from, state) do
+  def handle_call({:edit, images, prompt, go_fast, use_4bit, aspect_ratio, output_format, output_quality}, from, state) do
     task = Task.async(fn ->
       # Transition to loading state
       QwenImageEdit.StateMachine.call(state.state_machine, {:start_edit, %{
         images: images,
         prompt: prompt,
         go_fast: go_fast,
+        use_4bit: use_4bit,
         aspect_ratio: aspect_ratio,
         output_format: output_format,
         output_quality: output_quality
@@ -430,7 +436,7 @@ defmodule QwenImageEdit.Server do
       QwenImageEdit.StateMachine.call(state.state_machine, {:model_loaded})
 
       # Perform editing
-      case QwenImageEdit.Impl.edit_with_pipeline(images, prompt, go_fast, aspect_ratio, output_format, output_quality) do
+      case QwenImageEdit.Impl.edit_with_pipeline(images, prompt, go_fast, use_4bit, aspect_ratio, output_format, output_quality) do
         {:ok, output_path} ->
           QwenImageEdit.StateMachine.call(state.state_machine, {:complete, output_path})
           {:ok, output_path}
@@ -500,36 +506,46 @@ defmodule QwenImageEdit.Impl do
   end
 
   @impl QwenImageEdit.Behaviour
-  def edit(_images, _prompt, _go_fast, _aspect_ratio, _output_format, _output_quality) do
+  def edit(_images, _prompt, _go_fast, _use_4bit, _aspect_ratio, _output_format, _output_quality) do
     # This is called from the GenServer
     # The actual editing happens in the GenServer
     {:error, "edit should be called through QwenImageEdit.Server"}
   end
 
   # Internal function that loads the pipeline and edits
-  def edit_with_pipeline(images, prompt, go_fast, aspect_ratio, output_format, output_quality) do
+  def edit_with_pipeline(images, prompt, go_fast, use_4bit, aspect_ratio, output_format, output_quality) do
     SpanCollector.track_span("qwen_edit.edit", fn ->
     OpenTelemetry.Tracer.with_span "qwen_edit.edit" do
       OpenTelemetry.Tracer.set_attribute("image.count", length(images))
       OpenTelemetry.Tracer.set_attribute("image.go_fast", go_fast)
+      OpenTelemetry.Tracer.set_attribute("image.use_4bit", use_4bit)
       OpenTelemetry.Tracer.set_attribute("image.aspect_ratio", aspect_ratio)
       OpenTelemetry.Tracer.set_attribute("image.output_format", output_format)
       OpenTelemetry.Tracer.set_attribute("image.output_quality", output_quality)
       OpenTelemetry.Tracer.set_attribute("prompt.length", String.length(prompt))
 
       base_dir = Path.expand(".")
-      qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509"])
-      repo_id = "Qwen/Qwen-Image-Edit-2509"
+      
+      # Choose model directory and repo based on quantization
+      if use_4bit do
+        qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509-4bit"])
+        repo_id = "ovedrive/Qwen-Image-Edit-2509-4bit"
+      else
+        qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509"])
+        repo_id = "Qwen/Qwen-Image-Edit-2509"
+      end
 
       # Download weights if needed (only once)
       if !File.exists?(qwen_weights_dir) or !File.exists?(Path.join(qwen_weights_dir, "config.json")) do
         SpanCollector.track_span("qwen_edit.download_weights", fn ->
         OpenTelemetry.Tracer.with_span "qwen_edit.download_weights" do
-          OtelLogger.info("Downloading Qwen Image Edit 2509 models from Hugging Face", [
-            {"download.weights_dir", qwen_weights_dir}
+          model_name = if use_4bit, do: "Qwen-Image-Edit-2509-4bit", else: "Qwen-Image-Edit-2509"
+          OtelLogger.info("Downloading #{model_name} models from Hugging Face", [
+            {"download.weights_dir", qwen_weights_dir},
+            {"download.use_4bit", use_4bit}
           ])
 
-          case HuggingFaceDownloader.download_repo(repo_id, qwen_weights_dir, "Qwen-Image-Edit-2509", true) do
+          case HuggingFaceDownloader.download_repo(repo_id, qwen_weights_dir, model_name, true) do
             {:ok, _} ->
               OtelLogger.ok("Model weights downloaded", [
                 {"download.status", "completed"}
@@ -560,6 +576,7 @@ defmodule QwenImageEdit.Impl do
         images: image_paths,
         prompt: prompt,
         go_fast: go_fast,
+        use_4bit: use_4bit,
         aspect_ratio: aspect_ratio,
         output_format: output_format,
         output_quality: output_quality,
@@ -614,9 +631,31 @@ os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
 os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
-MODEL_ID = "Qwen/Qwen-Image-Edit-2509"
+# Get config first to determine model
+""" <> """
+config_file_path = r"#{String.replace(config_file_normalized, "\\", "\\\\")}"
+with open(config_file_path, 'r', encoding='utf-8') as f:
+    config = json.load(f)
+""" <> ~S"""
+""" <> ~S"""
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
-dtype = torch.bfloat16 if device == "cuda" else torch.float32
+use_4bit = config.get('use_4bit', False)
+
+# Choose model based on quantization
+if use_4bit and device == "cuda":
+    # Try using pre-quantized model if available
+    MODEL_ID = "ovedrive/Qwen-Image-Edit-2509-4bit"
+    print("[INFO] Using 4-bit quantized model: ovedrive/Qwen-Image-Edit-2509-4bit")
+    print("[INFO] This reduces VRAM usage significantly (~10GB vs ~20GB)")
+    dtype = None  # Quantized models handle dtype internally
+    # Update weights directory for quantized model
+    base_qwen_weights_dir = Path(r"#{qwen_weights_dir}").resolve()
+    qwen_weights_dir = base_qwen_weights_dir.parent / "Qwen-Image-Edit-2509-4bit"
+else:
+    MODEL_ID = "Qwen/Qwen-Image-Edit-2509"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    qwen_weights_dir = Path(r"#{qwen_weights_dir}").resolve()
 
 # Print device information
 print(f"[INFO] Device: {device}")
@@ -637,8 +676,6 @@ if device == "cuda":
     torch._inductor.config.epilogue_fusion = False
     torch._inductor.config.coordinate_descent_check_all_directions = True
 
-qwen_weights_dir = Path(r"#{qwen_weights_dir}").resolve()
-
 print(f"[INFO] Checking for local model weights at: {qwen_weights_dir}")
 if qwen_weights_dir.exists() and (qwen_weights_dir / "config.json").exists():
     print(f"[OK] Found local model weights, loading from: {qwen_weights_dir}")
@@ -649,10 +686,12 @@ if qwen_weights_dir.exists() and (qwen_weights_dir / "config.json").exists():
         # Try with local_files_only=True first (faster if all files are present)
         print("[INFO] Attempting to load with local_files_only=True...")
         sys.stdout.flush()
+        load_kwargs = {"local_files_only": True}
+        if dtype is not None:
+            load_kwargs["torch_dtype"] = dtype
         pipe = QwenImageEditPlusPipeline.from_pretrained(
             str(qwen_weights_dir),
-            torch_dtype=dtype,
-            local_files_only=True
+            **load_kwargs
         )
         print("[OK] Pipeline loaded from local directory (local_files_only=True)")
     except Exception as e:
@@ -660,19 +699,24 @@ if qwen_weights_dir.exists() and (qwen_weights_dir / "config.json").exists():
         print("[INFO] Retrying with local_files_only=False (may download missing files)...")
         sys.stdout.flush()
         try:
+            load_kwargs = {"local_files_only": False}
+            if dtype is not None:
+                load_kwargs["torch_dtype"] = dtype
             pipe = QwenImageEditPlusPipeline.from_pretrained(
                 str(qwen_weights_dir),
-                torch_dtype=dtype,
-                local_files_only=False
+                **load_kwargs
             )
             print("[OK] Pipeline loaded from local directory (with fallback)")
         except Exception as e2:
             print(f"[ERROR] Failed to load from local directory: {str(e2)[:200]}")
             print(f"[INFO] Falling back to Hugging Face Hub: {MODEL_ID}")
             sys.stdout.flush()
+            load_kwargs = {}
+            if dtype is not None:
+                load_kwargs["torch_dtype"] = dtype
             pipe = QwenImageEditPlusPipeline.from_pretrained(
                 MODEL_ID,
-                torch_dtype=dtype
+                **load_kwargs
             )
             print("[OK] Pipeline loaded from Hugging Face Hub")
 else:
@@ -723,7 +767,10 @@ if device == "cuda":
         else:
             print(f"[INFO] torch.compile not available: {e}")
 
-print(f"[OK] Pipeline fully loaded and optimized on {device} with dtype {dtype}")
+if dtype is not None:
+    print(f"[OK] Pipeline fully loaded and optimized on {device} with dtype {dtype}")
+else:
+    print(f"[OK] Pipeline fully loaded and optimized on {device} with 4-bit quantization")
 print("[INFO] Pipeline ready for inference")
 import sys
 sys.stdout.flush()
@@ -986,7 +1033,7 @@ OtelLogger.info("Starting image edit", [
 
 IO.puts("[1/1] Editing: #{config.prompt}")
 
-result = QwenImageEdit.Server.edit(config.images, config.prompt, config.go_fast, config.aspect_ratio, config.output_format, config.output_quality)
+result = QwenImageEdit.Server.edit(config.images, config.prompt, config.go_fast, config.use_4bit, config.aspect_ratio, config.output_format, config.output_quality)
 
 case result do
   {:ok, output_path} ->
