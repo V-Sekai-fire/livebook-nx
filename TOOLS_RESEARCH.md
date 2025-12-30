@@ -24,6 +24,34 @@ Your Elixir scripts follow a consistent pattern:
 
 **Note: All models listed below are FOSS (Free and Open Source Software) with permissive licenses (MIT, Apache 2.0, BSD, or similar).**
 
+### 1. Image-to-3D Generation
+
+#### TRELLIS-2 (Microsoft)
+
+- **Model**: TRELLIS-2
+- **Repository**: https://github.com/microsoft/TRELLIS.2
+- **Website**: https://trellis-2.org
+- **Published**: 2025
+- **License**: Open-source (check repository for specific license) ✅ FOSS
+- **Style Match**: ✅ High - Advanced image-to-3D conversion with structured latent space
+- **Integration**: Convert 2D images into high-resolution 3D models with full PBR materials
+- **Script Name**: `trellis2_generation.exs`
+- **Features**:
+  - **Instant Image-to-3D Conversion**: Transforms 2D images into high-resolution 3D models with detailed textures and geometry
+  - **Structured Latent Representation**: Uses compact structured latent space with native 3D Variational Autoencoder (VAE) architecture
+  - **PBR-Ready Outputs**: Generates 3D models with Physically Based Rendering materials (roughness, metallic, opacity channels)
+  - **O-Voxel and Sparse Compression**: Employs O-Voxel representation for preserving complex topologies and rich texture information
+  - **Multi-Format Support**: Exports models in GLB, OBJ, and radiance fields formats
+  - **Game Engine Compatible**: Outputs suitable for game engines and AR/VR applications
+  - **Single or Multiple Image Inputs**: Supports both single image and multi-view image inputs
+  - **High-Resolution Output**: Produces industry-ready 3D assets with photorealistic textures
+- **Use Cases**:
+  - Game development and asset creation
+  - AR/VR and immersive experiences
+  - 3D design and visualization
+  - Rapid prototyping of 3D content
+- **Note**: Microsoft open-source project, available for self-hosting, cloud demos, and API access through Hugging Face and NVIDIA NIM
+
 ### 2. Image Super-Resolution / Upscaling
 
 #### UltraZoom-2X
@@ -178,7 +206,7 @@ Your Elixir scripts follow a consistent pattern:
   - State-of-the-art performance on in-the-wild scenes
   - Fully open-source (Apache 2.0)
 
-### 11. Pose Estimation
+### 10. Pose Estimation
 
 #### YOLO-NAS-POSE
 
@@ -212,7 +240,7 @@ Your Elixir scripts follow a consistent pattern:
   - Mobile-optimized
   - Fully open-source (Apache 2.0)
 
-### 12. Mesh Remeshing / Quad Topology
+### 11. Mesh Remeshing / Quad Topology
 
 #### QRemeshify
 
