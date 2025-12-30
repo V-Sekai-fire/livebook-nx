@@ -527,12 +527,16 @@ defmodule QwenImageEdit.Impl do
       base_dir = Path.expand(".")
       
       # Choose model directory and repo based on quantization
-      if use_4bit do
-        qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509-4bit"])
-        repo_id = "ovedrive/Qwen-Image-Edit-2509-4bit"
+      {qwen_weights_dir, repo_id} = if use_4bit do
+        {
+          Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509-4bit"]),
+          "ovedrive/Qwen-Image-Edit-2509-4bit"
+        }
       else
-        qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509"])
-        repo_id = "Qwen/Qwen-Image-Edit-2509"
+        {
+          Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509"]),
+          "Qwen/Qwen-Image-Edit-2509"
+        }
       end
 
       # Download weights if needed (only once)
