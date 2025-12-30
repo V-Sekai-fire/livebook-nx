@@ -4,9 +4,9 @@
 # SPDX-FileCopyrightText: Copyright (c) 2024 V-Sekai-fire
 #
 # Qwen Image Edit Plus Script
-# Edit images using Qwen Image Edit 2511 model
-# Model: Qwen-Image-Edit-2511 by Qwen Team
-# Repository: https://huggingface.co/Qwen/Qwen-Image-Edit-2511
+# Edit images using Qwen Image Edit 2509 model
+# Model: Qwen-Image-Edit-2509 by Qwen Team
+# Repository: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
 #
 # Architecture:
 #   Native CLI API using GenServer, Behaviours, :gen_statem, Task/AsyncStream
@@ -66,10 +66,10 @@ defmodule ArgsParser do
   def show_help do
     IO.puts("""
     Qwen Image Edit Plus Script
-    Edit images using Qwen Image Edit 2511 model
+    Edit images using Qwen Image Edit 2509 model
 
-    Model: Qwen-Image-Edit-2511 by Qwen Team
-    Repository: https://huggingface.co/Qwen/Qwen-Image-Edit-2511
+    Model: Qwen-Image-Edit-2509 by Qwen Team
+    Repository: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
 
     Architecture:
       - Lazy loading: Model weights downloaded and pipeline loaded on first generation
@@ -100,7 +100,7 @@ defmodule ArgsParser do
       - First generation will download model weights if not present (~20GB)
       - Model supports multiple images (pass as list to pipeline)
       - Output saved to output/<timestamp>/qwen_edit_<timestamp>.<format>
-      - Based on Qwen-Image-Edit-2511: https://huggingface.co/Qwen/Qwen-Image-Edit-2511
+      - Based on Qwen-Image-Edit-2509: https://huggingface.co/Qwen/Qwen-Image-Edit-2509
     """)
     System.halt(0)
   end
@@ -518,18 +518,18 @@ defmodule QwenImageEdit.Impl do
       OpenTelemetry.Tracer.set_attribute("prompt.length", String.length(prompt))
 
       base_dir = Path.expand(".")
-      qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2511"])
-      repo_id = "Qwen/Qwen-Image-Edit-2511"
+      qwen_weights_dir = Path.join([base_dir, "pretrained_weights", "Qwen-Image-Edit-2509"])
+      repo_id = "Qwen/Qwen-Image-Edit-2509"
 
       # Download weights if needed (only once)
       if !File.exists?(qwen_weights_dir) or !File.exists?(Path.join(qwen_weights_dir, "config.json")) do
         SpanCollector.track_span("qwen_edit.download_weights", fn ->
         OpenTelemetry.Tracer.with_span "qwen_edit.download_weights" do
-          OtelLogger.info("Downloading Qwen Image Edit 2511 models from Hugging Face", [
+          OtelLogger.info("Downloading Qwen Image Edit 2509 models from Hugging Face", [
             {"download.weights_dir", qwen_weights_dir}
           ])
 
-          case HuggingFaceDownloader.download_repo(repo_id, qwen_weights_dir, "Qwen-Image-Edit-2511", true) do
+          case HuggingFaceDownloader.download_repo(repo_id, qwen_weights_dir, "Qwen-Image-Edit-2509", true) do
             {:ok, _} ->
               OtelLogger.ok("Model weights downloaded", [
                 {"download.status", "completed"}
@@ -614,7 +614,7 @@ os.environ["MKL_NUM_THREADS"] = str(half_cpu_count)
 os.environ["OMP_NUM_THREADS"] = str(half_cpu_count)
 torch.set_num_threads(half_cpu_count)
 
-MODEL_ID = "Qwen/Qwen-Image-Edit-2511"
+MODEL_ID = "Qwen/Qwen-Image-Edit-2509"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 dtype = torch.bfloat16 if device == "cuda" else torch.float32
 
@@ -800,7 +800,7 @@ if device == "cuda":
 
 # Use inference_mode for faster execution
 with torch.inference_mode():
-    # Qwen-Image-Edit-2511 supports multiple images as a list
+    # Qwen-Image-Edit-2509 supports multiple images as a list
     # Prepare generator
     generator = torch.Generator(device=device)
     generator.manual_seed(0)  # Use fixed seed for reproducibility
@@ -810,9 +810,9 @@ with torch.inference_mode():
     if go_fast:
         num_inference_steps = 20  # Faster inference
     else:
-        num_inference_steps = 40  # Default from Hugging Face example for 2511
+        num_inference_steps = 40  # Default from Hugging Face example for 2509
     
-    # Call pipeline with Qwen-Image-Edit-2511 API
+    # Call pipeline with Qwen-Image-Edit-2509 API
     # API: image (list), prompt, generator, true_cfg_scale, negative_prompt, num_inference_steps, guidance_scale, num_images_per_prompt
     print(f"[INFO] Starting inference with {num_inference_steps} steps...")
     print("[INFO] This may take several minutes. Please wait...")
@@ -826,7 +826,7 @@ with torch.inference_mode():
         "true_cfg_scale": 4.0,  # Default from Hugging Face example
         "negative_prompt": " ",  # Default from Hugging Face example
         "num_inference_steps": num_inference_steps,
-        "guidance_scale": 1.0,  # Default from Hugging Face example for 2511
+        "guidance_scale": 1.0,  # Default from Hugging Face example for 2509
         "num_images_per_prompt": 1,
     }
     
@@ -962,7 +962,7 @@ OtelSetup.configure()
 {:ok, _pid} = QwenImageEdit.Server.start_link(editor_impl: QwenImageEdit.Impl)
 
 # CLI mode - edit image(s)
-IO.puts("=== Qwen Image Edit 2511 ===")
+IO.puts("=== Qwen Image Edit 2509 ===")
 IO.puts("")
 
 image_count = length(config.images)
