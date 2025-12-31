@@ -72,8 +72,10 @@ dependencies = [
   "requests==2.32.4",
   "openai==1.78.1",
   "huggingface-hub==0.30.0",
-  # Blender Python API for FBX export (instead of FBX SDK)
-  "bpy==4.5.*",
+  # Blender Python API for FBX export (optional, only needed if --output-format fbx)
+  # Note: bpy requires Python 3.11+, but we use 3.10 for compatibility
+  # If FBX export is needed, install bpy separately or use Python 3.11
+  # "bpy==4.5.*",
 ]
 
 [tool.uv.sources]
@@ -600,8 +602,9 @@ print(f"Device: {device}")
 sys.stdout.flush()
 
 try:
-    # Check if checkpoint exists
+    # Check if checkpoint exists - use absolute path
     ckpt_path = os.path.join(model_path, "latest.ckpt")
+    ckpt_path = os.path.abspath(ckpt_path)  # Ensure absolute path
     skip_model_loading = not os.path.exists(ckpt_path)
     
     # If config file doesn't exist, we can't initialize (even with random weights)
@@ -615,6 +618,13 @@ try:
         print(f"[WARN] Checkpoint not found: {ckpt_path}")
         print(f"[INFO] Will use randomly initialized weights (for testing only)")
         print(f"[INFO] To use pretrained weights, ensure the model is downloaded from Hugging Face")
+        print(f"[INFO] Checkpoint should be at: {ckpt_path}")
+        sys.stdout.flush()
+    else:
+        # Verify checkpoint file size
+        ckpt_size_mb = os.path.getsize(ckpt_path) / (1024 * 1024)
+        print(f"[OK] Checkpoint found: {ckpt_path}")
+        print(f"[OK] Checkpoint size: {ckpt_size_mb:.1f} MB")
         sys.stdout.flush()
     
     # Patch the config to use absolute path for mean_std_dir
@@ -641,10 +651,20 @@ try:
             print(f"[INFO] Using patched config: {config_path}")
     sys.stdout.flush()
     
-    # Initialize runtime
+    # Initialize runtime with absolute checkpoint path
+    # load_in_demo() checks os.path.exists(ckpt_name) so it needs the full absolute path
+    # The checkpoint should be in the same directory as the config file
+    ckpt_name_for_runtime = ckpt_path if not skip_model_loading else "latest.ckpt"
+    
+    print(f"[INFO] Initializing T2MRuntime with:")
+    print(f"  Config: {config_path}")
+    print(f"  Checkpoint: {ckpt_name_for_runtime}")
+    print(f"  Skip model loading: {skip_model_loading}")
+    sys.stdout.flush()
+    
     runtime = T2MRuntime(
         config_path=config_path,
-        ckpt_name="latest.ckpt",
+        ckpt_name=ckpt_name_for_runtime,  # Use absolute path if checkpoint exists
         skip_text=False,
         device_ids=None,  # Use all available GPUs
         skip_model_loading=skip_model_loading,
@@ -817,18 +837,22 @@ try:
         print("  4. Use --disable-rewrite and --disable-duration-est if prompt engineering fails")
         sys.exit(1)
     
-    # Convert to FBX using Blender if requested
+    # Note: HTML visualization is already handled by runtime.generate_motion() 
+    # which uses upstream save_visualization_data() and construct_smpl_data_dict()
+    # No custom code needed - the upstream code handles everything correctly
+    
+    # Convert to FBX using upstream HY-Motion code if requested
     fbx_files = []
     if output_format == "fbx" and motion_dict:
-        print(f"\n=== Converting to FBX using Blender (with WoodenMesh) ===")
+        print(f"\n=== Converting to FBX using upstream HY-Motion code ===")
         sys.stdout.flush()
         try:
-            # Import Blender and required modules
-            import bpy
-            import bmesh
+            # Use upstream HY-Motion FBX converter (uses FBX SDK, not Blender)
+            # This is the proper way - uses construct_smpl_data_dict and template FBX
+            from hymotion.pipeline.body_model import construct_smpl_data_dict
+            from hymotion.utils.smplh2woodfbx import SMPLH2WoodFBX
             import numpy as np
-            from mathutils import Vector, Euler, Matrix
-            import json
+            import torch
             
             # Clear existing scene
             bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -840,7 +864,7 @@ try:
             from pathlib import Path as PathLib
             
             def load_wooden_mesh_data(model_path):
-                """Load wooden model data from binary files"""
+                # Load wooden model data from binary files
                 model_path = PathLib(model_path)
                 
                 # Load vertex template: (V*3,) -> (V, 3)
@@ -923,29 +947,97 @@ try:
             # The 'keypoints3d' contains joint positions for each frame
             # The 'vertices' from the pipeline output would be in the model_output, but we can reconstruct from keypoints
             
-            # Parse tensor strings to numpy if needed
+            # Import geometry utilities for rotation conversion
+            from hymotion.utils.geometry import rot6d_to_rotation_matrix, rotation_matrix_to_euler_angles
+            
+            # Parse motion data from motion_dict
+            # These should be torch tensors or numpy arrays
             def parse_tensor(tensor_data):
-                """Parse tensor string or numpy array to numpy"""
-                if isinstance(tensor_data, str):
-                    # Extract numbers from tensor string
-                    import re
-                    numbers = re.findall(r'[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?', tensor_data)
-                    return np.array([float(n) for n in numbers])
-                elif hasattr(tensor_data, 'cpu'):
+                # Convert tensor data to numpy array
+                if tensor_data is None:
+                    return None
+                if hasattr(tensor_data, 'cpu'):
+                    # Torch tensor
                     return tensor_data.cpu().numpy()
                 elif isinstance(tensor_data, np.ndarray):
                     return tensor_data
+                elif isinstance(tensor_data, (list, tuple)):
+                    return np.array(tensor_data)
                 else:
+                    # Try to convert to numpy
                     return np.array(tensor_data)
             
-            # Get keypoints and translations
-            keypoints_str = str(motion_dict.get('keypoints3d', ''))
-            transl_str = str(motion_dict.get('transl', ''))
-            rot6d_str = str(motion_dict.get('rot6d', ''))
+            # Extract motion data
+            rot6d_data = parse_tensor(motion_dict.get('rot6d'))
+            transl_data = parse_tensor(motion_dict.get('transl'))
+            root_rotations_mat = parse_tensor(motion_dict.get('root_rotations_mat'))
             
-            # Try to get vertices if available (from pipeline output)
-            # The pipeline generates vertices via body_model.forward()
-            # We need to access the runtime's pipeline to get the body_model
+            if rot6d_data is None:
+                print("[ERROR] rot6d data not found in motion_dict")
+                print(f"[INFO] Available keys in motion_dict: {list(motion_dict.keys())}")
+                raise ValueError("rot6d data is required for animation")
+            
+            # Convert to torch tensors for processing
+            import torch
+            rot6d_tensor = torch.from_numpy(rot6d_data).float()
+            
+            # Handle transl data
+            if transl_data is None:
+                print("[WARN] transl data not found, using zeros")
+                # Infer shape from rot6d
+                if len(rot6d_tensor.shape) == 4:
+                    num_frames = rot6d_tensor.shape[1]
+                else:
+                    num_frames = rot6d_tensor.shape[0]
+                transl_data = np.zeros((num_frames, 3))
+            
+            transl_tensor = torch.from_numpy(transl_data).float()
+            
+            # Convert rot6d to rotation matrices: (num_frames, num_joints, 3, 3)
+            # rot6d shape: (batch, frames, joints, 6) or (frames, joints, 6)
+            # Remove batch dimension if present
+            if len(rot6d_tensor.shape) == 4:
+                # (batch, frames, joints, 6) -> take first batch
+                rot6d_tensor = rot6d_tensor[0]
+                if len(transl_tensor.shape) == 2 and transl_tensor.shape[0] == rot6d_tensor.shape[0]:
+                    # transl is (frames, 3) - already correct
+                    pass
+                elif len(transl_tensor.shape) == 3:
+                    # (batch, frames, 3) -> take first batch
+                    transl_tensor = transl_tensor[0]
+            
+            if len(rot6d_tensor.shape) != 3 or rot6d_tensor.shape[2] != 6:
+                raise ValueError(f"Invalid rot6d shape: {rot6d_tensor.shape}, expected (frames, joints, 6)")
+            
+            num_frames, num_joints_motion, _ = rot6d_tensor.shape
+            
+            # Check if number of joints matches template
+            if num_joints_motion != num_joints:
+                print(f"[WARN] Joint count mismatch: motion has {num_joints_motion} joints, template has {num_joints} joints")
+                print(f"[INFO] Using minimum: {min(num_joints_motion, num_joints)} joints")
+                num_joints_to_use = min(num_joints_motion, num_joints)
+            else:
+                num_joints_to_use = num_joints
+            
+            print(f"[INFO] Motion data shapes: rot6d={rot6d_tensor.shape}, transl={transl_tensor.shape}")
+            print(f"[INFO] Using {num_joints_to_use} joints for animation")
+            sys.stdout.flush()
+            
+            # Convert rot6d to rotation matrices (3x3) directly
+            # Use only the joints that match the template
+            rot6d_to_use = rot6d_tensor[:, :num_joints_to_use, :]
+            
+            # Reshape to (num_frames * num_joints_to_use, 6) for batch conversion
+            rot6d_flat = rot6d_to_use.reshape(-1, 6)
+            rot_matrices_flat = rot6d_to_rotation_matrix(rot6d_flat)  # (num_frames * num_joints_to_use, 3, 3)
+            rot_matrices = rot_matrices_flat.reshape(num_frames, num_joints_to_use, 3, 3).numpy()
+            
+            # Keep rotation matrices as 3x3 - we'll use them directly in Blender
+            # This avoids Euler angle discontinuities and gimbal lock issues
+            print(f"[INFO] Parsed motion data: {num_frames} frames, {num_joints_to_use} joints")
+            print(f"[INFO] Translation range: {transl_data.min(axis=0)} to {transl_data.max(axis=0)}")
+            print(f"[INFO] Using 3x3 rotation matrices directly from 6D representation")
+            sys.stdout.flush()
             
             # Create armature with full skeleton
             bpy.ops.object.armature_add(enter_editmode=True, location=(0, 0, 0))
@@ -1027,6 +1119,91 @@ try:
             mesh_obj.parent = armature
             mesh_obj.parent_type = 'ARMATURE'
             
+            # Animate the armature with motion data
+            print(f"\n=== Animating Armature ===")
+            sys.stdout.flush()
+            
+            # Set up animation
+            scene = bpy.context.scene
+            fps = 30  # HY-Motion uses 30 FPS
+            scene.frame_start = 1
+            scene.frame_end = num_frames
+            scene.render.fps = fps
+            
+            # Select armature and enter pose mode
+            bpy.context.view_layer.objects.active = armature
+            bpy.ops.object.mode_set(mode='POSE')
+            
+            # Get pose bones
+            pose_bones = armature.pose.bones
+            
+            # Find root bone (usually first joint or joint with parent_idx == -1)
+            root_bone_idx = None
+            for i, joint_name in enumerate(joint_names):
+                if parents[i] < 0:
+                    root_bone_idx = i
+                    break
+            if root_bone_idx is None:
+                root_bone_idx = 0  # Default to first joint
+            
+            root_bone_name = joint_names[root_bone_idx]
+            print(f"[INFO] Root bone: {root_bone_name} (index {root_bone_idx})")
+            sys.stdout.flush()
+            
+            # Animate each bone
+            for joint_idx in range(num_joints_to_use):
+                if joint_idx >= len(joint_names):
+                    print(f"[WARN] Joint index {joint_idx} exceeds joint_names length, skipping")
+                    continue
+                
+                joint_name = joint_names[joint_idx]
+                if joint_name not in pose_bones:
+                    print(f"[WARN] Bone '{joint_name}' not found in pose bones, skipping")
+                    continue
+                
+                bone = pose_bones[joint_name]
+                
+                # Use rotation matrix mode (more stable than Euler)
+                # Convert 3x3 rotation matrix to Blender's Matrix and apply
+                bone.rotation_mode = 'QUATERNION'  # Use quaternion for stability
+                
+                # Animate rotations for this bone using 3x3 rotation matrices
+                for frame_idx in range(num_frames):
+                    scene.frame_set(frame_idx + 1)
+                    
+                    # Get 3x3 rotation matrix for this joint at this frame
+                    rot_mat_3x3 = rot_matrices[frame_idx, joint_idx]  # (3, 3)
+                    
+                    # Convert to Blender Matrix (row-major)
+                    # Blender uses row-major matrices
+                    rot_matrix = Matrix(rot_mat_3x3.tolist())
+                    
+                    # Convert matrix to quaternion (more stable than Euler)
+                    bone.rotation_quaternion = rot_matrix.to_quaternion()
+                    
+                    # Insert keyframe for rotation
+                    bone.keyframe_insert(data_path="rotation_quaternion", frame=frame_idx + 1)
+                    
+                    # Animate root translation (only for root bone)
+                    if joint_idx == root_bone_idx:
+                        # Get translation for this frame
+                        if len(transl_data.shape) == 2:
+                            trans = transl_data[frame_idx]
+                        else:
+                            # Handle different shapes
+                            trans = transl_data[frame_idx] if frame_idx < len(transl_data) else transl_data[0]
+                        # Convert from meters to Blender units (1 unit = 1 meter, but scale if needed)
+                        # HY-Motion uses meters, Blender uses meters by default
+                        bone.location = Vector(trans)
+                        bone.keyframe_insert(data_path="location", frame=frame_idx + 1)
+            
+            # Return to object mode
+            bpy.ops.object.mode_set(mode='OBJECT')
+            
+            print(f"[OK] Animation applied: {num_frames} frames at {fps} FPS")
+            print(f"[INFO] Root bone '{root_bone_name}' animated with translation")
+            sys.stdout.flush()
+            
             # Export to FBX
             fbx_path = os.path.join(str(export_dir), f"{output_filename}_{tag}.fbx")
             bpy.ops.export_scene.fbx(
@@ -1041,10 +1218,11 @@ try:
             )
             
             if os.path.exists(fbx_path):
-                fbx_files = [fbx_path]
+                fbx_files.append(fbx_path)
                 print(f"[OK] Converted to FBX: {fbx_path}")
                 print(f"[INFO] Mesh: {len(v_template)} vertices, {len(faces)} faces")
                 print(f"[INFO] Armature: {num_joints} joints with skinning")
+                print(f"[INFO] Animation: {num_frames} frames at {fps} FPS")
             else:
                 print(f"[WARN] FBX file not created: {fbx_path}")
             sys.stdout.flush()
@@ -1053,6 +1231,9 @@ try:
             import traceback
             traceback.print_exc()
             print(f"[INFO] Motion data saved as JSON instead")
+            # Ensure fbx_files is still a list even on error
+            if 'fbx_files' not in locals():
+                fbx_files = []
             sys.stdout.flush()
     
     # Save results
