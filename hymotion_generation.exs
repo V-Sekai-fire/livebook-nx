@@ -1245,17 +1245,34 @@ try:
         for glb_file in glb_files:
             saved_files.append(glb_file)
     
-    if not saved_files:
-        print("[WARN] No output files were saved")
-        print("[INFO] Check that generation completed successfully")
-        sys.stdout.flush()
-    
-    # Save HTML visualization if available
+    # Save HTML visualization and its dependencies (NPZ and meta files)
     if html:
         html_path = export_dir / f"visualization_{tag}.html"
         with open(html_path, 'w', encoding='utf-8') as f:
             f.write(html)
+        saved_files.append(str(html_path))
         print(f"[OK] Saved visualization to {html_path}")
+        
+        # Find and track NPZ files (required by HTML visualization)
+        npz_pattern = os.path.join(str(export_dir), "*.npz")
+        import glob
+        npz_files = glob.glob(npz_pattern)
+        for npz_file in npz_files:
+            if npz_file not in saved_files:
+                saved_files.append(npz_file)
+        
+        # Find and track meta JSON files (required by HTML visualization)
+        meta_pattern = os.path.join(str(export_dir), "*_meta.json")
+        meta_files = glob.glob(meta_pattern)
+        for meta_file in meta_files:
+            if meta_file not in saved_files:
+                saved_files.append(meta_file)
+        
+        sys.stdout.flush()
+    
+    if not saved_files:
+        print("[WARN] No output files were saved")
+        print("[INFO] Check that generation completed successfully")
         sys.stdout.flush()
     
     # Save metadata
@@ -1284,12 +1301,6 @@ print(f"Generated motion saved to: {export_dir}")
 print(f"\nOutput files:")
 for saved_file in saved_files:
     print(f"  - {saved_file}")
-if html:
-    html_path = export_dir / f"visualization_{tag}.html"
-    if os.path.exists(str(html_path)):
-        print(f"  - {html_path}")
-    else:
-        print(f"  - [INFO] HTML visualization was generated but file not found")
 metadata_path = export_dir / f"metadata_{tag}.txt"
 if os.path.exists(str(metadata_path)):
     print(f"  - {metadata_path}")
