@@ -240,7 +240,43 @@ Your Elixir scripts follow a consistent pattern:
   - Mobile-optimized
   - Fully open-source (Apache 2.0)
 
-### 11. Mesh Remeshing / Quad Topology
+### 11. Text-to-Motion / 3D Animation
+
+#### HY-Motion 1.0 (Tencent)
+
+- **Model**: `tencent/HY-Motion-1.0` (1.0B parameters) or `HY-Motion-1.0-Lite` (0.46B parameters)
+- **Repository**: https://github.com/Tencent-Hunyuan/HY-Motion-1.0
+- **Hugging Face**: https://huggingface.co/tencent/HY-Motion-1.0
+- **Paper**: https://arxiv.org/abs/2512.23464
+- **Published**: December 2025
+- **License**: Tencent Hunyuan Community License ✅ FOSS (community license)
+- **Style Match**: ✅ High - Billion-parameter text-to-motion model with DiT architecture
+- **Integration**: Generate 3D human motion animations from text prompts
+- **Script Name**: `hymotion_generation.exs`
+- **Features**:
+  - **Billion-Scale DiT Architecture**: First to scale Diffusion Transformer (DiT) to billion-parameter level for text-to-motion
+  - **Flow Matching**: Uses flow matching technology for high-quality motion generation
+  - **Three-Stage Training**: Large-scale pre-training (3000+ hours), high-quality fine-tuning (400 hours), and reinforcement learning from human feedback
+  - **Extensive Motion Coverage**: Over 200 motion categories across six major classes
+  - **Dual Model Variants**: Standard (1.0B, 26GB VRAM) and Lite (0.46B, 24GB VRAM) versions
+  - **Seamless Integration**: Generated animations compatible with Blender, Unity, Unreal Engine
+  - **Long-Form Generation**: Up to 4 minutes 30 seconds per motion sequence
+  - **Prompt Engineering**: Optional LLM-based duration estimation and prompt rewriting
+  - **Multiple Output Formats**: JSON (dict), FBX (if FBX SDK available), HTML visualization
+  - **Low Memory Mode**: Supports reduced VRAM usage for consumer GPUs
+- **Use Cases**:
+  - Game development and character animation
+  - Film and video production
+  - AR/VR applications
+  - 3D animation pipelines
+  - Rapid prototyping of character motions
+- **Prompt Guidelines**:
+  - Use English prompts (under 60 words for optimal results)
+  - Focus on action descriptions or detailed movements of limbs and torso
+  - Not supported: Non-humanoid characters, emotions/clothing, environment/camera, multi-person interactions
+- **Note**: State-of-the-art text-to-motion generation with superior instruction-following capabilities. Models download automatically from Hugging Face on first use.
+
+### 12. Mesh Remeshing / Quad Topology
 
 #### QRemeshify
 
