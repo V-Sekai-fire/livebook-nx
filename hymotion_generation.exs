@@ -21,7 +21,7 @@
 #   --num-seeds <int>               Number of random seeds for generation (default: 4)
 #   --disable-rewrite               Disable LLM-based prompt rewriting
 #   --disable-duration-est          Disable LLM-based duration estimation
-#   --output-format "dict"           Output format: dict (JSON), fbx (uses Blender for export) (default: "dict")
+#   --output-format "glb"            Output format: glb (GLB 3D model with animation) (default: "glb")
 #   --help, -h                       Show this help message
 
 # Configure OpenTelemetry for console-only logging
@@ -72,9 +72,9 @@ dependencies = [
   "requests==2.32.4",
   "openai==1.78.1",
   "huggingface-hub==0.30.0",
-  # Blender Python API for FBX export (optional, only needed if --output-format fbx)
+  # Blender Python API for GLB export
   # Note: bpy requires Python 3.11+, but we use 3.10 for compatibility
-  # If FBX export is needed, install bpy separately or use Python 3.11
+  # If GLB export is needed, install bpy separately or use Python 3.11
   # "bpy==4.5.*",
 ]
 
@@ -116,7 +116,7 @@ defmodule ArgsParser do
       --num-seeds <int>               Number of random seeds for generation (default: 4)
       --disable-rewrite               Disable LLM-based prompt rewriting
       --disable-duration-est          Disable LLM-based duration estimation
-      --output-format, -f <format>   Output format: dict (JSON), fbx (uses Blender for export) (default: "dict")
+      --output-format, -f <format>   Output format: glb (GLB 3D model with animation) (default: "glb")
       --help, -h                      Show this help message
 
     Model Variants:
@@ -196,8 +196,8 @@ defmodule ArgsParser do
     end
 
     # Validate output format
-    output_format = Keyword.get(opts, :output_format, "dict")
-    valid_formats = ["dict", "fbx"]
+    output_format = Keyword.get(opts, :output_format, "glb")
+    valid_formats = ["glb"]
     if output_format not in valid_formats do
       IO.puts("Error: Invalid output format. Must be one of: #{Enum.join(valid_formats, ", ")}")
       System.halt(1)
@@ -675,7 +675,6 @@ try:
     )
     
     print(f"[OK] T2M Runtime initialized")
-    print(f"  FBX available: {runtime.fbx_available}")
     print(f"  Model loading: {'skipped (random weights)' if skip_model_loading else 'loaded from checkpoint'}")
     
     # Verify and fix stats dimensions if needed
@@ -798,10 +797,10 @@ try:
     print(f"CFG Scale: {cfg_scale}")
     sys.stdout.flush()
     
-    # Generate motion (always use dict format, we'll convert to FBX with Blender if needed)
-    req_format = "dict"  # Always generate as dict, convert to FBX with Blender if requested
-    if output_format == "fbx":
-        print(f"[INFO] FBX format requested - will convert using Blender after generation")
+    # Generate motion (always use dict format, we'll convert to GLB with Blender)
+    req_format = "dict"  # Always generate as dict, convert to GLB with Blender
+    if output_format == "glb":
+        print(f"[INFO] GLB format requested - will convert using Blender after generation")
         sys.stdout.flush()
     
     output_filename = "00000000"  # Default filename
@@ -813,7 +812,7 @@ try:
     sys.stdout.flush()
     
     try:
-        html, fbx_files, motion_dict = runtime.generate_motion(
+        html, _, motion_dict = runtime.generate_motion(
             text=text_prompt,
             seeds_csv=seeds_csv,
             duration=duration,
@@ -841,16 +840,14 @@ try:
     # which uses upstream save_visualization_data() and construct_smpl_data_dict()
     # No custom code needed - the upstream code handles everything correctly
     
-    # Convert to FBX using upstream HY-Motion code if requested
-    fbx_files = []
-    if output_format == "fbx" and motion_dict:
-        print(f"\n=== Converting to FBX using upstream HY-Motion code ===")
+    # Convert to GLB using Blender if requested
+    glb_files = []
+    if output_format == "glb" and motion_dict:
+        print(f"\n=== Converting to GLB using Blender ===")
         sys.stdout.flush()
         try:
-            # Use upstream HY-Motion FBX converter (uses FBX SDK, not Blender)
-            # This is the proper way - uses construct_smpl_data_dict and template FBX
+            # Build mesh and armature in Blender for GLB export
             from hymotion.pipeline.body_model import construct_smpl_data_dict
-            from hymotion.utils.smplh2woodfbx import SMPLH2WoodFBX
             import numpy as np
             import torch
             
@@ -1204,61 +1201,49 @@ try:
             print(f"[INFO] Root bone '{root_bone_name}' animated with translation")
             sys.stdout.flush()
             
-            # Export to FBX
-            fbx_path = os.path.join(str(export_dir), f"{output_filename}_{tag}.fbx")
-            bpy.ops.export_scene.fbx(
-                filepath=fbx_path,
-                use_selection=False,
-                use_active_collection=False,
-                global_scale=1.0,
-                apply_unit_scale=True,
-                apply_scale_options='FBX_SCALE_NONE',
-                use_space_transform=True,
-                bake_space_transform=False
+            # Export to GLB
+            glb_path = os.path.join(str(export_dir), f"{output_filename}_{tag}.glb")
+            bpy.ops.export_scene.gltf(
+                filepath=glb_path,
+                export_format='GLB',
+                export_materials=True,
+                export_animations=True,
+                export_armatures=True,
+                export_skins=True,
+                export_normals=True,
+                export_colors=True,
+                export_texcoords=True,
+                use_selection=False
             )
             
-            if os.path.exists(fbx_path):
-                fbx_files.append(fbx_path)
-                print(f"[OK] Converted to FBX: {fbx_path}")
+            if os.path.exists(glb_path):
+                glb_files.append(glb_path)
+                print(f"[OK] Converted to GLB: {glb_path}")
                 print(f"[INFO] Mesh: {len(v_template)} vertices, {len(faces)} faces")
                 print(f"[INFO] Armature: {num_joints} joints with skinning")
                 print(f"[INFO] Animation: {num_frames} frames at {fps} FPS")
             else:
-                print(f"[WARN] FBX file not created: {fbx_path}")
+                print(f"[WARN] GLB file not created: {glb_path}")
             sys.stdout.flush()
-        except Exception as fbx_error:
-            print(f"[WARN] FBX conversion failed: {fbx_error}")
+        except Exception as glb_error:
+            print(f"[WARN] GLB conversion failed: {glb_error}")
             import traceback
             traceback.print_exc()
-            print(f"[INFO] Motion data saved as JSON instead")
-            # Ensure fbx_files is still a list even on error
-            if 'fbx_files' not in locals():
-                fbx_files = []
+            # Ensure glb_files is still a list even on error
+            if 'glb_files' not in locals():
+                glb_files = []
             sys.stdout.flush()
     
     # Save results
     saved_files = []
     
-    if output_format == "fbx":
-        # Find FBX files that were created
-        fbx_pattern = os.path.join(str(export_dir), "*.fbx")
+    if output_format == "glb":
+        # Find GLB files that were created
+        glb_pattern = os.path.join(str(export_dir), "*.glb")
         import glob
-        fbx_files = glob.glob(fbx_pattern)
-        for fbx_file in fbx_files:
-            saved_files.append(fbx_file)
-    
-    if motion_dict:
-        # Save motion dict as JSON
-        motion_json_path = export_dir / f"motion_{tag}.json"
-        try:
-            with open(motion_json_path, 'w', encoding='utf-8') as f:
-                json.dump(motion_dict, f, indent=2, default=str)  # default=str for non-serializable types
-            print(f"[OK] Saved motion data to {motion_json_path}")
-            saved_files.append(str(motion_json_path))
-            sys.stdout.flush()
-        except Exception as e:
-            print(f"[WARN] Failed to save motion JSON: {e}")
-            sys.stdout.flush()
+        glb_files = glob.glob(glb_pattern)
+        for glb_file in glb_files:
+            saved_files.append(glb_file)
     
     if not saved_files:
         print("[WARN] No output files were saved")
@@ -1284,7 +1269,7 @@ try:
         f.write(f"Seeds: {seeds_csv}\n")
         f.write(f"Disable Rewrite: {disable_rewrite}\n")
         f.write(f"Disable Duration Est: {disable_duration_est}\n")
-        f.write(f"Output Format: {req_format}\n")
+        f.write(f"Output Format: {output_format}\n")
     print(f"[OK] Saved metadata to {metadata_path}")
     sys.stdout.flush()
     
