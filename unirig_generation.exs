@@ -925,7 +925,6 @@ else:
             names=names,
             tails=tails,
             add_root=False,
-            is_vrm=False,
         )
 
         print(f"✓ Rigged model saved: {final_output}")
